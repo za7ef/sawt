@@ -437,7 +437,14 @@ final class NamaaEngine: @unchecked Sendable {
     func synthesizeTimed(_ text: String, speed: Double, steps: Int? = nil) async -> Result<Output, Error> {
         await withCheckedContinuation { cont in
             queue.async {
-                do { cont.resume(returning: .success(try self.generate(text, speed: speed, steps: steps))) }
+                do {
+                    // كرت الشاشة ممنوع في الخلفية: المعالج (تلقائي/معالج) أو نوقف بدون كراش
+                    guard let dev = ComputeMode.device(for: ComputeMode.current) else { throw BackgroundPause() }
+                    let out = try Device.withDefaultDevice(dev == "cpu" ? Device.cpu : Device.gpu) {
+                        try self.generate(text, speed: speed, steps: steps)
+                    }
+                    cont.resume(returning: .success(out))
+                }
                 catch { cont.resume(returning: .failure(error)) }
             }
         }
