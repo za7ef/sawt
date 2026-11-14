@@ -18,7 +18,24 @@ actor LLMService {
     func unload() {
         container = nil
         loadedID = nil
+        warmedID = nil
         MLX.Memory.clearCache()
+    }
+
+    private var warmedID: String?
+
+    /// تسخين: نولّد كلمة وحدة عشان أول رد في المكالمة يكون أسرع (تجهيز كرت الشاشة والكاش).
+    func warmup(system: String) async {
+        guard let id = loadedID, warmedID != id else { return }
+        warmedID = id
+        let t0 = Date()
+        do {
+            let s = try stream(system: system, history: [], user: "هلا", maxTokens: 1)
+            for try await _ in s {}
+            slog("llm: warmup \(Int(Date().timeIntervalSince(t0) * 1000))ms")
+        } catch {
+            slog("llm: warmup failed \(error)")
+        }
     }
 
     /// يُستدعى لما النظام يحذّر من الذاكرة.
