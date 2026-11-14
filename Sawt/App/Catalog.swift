@@ -39,9 +39,9 @@ enum Catalog {
     /// كل الأحجام متحقق منها من Hugging Face (نوفمبر 2026).
     static let builtInLLMs: [LLMOption] = [
         LLMOption(id: "mlx-community/Qwen3.5-2B-4bit", title: "Qwen3.5 2B", sizeGB: 1.72, ramGB: 2.4,
-                  speed: "سريع جدًا", arabic: "عربي جيد", tag: "موصى به للمكالمات"),
+                  speed: "سريع جدًا", arabic: "عربي جيد", tag: "الأسرع والأخف"),
         LLMOption(id: "mlx-community/Qwen3-4B-4bit", title: "Qwen3 4B", sizeGB: 2.26, ramGB: 3.0,
-                  speed: "سريع", arabic: "عربي ممتاز ولهجات زينة", tag: "أذكى وأثقل"),
+                  speed: "سريع", arabic: "عربي ممتاز ولهجات زينة", tag: "عربي أحسن • للمكالمات مع سمع آبل"),
         LLMOption(id: "mlx-community/Qwen3.5-4B-4bit", title: "Qwen3.5 4B", sizeGB: 3.03, ramGB: 3.8,
                   speed: "متوسط", arabic: "عربي ممتاز", tag: "الأحدث"),
         LLMOption(id: "mlx-community/gemma-3-4b-it-qat-4bit", title: "Gemma 3 4B", sizeGB: 3.0, ramGB: 3.8,
@@ -90,10 +90,10 @@ enum Catalog {
     }
 
     static let stts: [STTOption] = [
-        STTOption(id: "small", title: "Whisper Small",
-                  subtitle: "موصى به: دقة زينة وذاكرة متوسطة", approxSize: "~220 MB"),
         STTOption(id: "apple", title: "سمع آبل",
-                  subtitle: "مدمج في الجوال، الأخف وبدون تنزيل", approxSize: "0 MB"),
+                  subtitle: "موصى به للمكالمات: ما ياخذ ذاكرة، فيخلي مكان لنموذج أذكى", approxSize: "0 MB"),
+        STTOption(id: "small", title: "Whisper Small",
+                  subtitle: "يشتغل بدون آبل، ياخذ ذاكرة متوسطة", approxSize: "~220 MB"),
         STTOption(id: "large-v3-v20240930_626MB", title: "Whisper Large v3 Turbo",
                   subtitle: "أفضل فهم للعربي لكنه ثقيل ويسخّن", approxSize: "~630 MB"),
     ]
@@ -147,14 +147,23 @@ final class AppSettings: ObservableObject {
 
     static let defaultPersona = """
     أنت «صوت»، مساعد ذكي يشتغل على جوال المستخدم بدون إنترنت. تتكلم معه في مكالمة صوتية مباشرة.
-    تكلّم باللهجة السعودية البيضاء إذا كلمك بالعربي، وبالإنجليزي إذا كلمك بالإنجليزي.
-    ردودك قصيرة وطبيعية كأنك تتكلم مو تكتب: جملة إلى ثلاث جمل غالبًا.
+    المستخدم رجّال اسمه محمد من السعودية. خاطبه دائمًا بصيغة المذكر (أنت، تبي، عندك) وأبدًا لا تقول "أنتي" أو "تبين".
+    تكلّم باللهجة السعودية البيضاء الطبيعية إذا كلمك بالعربي، وبالإنجليزي إذا كلمك بالإنجليزي.
+    ردودك قصيرة وطبيعية كأنك صاحبه تتكلم مو تكتب: جملة إلى ثلاث جمل غالبًا.
+    نوّع كلامك ولا تكرر نفس العبارات أو نفس بداية الرد، ولا تعيد سؤاله عليه.
+    جاوب على اللي قاله مباشرة. إذا ما فهمت كلامه (ممكن التمييز غلط) اسأله يعيد باختصار.
     لا تستخدم قوائم ولا رموز ولا إيموجي ولا تنسيق، لأن كلامك يتحول لصوت.
     اكتب الأرقام بالحروف إذا كانت قليلة.
     """
 
     private init() {
         llmID = d.string(forKey: "llmID") ?? Catalog.llms[0].id
+        if !d.bool(forKey: "migratedAppleSTT") {
+            // من بناء 34: سمع آبل افتراضي (ما ياخذ ذاكرة) عشان النماذج الأذكى تكفي بالمكالمة
+            d.set(true, forKey: "migratedAppleSTT")
+            d.set(true, forKey: "migratedLightDefaults")
+            d.removeObject(forKey: "sttID")
+        }
         if !d.bool(forKey: "migratedLightDefaults") {
             // من بناء 13: الافتراضي أخف عشان الذاكرة والحرارة
             d.set(true, forKey: "migratedLightDefaults")
@@ -164,7 +173,11 @@ final class AppSettings: ObservableObject {
         voiceID = d.string(forKey: "voiceID") ?? (Catalog.voices.first?.id ?? "apple")
         speechRate = d.object(forKey: "speechRate") as? Double ?? 1.0
         language = d.string(forKey: "language") ?? "auto"
-        persona = d.string(forKey: "persona") ?? AppSettings.defaultPersona
+        if let p = d.string(forKey: "persona"), !p.contains("صوت»، مساعد ذكي") || p.contains("بصيغة المذكر") {
+            persona = p
+        } else {
+            persona = AppSettings.defaultPersona   // ترقية الشخصية الافتراضية القديمة
+        }
         patience = d.object(forKey: "patience") as? Double ?? 0.7
     }
 
