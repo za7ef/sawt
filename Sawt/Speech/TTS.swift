@@ -111,6 +111,11 @@ final class SpeechSynth {
             return await apple.synthesize(clean, language: arabic ? "ar-SA" : "en-US", rate: rate)
         }
         if voice.kind == .namaa {
+            // إذا الجملة طويلة ونماء بيتأخر فيها كثير، نقولها بنبرة بدل سكتة طويلة
+            if CallController.isActive, NamaaEngine.shared.estimatedSeconds(clean) > 8 {
+                slog("tts: namaa too slow for \(clean.count) chars → fallback voice")
+                return await arabicFallback(clean, rate: rate)
+            }
             let s = await NamaaEngine.shared.synthesize(clean, speed: rate)
             if s.isEmpty {
                 slog("tts: namaa gave nothing → fallback voice")
@@ -158,9 +163,20 @@ final class AppleSynth: NSObject {
                 lock.lock(); defer { lock.unlock() }
                 if !done { done = true; slog("apple tts timeout"); cont.resume(returning: (samples, sr)) }
             }
+            var lastBuffer = 0
             synth.write(utt) { buffer in
                 lock.lock(); defer { lock.unlock() }
                 guard !done else { return }
+                // في iOS 27 أحيانًا ما يوصل البفر الفاضي اللي يعلن النهاية، فكنا ننتظر 10 ثواني:
+                // إذا وقفت البفرات 0.4 ثانية نعتبرها خلصت
+                lastBuffer += 1
+                let mine = lastBuffer
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.4) {
+                    lock.lock(); defer { lock.unlock() }
+                    if !done, mine == lastBuffer, !samples.isEmpty {
+                        done = true; cont.resume(returning: (samples, sr))
+                    }
+                }
                 guard let pcm = buffer as? AVAudioPCMBuffer, pcm.frameLength > 0 else {
                     done = true
                     cont.resume(returning: (samples, sr))
