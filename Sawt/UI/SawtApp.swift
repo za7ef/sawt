@@ -53,8 +53,11 @@ struct SawtApp: App {
                         store.flush()
                         Task { await LLMService.shared.trim() }
                         bgTask?.cancel()
+                        // نطلب وقت خلفية قصير عشان التفريغ يكمل قبل ما يوقف iOS التطبيق
+                        let bg = BackgroundTask()
+                        bg.begin()
                         bgTask = Task {
-                            // iOS يوقف التطبيق بعد ثواني بالخلفية، فنفك بدري
+                            defer { bg.end() }
                             try? await Task.sleep(for: .seconds(8))
                             if Task.isCancelled { return }
                             await models.unloadForBackground()
@@ -77,4 +80,20 @@ enum Theme {
     static let accent = Color(red: 0.42, green: 0.62, blue: 1.0)
     static let accent2 = Color(red: 0.68, green: 0.45, blue: 1.0)
     static let bg = Color(red: 0.04, green: 0.04, blue: 0.06)
+}
+
+/// غلاف بسيط لوقت الخلفية من iOS.
+@MainActor
+final class BackgroundTask {
+    private var id = UIBackgroundTaskIdentifier.invalid
+    func begin() {
+        id = UIApplication.shared.beginBackgroundTask(withName: "sawt.unload") { [weak self] in
+            MainActor.assumeIsolated { self?.end() }
+        }
+    }
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
+    }
 }

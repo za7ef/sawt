@@ -172,7 +172,10 @@ struct ChatView: View {
                         ForEach(pending) { a in
                             AttachmentChip(a: a, size: 56)
                                 .overlay(alignment: .topTrailing) {
-                                    Button { pending.removeAll { $0.id == a.id } } label: {
+                                    Button {
+                                        pending.removeAll { $0.id == a.id }
+                                        a.deleteFiles()
+                                    } label: {
                                         Image(systemName: "xmark.circle.fill").font(.callout)
                                             .symbolRenderingMode(.palette)
                                             .foregroundStyle(.white, .black.opacity(0.6))
