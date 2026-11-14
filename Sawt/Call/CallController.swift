@@ -14,7 +14,25 @@ struct Turn: Identifiable, Equatable {
 final class CallController: ObservableObject {
     enum State: Equatable { case idle, starting, listening, hearing, thinking, speaking }
 
-    @Published private(set) var state: State = .idle
+    @Published private(set) var state: State = .idle { didSet { if state != oldValue { syncActivity(from: oldValue) } } }
+    /// الدور توقف لأن التطبيق في الخلفية (يطلع في النشاط المباشر)
+    private var pausedBG = false
+
+    private func syncActivity(from old: State) {
+        let s = state, m = muted, p = pausedBG
+        Task { @MainActor in
+            if s == .idle { CallActivity.end(); return }
+            if old == .idle { CallActivity.start() }
+            let key: String
+            switch s {
+            case .starting: key = "starting"
+            case .thinking: key = "thinking"
+            case .speaking: key = "speaking"
+            default: key = p ? "paused" : "listening"
+            }
+            CallActivity.update(status: key, muted: m)
+        }
+    }
     @Published var turns: [Turn] = [] { didSet { onTurnsChanged?(turns) } }
     var onTurnsChanged: (([Turn]) -> Void)?
     @Published private(set) var liveUser = ""
@@ -22,7 +40,8 @@ final class CallController: ObservableObject {
     @Published private(set) var micLevel: Float = 0
     @Published private(set) var outLevel: Float = 0
     @Published var error: String?
-    @Published var muted = false
+    @Published var muted = false { didSet { if muted != oldValue { syncActivity(from: state) } } }
+    private var activityObservers: [NSObjectProtocol] = []
     /// الكاميرا شغالة في المكالمة (طافية افتراضيًا)
     @Published var cameraOn = false
     @Published var cameraBusy = false
@@ -100,6 +119,16 @@ final class CallController: ObservableObject {
                 : "نزّل نموذج المحادثة ونموذج السمع من شاشة النماذج أول."
             mm.loadAll()
             return
+        }
+        pausedBG = false
+        if activityObservers.isEmpty {
+            let nc = NotificationCenter.default
+            activityObservers.append(nc.addObserver(forName: Notification.Name("sawt.toggleMute"), object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { if let self, self.state != .idle { self.muted.toggle(); slog("activity: mute=\(self.muted)") } }
+            })
+            activityObservers.append(nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { if let self, self.pausedBG { self.pausedBG = false; self.syncActivity(from: self.state) } }
+            })
         }
         state = .starting
         let patience = AppSettings.shared.patience
@@ -192,6 +221,7 @@ final class CallController: ObservableObject {
     static var isActive = false
 
     func end() {
+        Task { @MainActor in CallActivity.end() }
         cancelReply(recordPartial: true)
         if cameraOn { cameraOn = false }
         notice = nil
@@ -759,6 +789,7 @@ final class CallController: ObservableObject {
             } catch is BackgroundPause {
                 // كرت الشاشة ممنوع والتطبيق في الخلفية: نقول له يفتح التطبيق بدل الكراش
                 slog("call: paused in background")
+                self.pausedBG = true
                 if myID == self.replyID {
                     let msg = "افتح التطبيق عشان أكمل"
                     self.error = msg
