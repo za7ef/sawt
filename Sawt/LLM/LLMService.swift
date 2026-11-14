@@ -81,12 +81,13 @@ actor LLMService {
         return await ComputeMode.$forced.withValue("cpu") {
             let t0 = Date()
             do {
-                let st = try await self.stream(system: "جاوب بكلمة.", history: [], user: "هلا", maxTokens: 8)
+                let st = try await self.stream(system: "جاوب بكلمة.", history: [], user: "عرّف نفسك بجملة.", maxTokens: 24)
                 var out = ""
-                for try await c in st { out += c }
+                var n = 0
+                for try await c in st { out += c; n += 1 }
                 let ms = Int(Date().timeIntervalSince(t0) * 1000)
                 slog("llm: cpu self-test ok \(ms)ms out=\(out.prefix(40))")
-                return (true, "\(ms)ms")
+                return (true, "\(ms)ms، تقريبًا \(String(format: "%.1f", Double(n) / max(Double(ms) / 1000, 0.001))) كلمة/ث")
             } catch {
                 slog("llm: cpu self-test failed \(error)")
                 return (false, error.localizedDescription)
@@ -209,6 +210,8 @@ actor LLMService {
                     // أخطاء MLX (مثل عملية ما لها نسخة على المعالج) ترجع خطأ بدل ما تطيّح التطبيق
                     let mlxErr = MLXErrBox()
                     await withErrorHandler({ m in mlxErr.set(m) }) {
+                    // دوال compile تحتاج مُترجم JIT للمعالج وهو مو موجود في iOS → نطفيها على المعالج
+                    MLX.compile(enable: !useCPU)
                     await Device.withDefaultDevice(useCPU ? Device.cpu : Device.gpu) {
                 for (i, make) in attempts.enumerated() {
                     let (session, prompt) = make()
