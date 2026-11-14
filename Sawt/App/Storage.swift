@@ -43,6 +43,27 @@ enum Storage {
         hubDir.appendingPathComponent("models--" + repo.replacingOccurrences(of: "/", with: "--"))
     }
 
+    /// مجلد نموذج نازل كامل على الجهاز (عشان نحمّله بدون أي اتصال بالإنترنت).
+    /// نتأكد إن config.json موجود وكل ملفات الأوزان المذكورة في الفهرس موجودة.
+    static func llmLocalSnapshot(_ repo: String) -> URL? {
+        let snaps = llmDir(repo).appendingPathComponent("snapshots")
+        guard let dirs = try? fm.contentsOfDirectory(at: snaps, includingPropertiesForKeys: nil) else { return nil }
+        for d in dirs {
+            guard fm.fileExists(atPath: d.appendingPathComponent("config.json").path) else { continue }
+            let files = (try? fm.contentsOfDirectory(atPath: d.path)) ?? []
+            guard files.contains(where: { $0.hasSuffix(".safetensors") }),
+                  files.contains(where: { $0.hasPrefix("tokenizer") }) else { continue }
+            let index = d.appendingPathComponent("model.safetensors.index.json")
+            if let data = try? Data(contentsOf: index),
+               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let map = j["weight_map"] as? [String: String] {
+                guard Set(map.values).allSatisfy({ fm.fileExists(atPath: d.appendingPathComponent($0).path) }) else { continue }
+            }
+            return d
+        }
+        return nil
+    }
+
     static func whisperModelDir(_ variant: String) -> URL? {
         guard let items = try? fm.contentsOfDirectory(at: whisperDir, includingPropertiesForKeys: nil) else { return nil }
         return items.first { $0.lastPathComponent.hasSuffix(variant) }

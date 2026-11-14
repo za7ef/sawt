@@ -68,13 +68,7 @@ final class MemoryStore: ObservableObject {
     func emptyTrash() { trash = []; save() }
 
     /// الحذف التلقائي ما يصير إلا إذا المستخدم قال صراحة إن المعلومة غلط أو طلب ينساها.
-    static let forgetCues = ["انس", "انسى", "انسَ", "غلط", "خطأ", "مو صحيح", "مب صحيح", "مش صحيح", "غير صحيح",
-                             "لا تتذكر", "لا تحفظ", "امسح", "احذف", "ما عاد", "ماعاد", "مو صح", "مب صح",
-                             "forget", "wrong", "not true", "no longer", "delete", "remove", "incorrect"]
-    static func hasForgetCue(_ s: String) -> Bool {
-        let l = s.lowercased()
-        return forgetCues.contains { l.contains($0) }
-    }
+    static func hasForgetCue(_ s: String) -> Bool { ForgetCues.matches(s) }
 
     // MARK: تعديل يدوي
 

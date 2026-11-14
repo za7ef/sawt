@@ -132,9 +132,18 @@ enum Catalog {
         }
     }
 
+    /// مجلد الصوت: داخل التطبيق إذا مدمج، وإلا اللي نزل على الجوال.
+    static func voiceDir(_ folder: String) -> URL {
+        if let root = voicesRoot {
+            let d = root.appendingPathComponent(folder)
+            if FileManager.default.fileExists(atPath: d.path) { return d }
+        }
+        return VoiceDownloads.root.appendingPathComponent(folder)
+    }
+
     static func exists(_ rel: String) -> Bool {
-        guard let root = voicesRoot else { return false }
-        return FileManager.default.fileExists(atPath: root.appendingPathComponent(rel).path)
+        if let root = voicesRoot, FileManager.default.fileExists(atPath: root.appendingPathComponent(rel).path) { return true }
+        return FileManager.default.fileExists(atPath: VoiceDownloads.root.appendingPathComponent(rel).path)
     }
 }
 
@@ -168,7 +177,8 @@ final class AppSettings: ObservableObject {
 
     /// التعليمات الكاملة وقت التشغيل: الشخصية + الاسم وصيغة المخاطبة (إذا محددة) + الذاكرة.
     func systemPrompt(chat: Bool, query: String, memory: Bool = true) -> String {
-        var s = persona
+        // الوصف القديم "بدون إنترنت" مو دقيق مع البحث في الويب
+        var s = persona.replacingOccurrences(of: "يشتغل على جوال المستخدم بدون إنترنت", with: "يشتغل على جوال المستخدم")
         if chat {
             s = s.replacingOccurrences(of: "تتكلم معه في مكالمة صوتية مباشرة.", with: "تكلمه في دردشة كتابية.")
             s = s.replacingOccurrences(of: "لا تستخدم قوائم ولا رموز ولا إيموجي ولا تنسيق، لأن كلامك يتحول لصوت.",

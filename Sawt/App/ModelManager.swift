@@ -88,13 +88,18 @@ final class ModelManager: ObservableObject {
         let token = llmToken
         llm = downloaded.contains(option.id) ? .preparing : .loading(0)
         downloadingID = downloaded.contains(option.id) ? nil : option.id
-        let needsNet = !downloaded.contains(option.id)
+        // يحتاج إنترنت إذا ما فيه نسخة كاملة على الجهاز (التحميل المحلي ما يتصل أبدًا)
+        let needsNet = Storage.llmLocalSnapshot(option.id) == nil
         llmTask = Task {
-            if needsNet, !(await NetworkGate.shared.permit("تنزيل النموذج")) {
-                guard llmToken == token else { return }
-                downloadingID = nil
-                llm = .failed("الإنترنت مقفول، فما نزّلت النموذج.")
-                return
+            if needsNet {
+                let ok = await NetworkGate.shared.permit("تنزيل النموذج")
+                // انضغط إيقاف أو تغيّر النموذج وقت التنبيه؟ نوقف
+                guard llmToken == token, !Task.isCancelled else { return }
+                guard ok else {
+                    downloadingID = nil
+                    llm = .failed("الإنترنت مقفول، فما نزّلت النموذج.")
+                    return
+                }
             }
             do {
                 try await withTimeout(seconds: 1_800, what: "تنزيل النموذج") {
@@ -248,12 +253,13 @@ final class ModelManager: ObservableObject {
         let token = sttToken
         stt = downloadedSTT.contains(variant) ? .preparing : .loading(0)
         sttDownloading = !downloadedSTT.contains(variant)
-        let sttNeedsNet = variant != "apple" && !downloadedSTT.contains(variant)
+        let sttNeedsNet = variant != "apple" && Storage.whisperModelDir(variant) == nil
         sttTask = Task {
             defer { if sttToken == token { sttDownloading = false } }
-            if sttNeedsNet, !(await NetworkGate.shared.permit("تنزيل نموذج السمع")) {
-                if sttToken == token { stt = .failed("الإنترنت مقفول، فما نزّلت نموذج السمع.") }
-                return
+            if sttNeedsNet {
+                let ok = await NetworkGate.shared.permit("تنزيل نموذج السمع")
+                guard sttToken == token, !Task.isCancelled else { return }
+                guard ok else { stt = .failed("الإنترنت مقفول، فما نزّلت نموذج السمع."); return }
             }
             do {
                 try await withTimeout(seconds: 1_800, what: "نموذج السمع") {
