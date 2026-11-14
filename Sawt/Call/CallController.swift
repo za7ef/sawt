@@ -26,6 +26,10 @@ final class CallController: ObservableObject {
     /// الكاميرا شغالة في المكالمة (طافية افتراضيًا)
     @Published var cameraOn = false
     @Published var cameraBusy = false
+    /// صوت بديل وقت الكاميرا: نماء + نموذج النظر + ترميز الصورة يتعدون ذاكرة الجوال (انقفل التطبيق في بناء 108)
+    private var voiceOverride: VoiceOption?
+    /// تنبيه قصير يظهر في شاشة المكالمة
+    @Published var notice: String?
 
     /// معلومات التشخيص اللي تطلع فوق المكالمة.
     struct Debug: Equatable {
@@ -192,6 +196,8 @@ final class CallController: ObservableObject {
     func end() {
         cancelReply(recordPartial: true)
         if cameraOn { cameraOn = false }
+        voiceOverride = nil
+        notice = nil
         Task { @MainActor in CallCamera.shared.stop() }
         CallController.isActive = false
         // استخراج الذاكرة بعد المكالمة
@@ -234,6 +240,11 @@ final class CallController: ObservableObject {
             cameraOn = false
             CallCamera.shared.stop()
             slog("call: camera off")
+            if voiceOverride != nil {
+                voiceOverride = nil
+                SpeechSynth.shared.prepare(AppSettings.shared.voice)   // يرجّع نماء
+                notice = nil
+            }
             return
         }
         guard AppSettings.shared.llm.vision else {
@@ -247,6 +258,19 @@ final class CallController: ObservableObject {
             return
         }
         cancelReply(recordPartial: true)
+        if AppSettings.shared.voice.kind == .namaa {
+            // نفك نماء قبل نموذج النظر ونتكلم بنبرة لين تطفي الكاميرا
+            let alt = Catalog.voices.first { $0.id == "nabra-saudi" }
+                ?? Catalog.voices.first { $0.id == "nabra-msa" }
+                ?? Catalog.voices.first { $0.kind == .apple }
+            if let alt {
+                voiceOverride = alt
+                NamaaEngine.shared.unload()
+                SpeechSynth.shared.prepare(alt)
+                notice = "مع الكاميرا الصوت صار \(alt.title) عشان الذاكرة. يرجع نماء لما تطفيها."
+                slog("call: camera with namaa → voice \(alt.id), namaa unloaded")
+            }
+        }
         let ok = await ModelManager.shared.ensureVision()
         await LLMService.shared.resetCallSession()   // النموذج تغيّر: الجلسة القديمة ما تصلح
         lastMemBlock = ""
@@ -581,7 +605,7 @@ final class CallController: ObservableObject {
         proc.async { self.aiActive = true }
 
         let settings = AppSettings.shared
-        let voice = settings.voice
+        let voice = voiceOverride ?? settings.voice
         let rate = settings.speechRate
         let hist = history()
         // التعليمات ثابتة (الجلسة تنعاد استخدامها)، والذاكرة المناسبة تنحط مع كل دور
@@ -591,7 +615,7 @@ final class CallController: ObservableObject {
         // الصورة تاخذ ذاكرة كثير وقت الترميز: نتخطاها إذا الذاكرة قليلة
         var picked: URL? = nil
         if cameraOn {
-            if RAM.availableMB < 2300 {
+            if RAM.availableMB < (NamaaEngine.shared.isLoaded ? 2800 : 2300) {
                 slog("call: skip camera frame, low memory avail=\(RAM.availableMB)MB")
             } else {
                 picked = CallCamera.shared.snapshot(maxSide: 448)
