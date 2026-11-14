@@ -56,7 +56,7 @@ final class CallController: ObservableObject {
 
     // MARK: بدء وإنهاء
 
-    func start(seed: [Turn] = []) {
+    @MainActor func start(seed: [Turn] = []) {
         guard state == .idle else { return }
         turns = seed
         let mm = ModelManager.shared
