@@ -91,8 +91,14 @@ final class NamaaVoice: ObservableObject {
                     done += f.bytes
                 }
                 state = .converting
+                // التحويل ياخذ ~2GB وقتها: نفك النموذج اللغوي أول عشان iOS ما يقفل التطبيق
+                let hadLLM = await LLMService.shared.isReady
+                await LLMService.shared.unload()
+                ModelManager.shared.llm = .idle
+                slog("namaa: converting (llm unloaded=\(hadLLM)) avail=\(RAM.availableMB)MB")
                 try await Task.detached(priority: .userInitiated) { try NamaaEngine.convert() }.value
                 state = .ready
+                if hadLLM { ModelManager.shared.loadAll() }
                 slog("namaa: installed \(Storage.format(sizeOnDisk))")
             } catch is CancellationError {
                 state = .notDownloaded
@@ -104,12 +110,16 @@ final class NamaaVoice: ObservableObject {
         }
     }
 
+    /// الملف طلع تالف وقت التحميل.
+    func markBroken() {
+        state = .failed("ملف الصوت تالف، نزّله مرة ثانية")
+        if AppSettings.shared.voiceID == "namaa" { slog("namaa: broken while selected") }
+    }
+
     func cancel() {
         task?.cancel()
         task = nil
-        // نعيّن القيمة الأولية مباشرة: الإسناد العادي هنا يشغّل didSet، اللي يقرأ NamaaVoice.shared
-        // وهو لسه يتهيأ (كان هذا سبب الانقفال عند فتح التطبيق في بناء 100)
-        _state = Published(initialValue: NamaaVoice.isInstalled ? .ready : .notDownloaded)
+        state = NamaaVoice.isInstalled ? .ready : .notDownloaded
     }
 
     func delete() {
@@ -245,7 +255,12 @@ final class NamaaEngine: @unchecked Sendable {
             eval(v)
             dst[k] = v
         }
-        try save(arrays: dst, url: out)
+        // نكتب لملف مؤقت ثم ننقله: لو انقفل التطبيق نص الكتابة ما يبقى ملف ناقص يبان كأنه جاهز
+        let tmp = dir.appendingPathComponent("namaa-f16.partial.safetensors")
+        try? FileManager.default.removeItem(at: tmp)
+        try save(arrays: dst, url: tmp)
+        dst.removeAll()
+        try FileManager.default.moveItem(at: tmp, to: out)
         try? FileManager.default.removeItem(at: raw)
         MLX.Memory.clearCache()
         slog("namaa: converted \(dst.count) tensors")
@@ -268,8 +283,16 @@ final class NamaaEngine: @unchecked Sendable {
         vocab = map
 
         let model = N5DiT(textNumEmbeds: lines.count)
-        let w = try loadArrays(url: NamaaVoice.modelURL)
-        try model.update(parameters: ModuleParameters.unflattened(w), verify: [.all])
+        do {
+            let w = try loadArrays(url: NamaaVoice.modelURL)
+            try model.update(parameters: ModuleParameters.unflattened(w), verify: [.all])
+        } catch {
+            // ملف تالف (مثلًا انقفل التطبيق وقت التحويل): نحذفه عشان يبان "مو منزّل" ويعاد تنزيله
+            slog("namaa: model file broken → removing (\(error))")
+            try? FileManager.default.removeItem(at: NamaaVoice.modelURL)
+            Task { @MainActor in NamaaVoice.shared.markBroken() }
+            throw NamaaError.missing("ملف صوت نماء تالف، نزّله مرة ثانية من الإعدادات")
+        }
         eval(model)
 
         var vw = try loadArrays(url: dir.appendingPathComponent("vocos.safetensors"))
@@ -407,9 +430,11 @@ final class NamaaEngine: @unchecked Sendable {
         eval(textCond, textUncond)
         let rope = dit.rope(total)
 
+        // المكالمة: خطوات أقل (8، و6 إذا الجوال حار) عشان الرد يطلع أسرع؛ التجربة بالإعدادات تبقى 16
+        let steps = CallController.isActive ? (ThermalWatch.isHot ? 6 : 8) : Self.steps
         // جدول الخطوات EPSS لـ 16 خطوة ثم sway
         let epss: [Float] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32]
-        var ts = Self.steps == 16 ? epss.map { $0 / 32 } : (0 ... Self.steps).map { Float($0) / Float(Self.steps) }
+        var ts = steps == 16 ? epss.map { $0 / 32 } : (0 ... steps).map { Float($0) / Float(steps) }
         ts = ts.map { t in t + Self.sway * (cos(Float.pi / 2 * t) - 1 + t) }
 
         var x = MLXRandom.normal([1, total, 100])   // fp32
@@ -437,7 +462,7 @@ final class NamaaEngine: @unchecked Sendable {
         }
         let genS = Date().timeIntervalSince(t0)
         let audioS = Double(samples.count) / 24_000
-        slog("namaa: gen \(String(format: "%.2f", genS))s audio \(String(format: "%.2f", audioS))s frames=\(total) ram=\(RAM.footprintMB)MB")
+        slog("namaa: gen \(String(format: "%.2f", genS))s audio \(String(format: "%.2f", audioS))s RTF=\(String(format: "%.2f", genS / max(audioS, 0.01))) steps=\(steps) frames=\(total) ref=\(refAudioLen) ram=\(RAM.footprintMB)MB")
         return Output(samples: samples, genSeconds: genS, audioSeconds: audioS, loadSeconds: loadS)
     }
 }
