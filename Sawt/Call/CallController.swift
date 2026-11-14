@@ -671,36 +671,3 @@ final class CallController: ObservableObject {
     }
 }
 
-enum TurnHeuristics {
-    /// كلمات لو انتهى فيها الكلام غالبًا المتكلم ما خلص.
-    static let fillers: [String] = [
-        "و", "بس", "يعني", "لأن", "لان", "عشان", "اللي", "ثم", "او", "أو", "اذا", "إذا", "لكن",
-        "اممم", "امم", "ام", "طيب", "في", "على", "من", "مع", "عن",
-        "and", "but", "so", "because", "the", "a", "to", "of", "or", "um", "uh", "like", "with",
-    ]
-
-    /// ردود قصيرة كاملة بحد ذاتها
-    static let shortComplete: Set<String> = [
-        "نعم", "لا", "اي", "إي", "ايه", "إيه", "ايوه", "أيوه", "تمام", "طيب", "اوكي", "شكرا", "شكرًا", "مرحبا", "هلا",
-        "السلام", "كمل", "وقف", "خلاص", "صح", "يب", "لا لا", "مشكور",
-        "yes", "no", "ok", "okay", "thanks", "hi", "hello", "stop", "continue", "yeah", "yep", "nope",
-    ]
-
-    /// كلام ناقص: نستنى بدل ما نرد عليه.
-    static func isFragment(_ text: String) -> Bool {
-        let t = text.trimmingCharacters(in: CharacterSet.whitespaces.union(.punctuationCharacters)).lowercased()
-        if t.isEmpty { return false }
-        if let last = text.trimmingCharacters(in: .whitespaces).last, "؟?".contains(last) { return false }
-        if shortComplete.contains(t) { return false }
-        let words = t.split(separator: " ")
-        if words.count <= 1 { return true }
-        return soundsUnfinished(text)
-    }
-
-    static func soundsUnfinished(_ text: String) -> Bool {
-        let t = text.trimmingCharacters(in: CharacterSet.whitespaces.union(.punctuationCharacters))
-        guard let last = t.split(separator: " ").last?.lowercased() else { return false }
-        if text.hasSuffix("...") || text.hasSuffix("…") { return true }
-        return fillers.contains(String(last))
-    }
-}
