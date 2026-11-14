@@ -30,14 +30,46 @@ struct Config {
     pairing_file: String,
     #[serde(default = "default_host")]
     host: String,
+    #[serde(default = "default_rsd_port")]
+    rsd_port: u16,
+}
+fn default_rsd_port() -> u16 {
+    58783
 }
 fn default_host() -> String {
     "10.7.0.1".into()
 }
 
+/// نوع ملف الاقتران: lockdown الكلاسيكي (HostID/DeviceCertificate…) أو RemotePairing (public_key/private_key/identifier)
+fn pairing_kind(bytes: &[u8]) -> &'static str {
+    match plist::Value::from_reader(std::io::Cursor::new(bytes)) {
+        Ok(plist::Value::Dictionary(d)) => {
+            if d.contains_key("public_key") && d.contains_key("private_key") && d.contains_key("identifier") {
+                "rppairing"
+            } else if d.contains_key("HostID") || d.contains_key("DeviceCertificate") || d.contains_key("HostPrivateKey") {
+                "lockdown"
+            } else {
+                "unknown"
+            }
+        }
+        _ => "invalid",
+    }
+}
+
 async fn connect(cfg: &Config, steps: &mut Vec<Json>) -> Res<Session> {
+    let bytes = std::fs::read(&cfg.pairing_file).map_err(|e| format!("ملف الاقتران: {e}"))?;
+    let kind = pairing_kind(&bytes);
+    steps.push(json!({"step": "pairing_kind", "kind": kind}));
+    match kind {
+        "rppairing" => connect_rp(cfg, &bytes, steps).await,
+        "lockdown" | "unknown" => connect_lockdown(cfg, &bytes, steps).await,
+        _ => Err("ملف الاقتران مو plist صالح".into()),
+    }
+}
+
+async fn connect_lockdown(cfg: &Config, bytes: &[u8], steps: &mut Vec<Json>) -> Res<Session> {
     let t0 = Instant::now();
-    let pairing = PairingFile::read_from_file(&cfg.pairing_file).map_err(|e| format!("ملف الاقتران: {e:?}"))?;
+    let pairing = PairingFile::from_bytes(bytes).map_err(|e| format!("ملف الاقتران (lockdown): {e:?}"))?;
     let addr = cfg.host.parse().map_err(|e| format!("العنوان: {e:?}"))?;
     let provider = TcpProvider { addr, scope_id: None, pairing_file: pairing, label: "Sawt".into() };
     let proxy = tokio::time::timeout(Duration::from_secs(10), CoreDeviceProxy::connect(&provider))
@@ -48,6 +80,57 @@ async fn connect(cfg: &Config, steps: &mut Vec<Json>) -> Res<Session> {
     let rsd_port = proxy.tunnel_info().server_rsd_port;
     let adapter = proxy.create_software_tunnel().map_err(|e| format!("tunnel: {e:?}"))?;
     let mut adapter = adapter.to_async_handle();
+    let s = adapter.connect(rsd_port).await.map_err(|e| format!("RSD connect: {e:?}"))?;
+    let rsd = RsdHandshake::new(s).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
+    steps.push(json!({"step": "rsd", "ms": t0.elapsed().as_millis(), "services": rsd.services.len()}));
+    Ok(Session { adapter, rsd })
+}
+
+/// مسار RemotePairing: RSD الشبكي → tunnelservice → RemoteXPC → تحقق الاقتران → نفق TLS-PSK
+/// (نفس تسلسل tunnel_create_remotexpc في idevice، MIT)
+async fn connect_rp(cfg: &Config, bytes: &[u8], steps: &mut Vec<Json>) -> Res<Session> {
+    use idevice::RemoteXpcClient;
+    use idevice::remote_pairing::{RemotePairingClient, RpPairingFile, connect_tls_psk_tunnel_native};
+    let t0 = Instant::now();
+    let mut rpf = RpPairingFile::from_bytes(bytes).map_err(|e| format!("ملف الاقتران (RP): {e:?}"))?;
+    let ip: std::net::IpAddr = cfg.host.parse().map_err(|e| format!("العنوان: {e:?}"))?;
+    let rsd_addr = std::net::SocketAddr::new(ip, cfg.rsd_port);
+    let st = tokio::time::timeout(Duration::from_secs(8), tokio::net::TcpStream::connect(rsd_addr))
+        .await
+        .map_err(|_| format!("انتهى الوقت على {rsd_addr} (الـVPN شغال؟)"))?
+        .map_err(|e| format!("RSD {rsd_addr}: {e}"))?;
+    let rsd0 = RsdHandshake::new(st).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
+    steps.push(json!({"step": "rsd_untrusted", "ms": t0.elapsed().as_millis(), "services": rsd0.services.len()}));
+    let ts = rsd0
+        .services
+        .get("com.apple.internal.dt.coredevice.untrusted.tunnelservice")
+        .ok_or("خدمة tunnelservice مو موجودة")?;
+    let ts_stream = tokio::net::TcpStream::connect(std::net::SocketAddr::new(ip, ts.port))
+        .await
+        .map_err(|e| format!("tunnelservice: {e}"))?;
+    let mut conn = RemoteXpcClient::new(ts_stream).await.map_err(|e| format!("xpc: {e:?}"))?;
+    conn.do_handshake().await.map_err(|e| format!("xpc handshake: {e:?}"))?;
+    let _ = conn.recv_root().await;
+    let mut rpc = RemotePairingClient::new(conn, "Sawt");
+    rpc.connect(&mut rpf, async || "000000".to_string())
+        .await
+        .map_err(|e| format!("تحقق الاقتران (RP): {e:?}"))?;
+    steps.push(json!({"step": "rp_verified", "ms": t0.elapsed().as_millis()}));
+    let port = rpc.create_tcp_listener().await.map_err(|e| format!("tcp listener: {e:?}"))?;
+    let tstream = tokio::net::TcpStream::connect(std::net::SocketAddr::new(ip, port))
+        .await
+        .map_err(|e| format!("TLS tunnel: {e}"))?;
+    let tunnel = connect_tls_psk_tunnel_native(tstream, rpc.encryption_key())
+        .await
+        .map_err(|e| format!("TLS-PSK: {e:?}"))?;
+    let client_ip: std::net::IpAddr = tunnel.info.client_address.parse().map_err(|e| format!("{e}"))?;
+    let server_ip: std::net::IpAddr = tunnel.info.server_address.parse().map_err(|e| format!("{e}"))?;
+    let mtu = tunnel.info.mtu as usize;
+    let rsd_port = tunnel.info.server_rsd_port;
+    let raw = tunnel.into_inner();
+    let mut a = idevice::tcp::adapter::Adapter::new(Box::new(raw), client_ip, server_ip);
+    a.set_mss(mtu.min(8192) - 60);
+    let mut adapter = a.to_async_handle();
     let s = adapter.connect(rsd_port).await.map_err(|e| format!("RSD connect: {e:?}"))?;
     let rsd = RsdHandshake::new(s).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
     steps.push(json!({"step": "rsd", "ms": t0.elapsed().as_millis(), "services": rsd.services.len()}));
