@@ -24,7 +24,6 @@ final class SpeechSynth {
         let dir = root.appendingPathComponent(voice.folder)
         let espeak = root.appendingPathComponent("espeak-ng-data").path
         let threads = max(2, min(4, ProcessInfo.processInfo.activeProcessorCount - 2))
-        var modelCfg: SherpaOnnxOfflineTtsModelConfig
         switch voice.kind {
         case .apple:
             return
@@ -33,17 +32,19 @@ final class SpeechSynth {
                 model: dir.appendingPathComponent(onnx).path,
                 tokens: dir.appendingPathComponent("tokens.txt").path,
                 dataDir: espeak, noiseScale: 0.6, noiseScaleW: 0.8, lengthScale: 1.0)
-            modelCfg = sherpaOnnxOfflineTtsModelConfig(vits: vits, numThreads: threads)
+            var cfg = sherpaOnnxOfflineTtsConfig(model: sherpaOnnxOfflineTtsModelConfig(vits: vits, numThreads: threads),
+                                                 maxNumSentences: 1, silenceScale: 0.2)
+            sherpa = SherpaOnnxOfflineTtsWrapper(config: &cfg)
         case .kokoro(let model):
             let kokoro = sherpaOnnxOfflineTtsKokoroModelConfig(
                 model: dir.appendingPathComponent(model).path,
                 voices: dir.appendingPathComponent("voices.bin").path,
                 tokens: dir.appendingPathComponent("tokens.txt").path,
                 dataDir: espeak)
-            modelCfg = sherpaOnnxOfflineTtsModelConfig(kokoro: kokoro, numThreads: threads)
+            var cfg = sherpaOnnxOfflineTtsConfig(model: sherpaOnnxOfflineTtsModelConfig(kokoro: kokoro, numThreads: threads),
+                                                 maxNumSentences: 1, silenceScale: 0.2)
+            sherpa = SherpaOnnxOfflineTtsWrapper(config: &cfg)
         }
-        var cfg = sherpaOnnxOfflineTtsConfig(model: modelCfg, maxNumSentences: 1, silenceScale: 0.2)
-        sherpa = SherpaOnnxOfflineTtsWrapper(config: &cfg)
     }
 
     /// يحوّل جملة لصوت. يُستدعى من أي خيط ويرجع على خيط خلفي.
