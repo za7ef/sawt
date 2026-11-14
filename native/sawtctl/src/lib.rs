@@ -105,6 +105,14 @@ async fn connect_rp(cfg: &Config, bytes: &[u8], steps: &mut Vec<Json>) -> Res<Se
     let t0 = Instant::now();
     let _ = tlog::install();
     let mut rpf = RpPairingFile::from_bytes(bytes).map_err(|e| format!("ملف الاقتران (RP): {e:?}"))?;
+    tlog::clear();   // سجل القراءة فيه المفاتيح: نمسحه
+    {
+        let pubb = rpf.public_key_bytes();
+        let derived = rpf.e_private_key.verifying_key().to_bytes().to_vec();
+        let fp: String = pubb.iter().take(4).map(|b| format!("{b:02x}")).collect();
+        steps.push(json!({"step": "pairing_check", "identifier": rpf.identifier(), "pub_matches_priv": derived == pubb,
+                          "pub_fp": fp, "alt_irk": rpf.alt_irk().map(|x| x.len())}));
+    }
     let ip: std::net::IpAddr = cfg.host.parse().map_err(|e| format!("العنوان: {e:?}"))?;
     // المنافذ: المكتشف أولًا، بعدين 49152 (الافتراضي)، بعدين مسح سريع
     let mut ports: Vec<u16> = Vec::new();
@@ -113,9 +121,9 @@ async fn connect_rp(cfg: &Config, bytes: &[u8], steps: &mut Vec<Json>) -> Res<Se
     for p in 49153..=49200u16 { if !ports.contains(&p) { ports.push(p) } }
     // نجرب 10.7.0.1 أولًا، وبعدين عنوان Bonjour (إن وُجد)
     // عنوان Bonjour أولًا (الخدمة الفعلية)، بعدين 10.7.0.1 (مثل StikDebug)، بعدين loopback
-    let mut hosts: Vec<std::net::IpAddr> = Vec::new();
-    if let Ok(h) = cfg.rp_host.split('%').next().unwrap_or("").parse::<std::net::IpAddr>() { hosts.push(h) }
-    for h in [ip, std::net::IpAddr::from([127, 0, 0, 1])] { if !hosts.contains(&h) { hosts.push(h) } }
+    // 10.7.0.1 أولًا (هو اللي رد على المصافحة، مثل StikDebug)، بعدين عنوان Bonjour
+    let mut hosts: Vec<std::net::IpAddr> = vec![ip];
+    if let Ok(h) = cfg.rp_host.split('%').next().unwrap_or("").parse::<std::net::IpAddr>() { if !hosts.contains(&h) { hosts.push(h) } }
     steps.push(json!({"step": "rp_hosts", "order": hosts.iter().map(|h| h.to_string()).collect::<Vec<_>>()}));
     let mut last_err = String::from("ما فيه عنوان");
     let mut done: Option<(RemotePairingClient<RpPairingSocket<tokio::net::TcpStream>>, std::net::IpAddr)> = None;
@@ -231,6 +239,52 @@ async fn rp_try_host(
     }
     steps.push(json!({"step": "rp_ports_summary", "host": ip.to_string(), "not_open": closed, "handshakes": handshakes, "ms": t0.elapsed().as_millis()}));
     Err(last)
+}
+
+/// اقتران جديد من الجوال نفسه (pair-setup عبر RPPairing على 10.7.0.1، PIN 000000 مثل iOS)
+/// ويحفظ الملف الجديد مكان القديم (مع نسخة .bak)
+#[unsafe(no_mangle)]
+pub extern "C" fn sawtctl_pair(cfg: *const c_char) -> *mut c_char {
+    run(cfg, async |cfg, steps| {
+        use idevice::remote_pairing::{RemotePairingClient, RpPairingFile, RpPairingSocket};
+        let _ = tlog::install();
+        let ip: std::net::IpAddr = cfg.host.parse().map_err(|e| format!("العنوان: {e:?}"))?;
+        let mut ports: Vec<u16> = Vec::new();
+        if cfg.rp_port != 0 { ports.push(cfg.rp_port) }
+        if !ports.contains(&49152) { ports.push(49152) }
+        let mut last = String::from("ما فيه منفذ");
+        for p in ports {
+            let addr = std::net::SocketAddr::new(ip, p);
+            let st = match tokio::time::timeout(Duration::from_secs(2), tokio::net::TcpStream::connect(addr)).await {
+                Ok(Ok(st)) => st,
+                Ok(Err(e)) => { last = format!("{addr}: {e}"); continue }
+                Err(_) => { last = format!("{addr}: timeout"); continue }
+            };
+            let mut rpc = RemotePairingClient::new(RpPairingSocket::new(st), &cfg.rp_hostname);
+            tlog::clear();
+            let hs = rpc.attempt_pair_verify().await;
+            steps.push(json!({"step": "pair_handshake", "port": p, "ok": hs.is_ok(), "error": hs.as_ref().err().map(|e| format!("{e:?}"))}));
+            if let Err(e) = hs { last = format!("handshake: {e:?}"); continue }
+            let mut rpf = RpPairingFile::generate(&cfg.rp_hostname);
+            tlog::clear();
+            // ممكن يطلع للمستخدم طلب ثقة على الشاشة: ننتظر لين دقيقتين
+            let r = tokio::time::timeout(Duration::from_secs(120), rpc.pair(&mut rpf, async || "000000".to_string())).await;
+            let trace = tlog::take();
+            match r {
+                Ok(Ok(())) => {
+                    let path = std::path::Path::new(&cfg.pairing_file);
+                    if path.exists() { let _ = std::fs::copy(path, path.with_extension("plist.bak")); }
+                    std::fs::write(path, rpf.to_bytes()).map_err(|e| format!("حفظ الملف: {e}"))?;
+                    tlog::clear();
+                    steps.push(json!({"step": "pair_saved", "identifier": rpf.identifier()}));
+                    return Ok(json!({"paired": true, "port": p, "identifier": rpf.identifier()}));
+                }
+                Ok(Err(e)) => { steps.push(json!({"step": "pair_failed", "error": format!("{e:?}"), "trace": trace})); last = format!("pair: {e:?}") }
+                Err(_) => { steps.push(json!({"step": "pair_timeout", "trace": trace})); last = "انتهى الوقت (ما وصل رد/موافقة)".into() }
+            }
+        }
+        Err(last)
+    })
 }
 
 #[unsafe(no_mangle)]
