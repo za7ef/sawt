@@ -50,6 +50,15 @@ check(!ForgetCues.matches("I love research"), "ForgetCues: كلام عادي")
 check(TextCleaner.splitSentences("هلا والله كيفك اليوم ", first: true, firstWords: 3).0.first == "هلا والله كيفك", "splitSentences: أول قطعة 3 كلمات")
 check(TextCleaner.splitSentences("هلا والله كيفك اليوم ", first: true).0.isEmpty, "splitSentences: الافتراضي 7")
 
+// FillerPicker
+check(FillerPicker.needsThought("كيف أسوي حساب جديد"), "Filler: كيف = تفكير")
+check(!FillerPicker.needsThought("هلا والله"), "Filler: سوالف = عادي")
+check(FillerPicker.needsThought("عندي 3 طلبات"), "Filler: أرقام = تفكير")
+check(FillerPicker.casual.contains(FillerPicker.pick(for: "هلا", last: nil)!), "Filler: عادي من القائمة العادية")
+for _ in 0 ..< 20 { check(FillerPicker.pick(for: "هلا", last: "طيب") != "طيب", "Filler: بدون تكرار") }
+check(FillerPicker.pick(for: "اشرح لي", last: nil, available: ["دقيقة أفكر"]) == "دقيقة أفكر", "Filler: من الجاهز بس")
+check(FillerPicker.pick(for: "اشرح لي", last: nil, available: []) == nil, "Filler: ما فيه جاهز")
+
 // MemoryLine
 let now0 = Date(timeIntervalSince1970: 1_800_000_000)
 if case .add(let t, let imp, let cat, let exp)? = MemoryLine.parse("+ 4 | ناس | دائم | أخته اسمها سميرة", now: now0) {
