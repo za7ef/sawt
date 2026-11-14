@@ -141,3 +141,79 @@ enum ForgetCues {
         return forgetPhrases.contains { padded.contains(" " + $0) }
     }
 }
+
+/// سطر من مخرجات استخراج الذاكرة.
+/// الصيغة: `+ أهمية | فئة | مدة | النص` حيث المدة: دائم، أو مؤقت، أو تاريخ YYYY-MM-DD (ينتهي بعده).
+/// تحديث: `~ رقم | أهمية | النص` أو `~ رقم: النص`. حذف: `x رقم`.
+enum MemoryLine: Equatable {
+    case add(text: String, importance: Int, category: String, expires: Date?)
+    case update(index: Int, text: String, importance: Int?)
+    case delete(index: Int)
+
+    static let categories = ["هوية", "تفضيلات", "ناس", "خطط", "صحة", "شغل", "أخرى"]
+
+    static func parse(_ raw: String, now: Date = Date()) -> MemoryLine? {
+        let line = raw.trimmingCharacters(in: .whitespaces)
+        guard let first = line.first else { return nil }
+        let body = String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
+        if body.contains("لا شيء") { return nil }
+        switch first {
+        case "+", "-", "•":
+            let parts = body.split(separator: "|", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+            var importance = 3, category = "أخرى", expires: Date? = nil, text = body
+            if parts.count >= 4 {
+                importance = Int(parts[0].filter(\.isNumber).prefix(1)) ?? Int(arabicDigits(parts[0]).prefix(1)) ?? 3
+                category = categories.first { parts[1].contains($0) } ?? "أخرى"
+                expires = expiry(parts[2], now: now)
+                text = parts[3...].joined(separator: " ")
+            }
+            text = text.trimmingCharacters(in: .whitespaces)
+            guard text.count >= 4, text.count <= 140 else { return nil }
+            return .add(text: text, importance: min(max(importance, 1), 5), category: category, expires: expires)
+        case "~":
+            if body.contains("|") {
+                let p = body.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+                guard p.count >= 3, let n = Int(arabicDigits(p[0])) else { return nil }
+                let t = p[2...].joined(separator: " ")
+                guard t.count >= 4, t.count <= 140 else { return nil }
+                return .update(index: n, text: t, importance: Int(arabicDigits(p[1]).prefix(1)).map { min(max($0, 1), 5) })
+            }
+            let p = body.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard p.count == 2, let n = Int(arabicDigits(p[0])), p[1].count >= 4, p[1].count <= 140 else { return nil }
+            return .update(index: n, text: p[1], importance: nil)
+        case "x", "X", "×":
+            guard let n = Int(arabicDigits(body).filter(\.isNumber)) else { return nil }
+            return .delete(index: n)
+        default:
+            return nil
+        }
+    }
+
+    static func arabicDigits(_ s: String) -> String {
+        String(s.map { c -> Character in
+            if let v = c.unicodeScalars.first?.value, (0x0660...0x0669).contains(v) {
+                return Character(String(v - 0x0660))
+            }
+            return c
+        })
+    }
+
+    /// المدة: "دائم" = nil، "مؤقت" = بعد 14 يوم، أو تاريخ = نهاية ذاك اليوم.
+    static func expiry(_ s: String, now: Date) -> Date? {
+        let t = arabicDigits(s)
+        if let r = t.range(of: #"\d{4}-\d{2}-\d{2}"#, options: .regularExpression) {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyy-MM-dd"
+            if let d = f.date(from: String(t[r])) { return d.addingTimeInterval(86_400) }
+        }
+        if t.contains("مؤقت") { return now.addingTimeInterval(14 * 86_400) }
+        return nil
+    }
+
+    /// المستخدم طلب صراحة يتذكر شي.
+    static func hasRememberCue(_ s: String) -> Bool {
+        let t = s.lowercased()
+        return ["تذكر", "تذكّر", "احفظ", "لا تنسى", "لا تنس", "remember"].contains { t.contains($0) }
+    }
+}
