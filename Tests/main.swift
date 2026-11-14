@@ -46,6 +46,10 @@ check(ForgetCues.matches("it's no longer true"), "ForgetCues: no longer")
 check(!ForgetCues.matches("الانسان مخلوق عجيب"), "ForgetCues: الانسان مو إشارة")
 check(!ForgetCues.matches("I love research"), "ForgetCues: كلام عادي")
 
+// firstWords
+check(TextCleaner.splitSentences("هلا والله كيفك اليوم ", first: true, firstWords: 3).0.first == "هلا والله كيفك", "splitSentences: أول قطعة 3 كلمات")
+check(TextCleaner.splitSentences("هلا والله كيفك اليوم ", first: true).0.isEmpty, "splitSentences: الافتراضي 7")
+
 // MemoryLine
 let now0 = Date(timeIntervalSince1970: 1_800_000_000)
 if case .add(let t, let imp, let cat, let exp)? = MemoryLine.parse("+ 4 | ناس | دائم | أخته اسمها سميرة", now: now0) {
