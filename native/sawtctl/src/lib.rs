@@ -425,3 +425,79 @@ fn ascii_usage(c: char) -> Option<(u64, bool)> {
         _ => return None,
     })
 }
+
+// ===== اقتران يبدأه الجوال (iOS 27): التطبيق يتصرف كـ"كمبيوتر قابل للاقتران" =====
+// نفس طريقة idevice (pairable_host) اللي تستخدمها StikJIT: نفتح منفذ TCP، والتطبيق
+// (Swift) يعلن خدمة _remotepairing-pairable-host._tcp عبر Bonjour، والجوال يتصل ويسوي pair-setup
+// بالرمز اللي نعرضه للمستخدم.
+struct HostPairing {
+    listener: std::net::TcpListener,
+    rpf: idevice::remote_pairing::RpPairingFile,
+    info: idevice::remote_pairing::PairableHostInfo,
+}
+static HOST_PAIRING: std::sync::Mutex<Option<HostPairing>> = std::sync::Mutex::new(None);
+static HOST_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// يجهز المنفذ والهوية، ويرجّع {port, identifier, txt} عشان Swift يعلن الخدمة
+#[unsafe(no_mangle)]
+pub extern "C" fn sawtctl_host_begin(cfg: *const c_char) -> *mut c_char {
+    run(cfg, async |cfg, _steps| {
+        use idevice::remote_pairing::{PairableHostInfo, RpPairingFile};
+        HOST_CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
+        let listener = std::net::TcpListener::bind(("0.0.0.0", 0)).map_err(|e| format!("bind: {e}"))?;
+        listener.set_nonblocking(true).map_err(|e| format!("{e}"))?;
+        let port = listener.local_addr().map_err(|e| format!("{e}"))?.port();
+        let name = if cfg.rp_hostname.is_empty() { "Sawt".to_string() } else { cfg.rp_hostname.clone() };
+        let rpf = RpPairingFile::generate(&name);
+        let info = PairableHostInfo::generate(&name, "Mac17,7");
+        let id = rpf.identifier.clone();
+        let txt: serde_json::Map<String, Json> = info.mdns_txt_records(&id).into_iter().map(|(k, v)| (k, Json::String(v))).collect();
+        *HOST_PAIRING.lock().map_err(|_| "lock")? = Some(HostPairing { listener, rpf, info });
+        Ok(json!({"port": port, "identifier": id, "name": name, "txt": txt}))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sawtctl_host_cancel() {
+    HOST_CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// ينتظر الجوال يتصل (لين timeout_s)، ويستدعي pin_cb بالرمز، ويحفظ الملف الجديد
+#[unsafe(no_mangle)]
+pub extern "C" fn sawtctl_host_accept(cfg: *const c_char, timeout_s: u32, pin_cb: Option<extern "C" fn(*const c_char)>) -> *mut c_char {
+    run(cfg, async move |cfg, steps| {
+        use idevice::remote_pairing::{PairableHost, RpPairingSocket};
+        let _ = tlog::install();
+        let HostPairing { listener, mut rpf, info } = HOST_PAIRING.lock().map_err(|_| "lock")?.take().ok_or("ما فيه اقتران مجهّز")?;
+        let listener = tokio::net::TcpListener::from_std(listener).map_err(|e| format!("{e}"))?;
+        let deadline = Instant::now() + Duration::from_secs(timeout_s.max(10) as u64);
+        let (stream, peer) = loop {
+            if HOST_CANCEL.load(std::sync::atomic::Ordering::SeqCst) { return Err("انلغى".into()) }
+            if Instant::now() > deadline { return Err("انتهى الوقت وما اتصل الجوال".into()) }
+            match tokio::time::timeout(Duration::from_millis(300), listener.accept()).await {
+                Ok(Ok(x)) => break x,
+                Ok(Err(e)) => return Err(format!("accept: {e}")),
+                Err(_) => continue,
+            }
+        };
+        steps.push(json!({"step": "host_connected", "peer": peer.to_string()}));
+        tlog::clear();
+        let mut host = PairableHost::new(RpPairingSocket::new_device(stream), info);
+        let r = tokio::time::timeout(Duration::from_secs(180), host.accept(&mut rpf, |pin: String| async move {
+            if let (Some(cb), Ok(c)) = (pin_cb, CString::new(pin)) { cb(c.as_ptr()) }
+        })).await;
+        let trace = tlog::take();
+        match r {
+            Ok(Ok(peer_dev)) => {
+                let path = std::path::Path::new(&cfg.pairing_file);
+                if path.exists() { let _ = std::fs::copy(path, path.with_extension("plist.bak")); }
+                std::fs::write(path, rpf.to_bytes()).map_err(|e| format!("حفظ الملف: {e}"))?;
+                tlog::clear();
+                steps.push(json!({"step": "host_paired"}));
+                Ok(json!({"paired": true, "identifier": rpf.identifier, "device": format!("{:?}", peer_dev.name)}))
+            }
+            Ok(Err(e)) => { steps.push(json!({"step": "host_pair_failed", "trace": trace})); Err(format!("{e:?}")) }
+            Err(_) => { steps.push(json!({"step": "host_pair_timeout", "trace": trace})); Err("ما كمل الاقتران (ما انكتب الرمز؟)".into()) }
+        }
+    })
+}
