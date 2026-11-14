@@ -134,6 +134,14 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    NavigationLink {
+                        PhoneControlView()
+                    } label: {
+                        Text("تحكم بالجوال (تجريبي)")
+                    }
+                }
+
+                Section {
                     if let u = usage {
                         LabeledContent("النماذج اللغوية", value: Storage.format(u.models))
                         LabeledContent("نماذج السمع", value: Storage.format(u.whisper))
