@@ -120,13 +120,14 @@ final class ChatStore: ObservableObject {
 
     // MARK: الدردشة الكتابية
 
-    func send(_ text: String) {
+    func send(_ text: String, onFail: @escaping (String) -> Void = { _ in }) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty, !isGenerating else { return }
         let history = (current?.messages ?? []).suffix(20).map {
             $0.role == .user ? Chat.Message.user($0.text) : Chat.Message.assistant($0.text)
         }
-        append(Message(role: .user, text: t))
+        let userMsg = Message(role: .user, text: t)
+        append(userMsg)
         isGenerating = true
         streamingText = ""
         let system = AppSettings.shared.persona.replacingOccurrences(
@@ -141,7 +142,15 @@ final class ChatStore: ObservableObject {
                     streamingText = full
                 }
             } catch {
-                self.error = error.localizedDescription
+                self.error = SawtError.friendly(error).localizedDescription
+                if full.isEmpty {
+                    // ما فيه رد: نشيل رسالتك ونرجعها لخانة الكتابة عشان ما تتكرر
+                    if let i = conversations.firstIndex(where: { $0.id == currentID }) {
+                        conversations[i].messages.removeAll { $0.id == userMsg.id }
+                        save()
+                    }
+                    onFail(t)
+                }
             }
             let answer = full.trimmingCharacters(in: .whitespacesAndNewlines)
             if !answer.isEmpty { append(Message(role: .assistant, text: answer)) }
