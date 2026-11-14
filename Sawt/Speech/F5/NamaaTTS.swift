@@ -20,7 +20,7 @@ final class NamaaVoice: ObservableObject {
     }
 
     @Published var state: State = .notDownloaded {
-        didSet { Storage.downloadActive = isBusy || ModelManager.shared.downloadingID != nil }
+        didSet { ModelManager.shared.refreshDownloadFlag() }
     }
 
     /// فيه تنزيل أو تحويل شغال
