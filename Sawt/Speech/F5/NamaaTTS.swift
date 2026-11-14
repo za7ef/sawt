@@ -278,6 +278,11 @@ final class NamaaEngine: @unchecked Sendable {
         return s
     }
 
+    /// يحمّل النموذج بالخلفية إذا كان منزّل.
+    func preload() {
+        queue.async { _ = try? self.loadIfNeeded() }
+    }
+
     func unload() {
         queue.async {
             self.dit = nil; self.vocos = nil; self.filterbank = nil
