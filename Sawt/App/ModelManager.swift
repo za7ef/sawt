@@ -46,6 +46,19 @@ final class ModelManager: ObservableObject {
 
     func loadLLM() { activate(AppSettings.shared.llm) }
 
+    /// يفك النماذج من الذاكرة لما التطبيق يطول بالخلفية (يرجع يحملها لما ترجع).
+    func unloadForBackground() async {
+        guard !AudioIO.shared.ownedByCall, !ChatStore.shared.isGenerating else { return }
+        llmTask?.cancel()
+        llmToken += 1
+        await LLMService.shared.unload()
+        SpeechSynth.shared.unload()
+        NamaaEngine.shared.unload()
+        llm = .idle
+        voiceReady = false
+        slog("background: models unloaded footprint=\(RAM.footprintMB)MB")
+    }
+
     private func markDownloaded(_ id: String) {
         guard !downloaded.contains(id) else { return }
         downloaded.insert(id)
@@ -90,6 +103,27 @@ final class ModelManager: ObservableObject {
             }
         }
         return llmTask!
+    }
+
+    /// يعيد تحميل النموذج الحالي بوضع النظر (مرة وحدة) إذا يدعم الصور.
+    func ensureVision() async -> Bool {
+        let option = AppSettings.shared.llm
+        guard option.vision else { return false }
+        if await LLMService.shared.visionLoaded { return true }
+        llmToken += 1
+        let token = llmToken
+        llm = .preparing
+        do {
+            try await LLMService.shared.load(option, vision: true) { _ in }
+            if llmToken == token { llm = .ready }
+            return true
+        } catch {
+            slog("vision load failed: \(error)")
+            // نرجع للوضع النصي
+            try? await LLMService.shared.load(option) { _ in }
+            if llmToken == token { llm = .ready }
+            return false
+        }
     }
 
     /// يوقف التنزيل مؤقتًا. الملفات اللي نزلت تبقى، والباقي يكمل لما تضغط تنزيل مرة ثانية.

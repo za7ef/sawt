@@ -191,12 +191,16 @@ final class MemoryStore: ObservableObject {
             slog("memory: extract failed \(error)")
             return 0
         }
-        let lines = out.components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { $0.hasPrefix("-") || $0.hasPrefix("•") }
-            .map { String($0.dropFirst()).trimmingCharacters(in: .whitespaces) }
-            .filter { $0.count >= 4 && $0.count <= 140 && !$0.contains("لا شيء") }
-            .prefix(4)
+        var lines: [String] = []
+        for raw in out.components(separatedBy: .newlines) {
+            let trimmed: String = raw.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("-") || trimmed.hasPrefix("•") else { continue }
+            let body: String = String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)
+            let n: Int = body.count
+            if n < 4 || n > 140 || body.contains("لا شيء") { continue }
+            lines.append(body)
+            if lines.count == 4 { break }
+        }
         var added = 0
         for l in lines {
             if let i = items.firstIndex(where: { Self.similarity($0.text, l) >= 0.5 }) {

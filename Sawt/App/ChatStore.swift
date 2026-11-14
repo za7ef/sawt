@@ -11,6 +11,7 @@ struct Message: Identifiable, Codable, Equatable {
     var date = Date()
     /// انحفظ شي في الذاكرة بعد هذا الرد
     var memorySaved: Bool?
+    var attachments: [Attachment]?
 }
 
 struct Conversation: Identifiable, Codable, Equatable {
@@ -120,23 +121,37 @@ final class ChatStore: ObservableObject {
         return msgs.map { Turn(role: $0.role == .user ? .user : .assistant, text: $0.text) }
     }
 
+    private var saveTask: Task<Void, Never>?
+
+    /// حفظ مؤجّل (نص ثانية) وخارج الخيط الرئيسي، عشان ما نكتب الملف كل شوي.
     func save() {
-        let list = conversations
-        let url = fileURL
-        Task.detached(priority: .utility) {
-            if let data = try? JSONEncoder().encode(list) { try? data.write(to: url, options: .atomic) }
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            if Task.isCancelled { return }
+            let list = conversations
+            let url = fileURL
+            await Task.detached(priority: .utility) {
+                if let data = try? JSONEncoder().encode(list) {
+                    try? data.write(to: url, options: [.atomic, .completeFileProtection])
+                }
+            }.value
         }
     }
 
     // MARK: الدردشة الكتابية
 
-    func send(_ text: String, onFail: @escaping (String) -> Void = { _ in }) {
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty, !isGenerating else { return }
-        let history = (current?.messages ?? []).suffix(20).map {
-            $0.role == .user ? Chat.Message.user($0.text) : Chat.Message.assistant($0.text)
+    func send(_ text: String, attachments: [Attachment] = [], onFail: @escaping (String) -> Void = { _ in }) {
+        var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty || !attachments.isEmpty, !isGenerating else { return }
+        if t.isEmpty { t = attachments.contains { $0.kind == .image } ? "وش تشوف في الصورة؟" : "لخّص لي الملف باختصار." }
+        let history = (current?.messages ?? []).suffix(20).map { m -> Chat.Message in
+            let names = (m.attachments ?? []).map { "[مرفق: \($0.name)]" }.joined(separator: " ")
+            let body = names.isEmpty ? m.text : names + "\n" + m.text
+            return m.role == .user ? Chat.Message.user(body) : Chat.Message.assistant(m.text)
         }
-        let userMsg = Message(role: .user, text: t)
+        var userMsg = Message(role: .user, text: t)
+        if !attachments.isEmpty { userMsg.attachments = attachments }
         append(userMsg)
         isGenerating = true
         streamingText = ""
@@ -147,12 +162,17 @@ final class ChatStore: ObservableObject {
             do {
                 slog.stage("chat:llm")
                 slog("chat: gen start avail=\(RAM.availableMB)MB")
-                let stream = try await LLMService.shared.stream(system: system, history: Array(history), user: t, maxTokens: 1500)
+                let (prompt, images) = await Self.buildPrompt(t, attachments: attachments)
+                let stream = try await LLMService.shared.stream(system: system, history: Array(history), user: prompt,
+                                                                maxTokens: 1500, images: images)
+                // تحديث الواجهة بحد أقصى ~30 مرة بالثانية بدل كل كلمة
+                var lastUI = Date.distantPast
                 for try await chunk in stream {
                     if Task.isCancelled { break }
                     full += chunk
-                    streamingText = full
+                    if Date().timeIntervalSince(lastUI) > 0.033 { streamingText = full; lastUI = Date() }
                 }
+                streamingText = full
             } catch {
                 self.error = SawtError.friendly(error).localizedDescription
                 if full.isEmpty {
@@ -178,6 +198,38 @@ final class ChatStore: ObservableObject {
             slog.stage("idle")
             slog("chat: gen done \(full.count) chars")
         }
+    }
+
+    /// يجهّز نص الرسالة مع المرفقات: الملفات كنص (مقتطفات إذا طويلة)، والصور للنموذج إذا يشوف،
+    /// وإلا وصف آلي من Apple Vision.
+    static func buildPrompt(_ t: String, attachments: [Attachment]) async -> (String, [URL]) {
+        guard !attachments.isEmpty else { return (t, []) }
+        var parts: [String] = []
+        var images: [URL] = []
+        let files = attachments.filter { $0.kind == .file }
+        let budget = files.isEmpty ? 0 : max(1500, 5000 / files.count)
+        for f in files {
+            let (ctx, cut) = Attachments.context(for: f.text ?? "", query: t, budget: budget)
+            if ctx.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                parts.append("[ملف مرفق: \(f.name) — ما فيه نص مقروء]")
+            } else {
+                parts.append("[ملف مرفق: \(f.name)\(cut ? " — مقتطفات من ملف طويل" : "")]\n\(ctx)\n[نهاية الملف]")
+            }
+        }
+        let imgs = attachments.filter { $0.kind == .image }
+        if !imgs.isEmpty {
+            let canSee = await ModelManager.shared.ensureVision()
+            if canSee {
+                images = Array(imgs.prefix(3).map { $0.imageURL })
+            } else {
+                for (i, a) in imgs.prefix(3).enumerated() {
+                    let d = await Attachments.describe(a)
+                    parts.append("[صورة \(i + 1) مرفقة. النموذج الحالي ما يشوف الصور، هذا وصف آلي لها:]\n\(d)")
+                }
+            }
+        }
+        parts.append(t)
+        return (parts.joined(separator: "\n\n"), images)
     }
 
     func markMemorySaved(_ id: UUID, in conv: UUID?) {

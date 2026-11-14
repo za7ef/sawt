@@ -12,6 +12,8 @@ struct LLMOption: Identifiable, Hashable {
     let arabic: String
     var tag: String? = nil
     var custom = false
+    /// يقدر يشوف الصور (عن طريق MLXVLM)
+    var vision = false
 
     var configuration: ModelConfiguration { LLMRegistry.shared.configuration(id: id) }
     var sizeText: String { sizeGB < 1 ? "\(Int(sizeGB * 1000)) MB" : String(format: "%.1f GB", sizeGB) }
@@ -39,15 +41,15 @@ enum Catalog {
     /// كل الأحجام متحقق منها من Hugging Face (نوفمبر 2026).
     static let builtInLLMs: [LLMOption] = [
         LLMOption(id: "mlx-community/Qwen3.5-2B-4bit", title: "Qwen3.5 2B", sizeGB: 1.72, ramGB: 2.4,
-                  speed: "سريع جدًا", arabic: "عربي جيد", tag: "الأسرع والأخف"),
+                  speed: "سريع جدًا", arabic: "عربي جيد", tag: "الأسرع والأخف", vision: true),
         LLMOption(id: "mlx-community/Qwen3-4B-4bit", title: "Qwen3 4B", sizeGB: 2.26, ramGB: 3.0,
                   speed: "سريع", arabic: "عربي ممتاز ولهجات زينة", tag: "عربي أحسن • للمكالمات مع سمع آبل"),
         LLMOption(id: "mlx-community/Qwen3.5-4B-4bit", title: "Qwen3.5 4B", sizeGB: 3.03, ramGB: 3.8,
-                  speed: "متوسط", arabic: "عربي ممتاز", tag: "الأحدث"),
+                  speed: "متوسط", arabic: "عربي ممتاز", tag: "الأحدث", vision: true),
         LLMOption(id: "mlx-community/gemma-3-4b-it-qat-4bit", title: "Gemma 3 4B", sizeGB: 3.0, ramGB: 3.8,
-                  speed: "متوسط", arabic: "عربي ممتاز وأسلوب طبيعي"),
+                  speed: "متوسط", arabic: "عربي ممتاز وأسلوب طبيعي", vision: true),
         LLMOption(id: "mlx-community/gemma-4-e2b-it-4bit", title: "Gemma 4 E2B", sizeGB: 3.55, ramGB: 3.5,
-                  speed: "متوسط", arabic: "عربي ممتاز"),
+                  speed: "متوسط", arabic: "عربي ممتاز", vision: true),
         LLMOption(id: "mlx-community/Qwen2.5-3B-Instruct-4bit", title: "Qwen2.5 3B", sizeGB: 1.74, ramGB: 2.4,
                   speed: "سريع", arabic: "عربي جيد"),
         LLMOption(id: "mlx-community/Llama-3.2-3B-Instruct-4bit", title: "Llama 3.2 3B", sizeGB: 1.81, ramGB: 2.5,
