@@ -250,7 +250,24 @@ enum FillerPicker {
 enum ThinkHeuristic {
     static let cues = ["ليش", "ليه", "لماذا", "كيف أ", "كيف ا", "كيف ن", "اشرح", "وضح", "وضّح", "فسر", "فسّر", "قارن", "الفرق بين",
                        "خطة", "خطط", "خطوات", "رتب لي", "حلل", "حلّل", "احسب", "برهن", "اثبت", "أثبت", "صحح", "صحّح",
-                       "why", "explain", "compare", "plan", "step by step", "prove", "calculate", "debug", "analy"]
+                       "لغز", "فزورة", "فوازير", "حزورة", "احجية", "أحجية", "ما هو الشيء", "ما هو الشي", "وش الشي", "ايش الشي",
+                       "شيء إذا", "شيء اذا", "شي اذا", "شي إذا", "خمن", "خمّن", "منطق", "استنتج",
+                       "why", "explain", "compare", "plan", "step by step", "prove", "calculate", "debug", "analy",
+                       "riddle", "puzzle", "guess", "logic"]
+    static let smallTalk = ["كيفك", "كيف حالك", "شلونك", "وش اخبارك", "وش أخبارك", "ايش اخبارك", "وش تسوي", "وينك",
+                            "how are you", "what's up", "whats up"]
+
+    enum Verdict { case yes, no, unsure }
+
+    /// نعم/لا واضحة من القواعد، و"مو متأكد" لسؤال عادي (ينتهي بعلامة استفهام) يقرره مصنّف سريع
+    static func verdict(_ text: String, hasAttachment: Bool = false) -> Verdict {
+        if shouldThink(text, hasAttachment: hasAttachment) { return .yes }
+        let t = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = t.split(separator: " ").count
+        if words <= 3 || smallTalk.contains(where: { t.contains($0) }) { return .no }
+        if t.hasSuffix("?") || t.hasSuffix("؟") || words >= 12 { return .unsure }
+        return .no
+    }
     static let codeMarks = ["```", "func ", "def ", "class ", "error:", "exception", "{", "};", "import ", "console.", "print("]
 
     static func shouldThink(_ text: String, hasAttachment: Bool = false) -> Bool {
