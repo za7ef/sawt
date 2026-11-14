@@ -19,7 +19,14 @@ final class NamaaVoice: ObservableObject {
         case failed(String)
     }
 
-    @Published var state: State = .notDownloaded
+    @Published var state: State = .notDownloaded {
+        didSet { Storage.downloadActive = isBusy || ModelManager.shared.downloadingID != nil }
+    }
+
+    /// فيه تنزيل أو تحويل شغال
+    var isBusy: Bool {
+        switch state { case .downloading, .converting: return true; default: return false }
+    }
     @Published var testing = false
     @Published var lastTest: String?
 
