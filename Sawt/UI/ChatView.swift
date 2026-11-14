@@ -23,6 +23,7 @@ struct ChatView: View {
     @State private var attaching = false
     @ObservedObject private var net = NetworkGate.shared
     @State private var webAsk = false
+    @AppStorage("netWarned") private var netWarned = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -228,18 +229,24 @@ struct ChatView: View {
     /// زر الإنترنت/البحث في الويب: مقفول = التطبيق ما يتصل بالإنترنت أبدًا.
     private var webButton: some View {
         Button {
-            if net.on { net.on = false } else { webAsk = true }
+            // أول مرة يطلع من طافي: نعرض تنبيه الإنترنت مرة وحدة
+            if net.mode == .off, !netWarned { webAsk = true } else { net.cycle() }
         } label: {
-            Image(systemName: "globe")
-                .font(.body.weight(.medium))
-                .foregroundStyle(net.on ? Theme.accent : Color.secondary)
-                .frame(width: 34, height: 44)
-                .background(net.on ? Theme.accent.opacity(0.18) : .clear, in: Circle())
+            ZStack(alignment: .bottomTrailing) {
+                Image(systemName: "globe")
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(net.mode == .off ? Color.secondary : Theme.accent)
+                    .frame(width: 34, height: 44)
+                    .background(net.mode == .on ? Theme.accent.opacity(0.18) : .clear, in: Circle())
+                if net.mode == .auto {
+                    Text("A").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.accent).offset(x: -2, y: -8)
+                }
+            }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(net.on ? "بحث في الويب: شغال" : "بحث في الويب: مقفول")
+        .accessibilityLabel("بحث في الويب: \(net.modeLabel)")
         .alert("بيتم الوصول للإنترنت", isPresented: $webAsk) {
-            Button("متابعة") { net.on = true }
+            Button("متابعة") { netWarned = true; net.cycle() }
             Button("إلغاء", role: .cancel) {}
         } message: {
             Text("سؤالك بيروح لمحرك بحث (DuckDuckGo، أو ويكيبيديا كبديل) عشان يجيب صفحات، والباقي يظل على جوالك. لما تقفل الزر ينقطع التطبيق عن الإنترنت.")
@@ -354,7 +361,7 @@ struct ChatView: View {
         draft = ""
         pending = []
         // التفضية الفعلية (وإنهاء إملاء النظام) تصير داخل ComposerField لما يتغير sendGen
-        store.send(t, attachments: atts, web: net.on) { failed in draft = failed; pending = atts }
+        store.send(t, attachments: atts, web: net.mode == .on, webAuto: net.mode == .auto) { failed in draft = failed; pending = atts }
     }
 
     private func startVoice() {
@@ -420,6 +427,10 @@ struct MessageRow: View, Equatable {
                             Text("تم حفظ الذاكرة").font(.caption2).foregroundStyle(.gray)
                         }
                         .buttonStyle(.plain)
+                    }
+                    if message.autoSearch == true {
+                        Label("بحث في الويب", systemImage: "globe")
+                            .font(.caption).foregroundStyle(.gray)
                     }
                     if let n = message.notice {
                         Label(n, systemImage: "exclamationmark.triangle")
