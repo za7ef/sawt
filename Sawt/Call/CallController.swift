@@ -109,8 +109,20 @@ final class CallController: ObservableObject {
                 guard let self else { return }
                 self.proc.async { self.handleMic(samples) }
             }
+            self.audio.onStateChange = { [weak self] ok in
+                guard let self, self.state != .idle else { return }
+                if ok {
+                    self.proc.async { self.resetProc() }
+                    self.state = .listening
+                } else {
+                    self.cancelReply(recordPartial: true)
+                    self.error = "انقطع الصوت (مكالمة أو تغيّر السماعة). إذا ما رجع، سكّر المكالمة وافتحها."
+                }
+            }
             do {
+                Speaker.shared.stop()
                 try self.audio.start()
+                self.audio.ownedByCall = true
             } catch {
                 self.error = "ما قدرت أشغّل المايك: \(error.localizedDescription)"
                 self.state = .idle
@@ -144,11 +156,13 @@ final class CallController: ObservableObject {
     func end() {
         cancelReply(recordPartial: true)
         audio.onMic = nil
+        audio.onStateChange = nil
         audio.stop()
         meterTimer?.invalidate()
         meterTimer = nil
         proc.sync { resetProc() }
         state = .idle
+        carryUserText = ""
         liveUser = ""
         liveAI = ""
         micLevel = 0
@@ -268,6 +282,7 @@ final class CallController: ObservableObject {
 
     private func commitTurn() {
         inSpeech = false
+        DispatchQueue.main.async { if self.state == .hearing { self.state = .thinking } }
         slog("turn: commit \(utter.count / 16)ms audio, spec=\(specTask != nil)")
         let audioCopy = utter
         utter.removeAll()
@@ -316,6 +331,14 @@ final class CallController: ObservableObject {
     }
 
     private func userFinished(text: String) {
+        // رجع يتكلم قبل ما يوصل النص: نخزنه ونضيفه لكلامه الجاي بدل ما نرد مرتين
+        if state == .hearing {
+            let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { carryUserText += (carryUserText.isEmpty ? "" : " ") + t }
+            slog("turn: carried (user speaking again)")
+            return
+        }
+        guard state == .thinking || state == .listening else { return }
         let full = (carryUserText.isEmpty ? "" : carryUserText + " ") + text
         let trimmed = full.trimmingCharacters(in: .whitespacesAndNewlines)
         carryUserText = ""
@@ -340,6 +363,7 @@ final class CallController: ObservableObject {
     }
 
     private func reply(to text: String) {
+        stopReplyTasks()
         replyID += 1
         let myID = replyID
         state = .thinking
@@ -393,7 +417,7 @@ final class CallController: ObservableObject {
             var pending = ""
             var first = true
             do {
-                let stream = try await LLMService.shared.stream(system: system, history: hist, user: text)
+                let stream = try await LLMService.shared.stream(system: system, history: hist, user: text, maxTokens: 300)
                 for try await chunk in stream {
                     if Task.isCancelled || myID != self.replyID { break }
                     if full.isEmpty {
@@ -424,6 +448,19 @@ final class CallController: ObservableObject {
             await self.speakTask?.value
             self.checkReplyFinished()
         }
+    }
+
+    /// يوقف أي رد شغال بدون ما يعدّل المحادثة (عشان ما يشتغل ردّين مع بعض أبدًا).
+    private func stopReplyTasks() {
+        guard responseTask != nil || speakTask != nil else { return }
+        replyID += 1
+        responseTask?.cancel()
+        speakTask?.cancel()
+        sentenceCont?.finish()
+        responseTask = nil
+        speakTask = nil
+        sentenceCont = nil
+        audio.stopPlayback()
     }
 
     private func checkReplyFinished() {

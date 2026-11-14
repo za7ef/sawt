@@ -6,13 +6,21 @@ import SwiftUI
 final class Dictation: ObservableObject {
     @Published var isRecording = false
     @Published var isBusy = false
+    @Published var error: String?
     private var buffer: [Float] = []
     private let lock = NSLock()
 
     func start() {
-        guard !isRecording, !AudioIO.shared.isRunning else { return }
+        guard !isRecording else { return }
+        if AudioIO.shared.isRunning {
+            if AudioIO.shared.ownedByCall { error = "المايك مشغول بالمكالمة."; return }
+            Speaker.shared.stop()
+        }
         Task {
-            guard await AVAudioApplicationShim.requestRecord() else { return }
+            guard await AVAudioApplicationShim.requestRecord() else {
+                error = "اسمح للتطبيق يستخدم المايك من الإعدادات."
+                return
+            }
             lock.lock(); buffer.removeAll(); lock.unlock()
             AudioIO.shared.onMic = { [weak self] s in
                 guard let self else { return }
@@ -23,6 +31,8 @@ final class Dictation: ObservableObject {
                 isRecording = true
             } catch {
                 AudioIO.shared.onMic = nil
+                self.error = "ما قدرت أشغّل المايك: \(error.localizedDescription)"
+                slog("dictation start failed \(error)")
             }
         }
     }
@@ -56,6 +66,7 @@ final class Speaker {
         let sentences = parts + (rest.trimmingCharacters(in: .whitespaces).isEmpty ? [] : [rest])
         let voice = AppSettings.shared.voice
         let rate = AppSettings.shared.speechRate
+        guard !AudioIO.shared.ownedByCall else { return }
         task = Task {
             if !AudioIO.shared.isRunning {
                 guard (try? AudioIO.shared.start()) != nil else { return }
@@ -76,9 +87,12 @@ final class Speaker {
     }
 
     func stop() {
+        let wasActive = task != nil || startedEngine
         task?.cancel()
         task = nil
-        AudioIO.shared.stopPlayback()
-        if startedEngine { AudioIO.shared.stop(); startedEngine = false }
+        // ما نلمس المحرك إذا المكالمة هي اللي شغلته
+        if wasActive, !AudioIO.shared.ownedByCall { AudioIO.shared.stopPlayback() }
+        if startedEngine, !AudioIO.shared.ownedByCall { AudioIO.shared.stop() }
+        startedEngine = false
     }
 }
