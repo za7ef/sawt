@@ -80,6 +80,38 @@ jobs:
           echo "version=$V" >> $GITHUB_OUTPUT
           grep -E "MARKETING_VERSION|CURRENT_PROJECT_VERSION" project.yml
 
+      - name: ذاكرة Rust المؤقتة
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/sawtctl/target
+          key: rust-${{ runner.os }}-${{ hashFiles('native/sawtctl/Cargo.toml', 'native/sawtctl/src/**') }}
+          restore-keys: rust-${{ runner.os }}-
+
+      - name: بناء أداة التحكم بالجوال (تجريبي)
+        id: rust
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          rustup target add aarch64-apple-ios
+          cd native/sawtctl
+          IPHONEOS_DEPLOYMENT_TARGET=26.0 cargo build --release --target aarch64-apple-ios 2>&1 | tee ../../rust.log | grep -E "^(error|warning: unused)|Finished" || true
+          test -f target/aarch64-apple-ios/release/libsawtctl.a
+          mkdir -p ../lib && cp target/aarch64-apple-ios/release/libsawtctl.a ../lib/
+          ls -la ../lib
+
+      - name: ربط أداة التحكم
+        run: |
+          if [ -f native/lib/libsawtctl.a ]; then
+            python3 -c "import re;p='project.yml';s=open(p).read();s=s.replace('OTHER_LDFLAGS: [\"-lc++\"]','OTHER_LDFLAGS: [\"-lc++\", \"-lsawtctl\"]\n        LIBRARY_SEARCH_PATHS: [\"\$(SRCROOT)/native/lib\"]\n        SWIFT_ACTIVE_COMPILATION_CONDITIONS: [\"\$(inherited)\", \"SAWTCTL\"]');open(p,'w').write(s)"
+            grep -nE "sawtctl|SAWTCTL|native/lib" project.yml
+          else
+            echo "::warning::لم تُبنَ أداة التحكم؛ يُبنى التطبيق بدونها"
+            grep -E "^error" -A8 rust.log | head -150 || true
+          fi
+
       - name: توليد المشروع
         run: xcodegen generate
 
