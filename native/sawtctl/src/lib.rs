@@ -30,11 +30,8 @@ struct Config {
     pairing_file: String,
     #[serde(default = "default_host")]
     host: String,
-    #[serde(default = "default_rsd_port")]
-    rsd_port: u16,
-}
-fn default_rsd_port() -> u16 {
-    58783
+    #[serde(default)]
+    rp_port: u16,
 }
 fn default_host() -> String {
     "10.7.0.1".into()
@@ -93,38 +90,42 @@ async fn connect_lockdown(cfg: &Config, bytes: &[u8], steps: &mut Vec<Json>) -> 
     Ok(Session { adapter, rsd })
 }
 
-/// مسار RemotePairing: RSD الشبكي → tunnelservice → RemoteXPC → تحقق الاقتران → نفق TLS-PSK
-/// (نفس تسلسل tunnel_create_remotexpc في idevice، MIT)
+/// مسار RemotePairing: اتصال RPPairing مباشر بمنفذ _remotepairing._tcp (يكتشفه التطبيق عبر Bonjour)
+/// → تحقق الاقتران → نفق TLS-PSK → RSD (نفس تسلسل tunnel_create_rppairing في idevice، MIT)
 async fn connect_rp(cfg: &Config, bytes: &[u8], steps: &mut Vec<Json>) -> Res<Session> {
-    use idevice::RemoteXpcClient;
-    use idevice::remote_pairing::{RemotePairingClient, RpPairingFile, connect_tls_psk_tunnel_native};
+    use idevice::remote_pairing::{RemotePairingClient, RpPairingFile, RpPairingSocket, connect_tls_psk_tunnel_native};
     let t0 = Instant::now();
     let mut rpf = RpPairingFile::from_bytes(bytes).map_err(|e| format!("ملف الاقتران (RP): {e:?}"))?;
     let ip: std::net::IpAddr = cfg.host.parse().map_err(|e| format!("العنوان: {e:?}"))?;
-    let rsd_addr = std::net::SocketAddr::new(ip, cfg.rsd_port);
-    let st = tokio::time::timeout(Duration::from_secs(8), tokio::net::TcpStream::connect(rsd_addr))
-        .await
-        .map_err(|_| format!("انتهى الوقت على {rsd_addr} (الـVPN شغال؟)"))?
-        .map_err(|e| format!("RSD {rsd_addr}: {e}"))?;
-    let rsd0 = RsdHandshake::new(st).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
-    steps.push(json!({"step": "rsd_untrusted", "ms": t0.elapsed().as_millis(), "services": rsd0.services.len()}));
-    let ts = rsd0
-        .services
-        .get("com.apple.internal.dt.coredevice.untrusted.tunnelservice")
-        .ok_or("خدمة tunnelservice مو موجودة")?;
-    let ts_stream = tokio::net::TcpStream::connect(std::net::SocketAddr::new(ip, ts.port))
-        .await
-        .map_err(|e| format!("tunnelservice: {e}"))?;
-    let mut conn = RemoteXpcClient::new(ts_stream).await.map_err(|e| format!("xpc: {e:?}"))?;
-    conn.do_handshake().await.map_err(|e| format!("xpc handshake: {e:?}"))?;
-    let _ = conn.recv_root().await;
+    // المنافذ: المكتشف أولًا، بعدين 49152 (الافتراضي)، بعدين مسح سريع
+    let mut ports: Vec<u16> = Vec::new();
+    if cfg.rp_port != 0 { ports.push(cfg.rp_port) }
+    if !ports.contains(&49152) { ports.push(49152) }
+    for p in 49153..=49200u16 { if !ports.contains(&p) { ports.push(p) } }
+    let mut tried = Vec::new();
+    let mut stream = None;
+    for p in ports {
+        let addr = std::net::SocketAddr::new(ip, p);
+        let r = tokio::time::timeout(Duration::from_millis(400), tokio::net::TcpStream::connect(addr)).await;
+        match r {
+            Ok(Ok(st)) => { tried.push(json!({"port": p, "r": "open"})); stream = Some((st, p)); break }
+            Ok(Err(e)) => { if tried.len() < 12 { tried.push(json!({"port": p, "r": e.kind().to_string()})) } }
+            Err(_) => { if tried.len() < 12 { tried.push(json!({"port": p, "r": "timeout"})) } }
+        }
+    }
+    let n = tried.len();
+    steps.push(json!({"step": "rp_ports", "tried": tried, "ms": t0.elapsed().as_millis()}));
+    let (st, port) = stream.ok_or_else(|| format!("ما لقيت منفذ RemotePairing مفتوح على {ip} (جرّبت {n}+ منفذ؛ الـVPN شغال؟)"))?;
+    steps.push(json!({"step": "rp_connected", "port": port}));
+    let conn = RpPairingSocket::new(st);
     let mut rpc = RemotePairingClient::new(conn, "Sawt");
     rpc.connect(&mut rpf, async || "000000".to_string())
         .await
         .map_err(|e| format!("تحقق الاقتران (RP): {e:?}"))?;
     steps.push(json!({"step": "rp_verified", "ms": t0.elapsed().as_millis()}));
-    let port = rpc.create_tcp_listener().await.map_err(|e| format!("tcp listener: {e:?}"))?;
-    let tstream = tokio::net::TcpStream::connect(std::net::SocketAddr::new(ip, port))
+    let lport = rpc.create_tcp_listener().await.map_err(|e| format!("tcp listener: {e:?}"))?;
+    steps.push(json!({"step": "rp_listener", "port": lport}));
+    let tstream = tokio::net::TcpStream::connect(std::net::SocketAddr::new(ip, lport))
         .await
         .map_err(|e| format!("TLS tunnel: {e}"))?;
     let tunnel = connect_tls_psk_tunnel_native(tstream, rpc.encryption_key())
