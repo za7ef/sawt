@@ -18,6 +18,22 @@ struct Attachment: Identifiable, Codable, Equatable {
 
     var imageURL: URL { Attachments.dir.appendingPathComponent("\(id.uuidString).jpg") }
     var thumbURL: URL { Attachments.dir.appendingPathComponent("\(id.uuidString)-t.jpg") }
+    var textURL: URL { Attachments.dir.appendingPathComponent("\(id.uuidString).txt") }
+
+    /// نص الملف: محفوظ بملف منفصل (عشان ملف المحادثات يبقى خفيف).
+    var fullText: String { text ?? (try? String(contentsOf: textURL, encoding: .utf8)) ?? "" }
+
+    /// يحفظ النص في ملف ويرجع المرفق بدونه.
+    func storingText() -> Attachment {
+        guard let t = text else { return self }
+        try? Data(t.utf8).write(to: textURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        var c = self; c.text = nil
+        return c
+    }
+
+    func deleteFiles() {
+        for u in [imageURL, thumbURL, textURL] { try? FileManager.default.removeItem(at: u) }
+    }
 }
 
 enum AttachmentError: LocalizedError {
@@ -74,6 +90,10 @@ enum Attachments {
     // MARK: الملفات
 
     static func addFile(_ url: URL) async throws -> Attachment {
+        try await readFile(url).storingText()
+    }
+
+    private static func readFile(_ url: URL) async throws -> Attachment {
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0

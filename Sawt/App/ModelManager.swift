@@ -21,7 +21,7 @@ final class ModelManager: ObservableObject {
     @Published var downloaded: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "downloadedLLMs") ?? [])
     @Published var downloadedSTT: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "downloadedSTT") ?? [])
     /// النموذج اللي ينزل الحين.
-    @Published var downloadingID: String?
+    @Published var downloadingID: String? { didSet { Storage.downloadActive = downloadingID != nil || NamaaVoice.shared.isBusy } }
 
     private var llmTask: Task<Void, Never>?
     private var sttTask: Task<Void, Never>?
@@ -33,6 +33,7 @@ final class ModelManager: ObservableObject {
     /// عند فتح التطبيق: نشغّل بس النماذج اللي نزلت قبل. ما ننزّل شي تلقائيًا.
     /// النماذج تتحمل وحدة وحدة عشان ما ترتفع الذاكرة مرة وحدة. الصوت يتحمل وقت الحاجة بس.
     func loadAll() {
+        Task.detached(priority: .utility) { Storage.excludeModelsFromBackup() }
         Task {
             if llm == .idle, downloaded.contains(AppSettings.shared.llmID) {
                 await activate(AppSettings.shared.llm).value
@@ -48,7 +49,9 @@ final class ModelManager: ObservableObject {
 
     /// يفك النماذج من الذاكرة لما التطبيق يطول بالخلفية (يرجع يحملها لما ترجع).
     func unloadForBackground() async {
-        guard !AudioIO.shared.ownedByCall, !ChatStore.shared.isGenerating else { return }
+        // ما نفك شي وفيه مكالمة أو رد أو تنزيل شغال
+        guard !AudioIO.shared.ownedByCall, !ChatStore.shared.isGenerating, downloadingID == nil,
+              !NamaaVoice.shared.isBusy else { return }
         llmTask?.cancel()
         llmToken += 1
         await LLMService.shared.unload()
@@ -103,6 +106,17 @@ final class ModelManager: ObservableObject {
             }
         }
         return llmTask!
+    }
+
+    /// قبل المكالمة: نرجع للوضع النصي الأخف إذا كان محمّل بوضع النظر.
+    func ensureTextMode() async {
+        guard await LLMService.shared.visionLoaded else { return }
+        llmToken += 1
+        let token = llmToken
+        llm = .preparing
+        slog("call: switching vision → text model")
+        try? await LLMService.shared.load(AppSettings.shared.llm) { _ in }
+        if llmToken == token { llm = .ready }
     }
 
     /// يعيد تحميل النموذج الحالي بوضع النظر (مرة وحدة) إذا يدعم الصور.

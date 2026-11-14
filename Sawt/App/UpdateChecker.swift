@@ -36,6 +36,8 @@ final class UpdateChecker: ObservableObject {
                 return
             }
             let info = try JSONDecoder().decode(Info.self, from: data)
+            // ما نقبل إلا روابط إصدارات المطوّر نفسه
+            guard info.url.hasPrefix("https://github.com/za7ef/") else { return }
             if info.build > AppVersion.build {
                 available = info
             } else if force {
@@ -78,7 +80,7 @@ struct UpdateSheet: View {
                 Button("لاحقًا") { UpdateChecker.shared.snooze() }
                     .buttonStyle(.bordered).frame(maxWidth: .infinity)
                 Button("تحديث") {
-                    if let u = URL(string: info.url) { openURL(u) }
+                    if info.url.hasPrefix("https://github.com/za7ef/"), let u = URL(string: info.url) { openURL(u) }
                     UpdateChecker.shared.available = nil
                 }
                 .buttonStyle(.borderedProminent).frame(maxWidth: .infinity)

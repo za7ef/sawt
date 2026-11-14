@@ -3,6 +3,23 @@ import Foundation
 /// حساب وحذف الملفات المخزنة.
 enum Storage {
     static let fm = FileManager.default
+    /// فيه تنزيل شغال (نموذج أو صوت نماء): لا نلمس الملفات المؤقتة
+    nonisolated(unsafe) static var downloadActive = false
+
+    /// ملفات النماذج تنزل من جديد، فما لها داعي تدخل نسخة iCloud الاحتياطية.
+    static func excludeModelsFromBackup() {
+        var dirs: [URL] = []
+        for d in [FileManager.SearchPathDirectory.documentDirectory, .applicationSupportDirectory, .cachesDirectory] {
+            guard let base = fm.urls(for: d, in: .userDomainMask).first else { continue }
+            for name in ["huggingface", "models", "Namaa", "whisper"] {
+                dirs.append(base.appendingPathComponent(name))
+            }
+        }
+        for var u in dirs where fm.fileExists(atPath: u.path) {
+            var v = URLResourceValues(); v.isExcludedFromBackup = true
+            try? u.setResourceValues(v)
+        }
+    }
     static var caches: URL { fm.urls(for: .cachesDirectory, in: .userDomainMask)[0] }
     static var documents: URL { fm.urls(for: .documentDirectory, in: .userDomainMask)[0] }
     /// مكان نماذج MLX (مكتبة Hugging Face).
@@ -72,14 +89,15 @@ enum Storage {
 
     /// يحذف الكاش: الملفات المؤقتة، كاش الشبكة، والتنزيلات الناقصة. ما يلمس النماذج الكاملة.
     static func clearCache() {
-        for f in (try? fm.contentsOfDirectory(at: fm.temporaryDirectory, includingPropertiesForKeys: nil)) ?? [] {
+        for f in (downloadActive ? [] : (try? fm.contentsOfDirectory(at: fm.temporaryDirectory, includingPropertiesForKeys: nil)) ?? []) {
             try? fm.removeItem(at: f)
         }
         for f in (try? fm.contentsOfDirectory(at: caches, includingPropertiesForKeys: nil)) ?? []
         where f.lastPathComponent != "huggingface" {
             try? fm.removeItem(at: f)
         }
-        for f in partials() { try? fm.removeItem(at: f) }
+        // التنزيلات الناقصة نحذفها بس إذا ما فيه تنزيل شغال الحين
+        if !Storage.downloadActive { for f in partials() { try? fm.removeItem(at: f) } }
         URLCache.shared.removeAllCachedResponses()
         slog("cache cleared")
     }

@@ -73,6 +73,10 @@ final class ChatStore: ObservableObject {
     }
 
     func delete(_ id: UUID) {
+        if let c = conversations.first(where: { $0.id == id }) {
+            let atts = c.messages.flatMap { $0.attachments ?? [] }
+            Task.detached(priority: .utility) { atts.forEach { $0.deleteFiles() } }
+        }
         conversations.removeAll { $0.id == id }
         if currentID == id { currentID = conversations.first?.id }
         save()
@@ -138,7 +142,16 @@ final class ChatStore: ObservableObject {
         var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty || !attachments.isEmpty, !isGenerating else { return }
         if t.isEmpty { t = attachments.contains { $0.kind == .image } ? "وش تشوف في الصورة؟" : "لخّص لي الملف باختصار." }
-        let history = (current?.messages ?? []).suffix(20).map { m -> Chat.Message in
+        let earlier = (current?.messages ?? []).flatMap { $0.attachments ?? [] }
+        // آخر الرسائل بحد أقصى ~6000 حرف (عشان سياق النموذج والذاكرة)
+        var budget = 6000
+        var recent: [Message] = []
+        for m in (current?.messages ?? []).suffix(20).reversed() {
+            budget -= m.text.count
+            if budget < 0, !recent.isEmpty { break }
+            recent.insert(m, at: 0)
+        }
+        let history = recent.map { m -> Chat.Message in
             let names = (m.attachments ?? []).map { "[مرفق: \($0.name)]" }.joined(separator: " ")
             let body = names.isEmpty ? m.text : names + "\n" + m.text
             return m.role == .user ? Chat.Message.user(body) : Chat.Message.assistant(m.text)
@@ -147,6 +160,8 @@ final class ChatStore: ObservableObject {
         if !attachments.isEmpty { userMsg.attachments = attachments }
         append(userMsg)
         let convID = currentID
+        genConv = convID
+        latestPartial = ""
         isGenerating = true
         streamingText = ""
         MemoryStore.shared.cancel()
@@ -158,7 +173,7 @@ final class ChatStore: ObservableObject {
             do {
                 slog.stage("chat:llm")
                 slog("chat: gen start avail=\(RAM.availableMB)MB")
-                let (prompt, images) = await Self.buildPrompt(t, attachments: attachments)
+                let (prompt, images) = await Self.buildPrompt(t, attachments: attachments, earlier: earlier)
                 let stream = try await LLMService.shared.stream(system: system, history: Array(history), user: prompt,
                                                                 maxTokens: 1500, images: images)
                 // تحديث الواجهة بحد أقصى ~30 مرة بالثانية بدل كل كلمة
@@ -166,6 +181,7 @@ final class ChatStore: ObservableObject {
                 for try await chunk in stream {
                     if Task.isCancelled { break }
                     full += chunk
+                    latestPartial = full
                     if Date().timeIntervalSince(lastUI) > 0.033 { streamingText = full; lastUI = Date() }
                 }
                 streamingText = full
@@ -181,7 +197,8 @@ final class ChatStore: ObservableObject {
                 }
             }
             let answer = full.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !answer.isEmpty {
+            // لو انضغط إيقاف، stop() حفظ الجزء بنفسه بالترتيب الصح
+            if !answer.isEmpty, genID == myGen {
                 // الرد يروح لنفس المحادثة حتى لو تنقّلت لغيرها، ومرة وحدة بس (حتى مع الإيقاف)
                 let reply = Message(role: .assistant, text: answer)
                 append(reply, to: convID)
@@ -200,14 +217,21 @@ final class ChatStore: ObservableObject {
 
     /// يجهّز نص الرسالة مع المرفقات: الملفات كنص (مقتطفات إذا طويلة)، والصور للنموذج إذا يشوف،
     /// وإلا وصف آلي من Apple Vision.
-    static func buildPrompt(_ t: String, attachments: [Attachment]) async -> (String, [URL]) {
-        guard !attachments.isEmpty else { return (t, []) }
+    static func buildPrompt(_ t: String, attachments: [Attachment], earlier: [Attachment] = []) async -> (String, [URL]) {
         var parts: [String] = []
+        // ملفات من رسائل سابقة: نجيب المقاطع الأقرب للسؤال الجديد (بحد أصغر)
+        if attachments.isEmpty, let f = earlier.last(where: { $0.kind == .file }) {
+            let (ctx, _) = Attachments.context(for: f.fullText, query: t, budget: 2500)
+            if !ctx.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                parts.append("[مقاطع من الملف المرفق سابقًا: \(f.name)]\n\(ctx)\n[نهاية المقاطع]")
+            }
+        }
+        guard !attachments.isEmpty else { return ((parts + [t]).joined(separator: "\n\n"), []) }
         var images: [URL] = []
         let files = attachments.filter { $0.kind == .file }
         let budget = files.isEmpty ? 0 : max(1500, 5000 / files.count)
         for f in files {
-            let (ctx, cut) = Attachments.context(for: f.text ?? "", query: t, budget: budget)
+            let (ctx, cut) = Attachments.context(for: f.fullText, query: t, budget: budget)
             if ctx.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 parts.append("[ملف مرفق: \(f.name) — ما فيه نص مقروء]")
             } else {
@@ -238,11 +262,25 @@ final class ChatStore: ObservableObject {
     }
 
     private var genID = 0
+    private var genConv: UUID?
 
     /// يوقف التوليد؛ المهمة نفسها تحفظ الجزء اللي انكتب (عشان ما يتكرر الرد).
+    private var latestPartial = ""
+
+    /// يحفظ الملف فورًا (لما يروح التطبيق للخلفية).
+    func flush() {
+        saveTask?.cancel()
+        SafeFile.write(conversations, to: fileURL)
+    }
+
     func stop() {
         genTask?.cancel()
         genTask = nil
+        if isGenerating {
+            let partial = latestPartial.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !partial.isEmpty { append(Message(role: .assistant, text: partial), to: genConv) }
+        }
+        latestPartial = ""
         genID += 1
         streamingText = ""
         isGenerating = false

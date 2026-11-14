@@ -148,7 +148,9 @@ final class MemoryStore: ObservableObject {
             try? await Task.sleep(for: .seconds(2))
             if Task.isCancelled { return }
             // لا نزاحم الدردشة أو المكالمة
-            while ChatStore.shared.isGenerating || CallController.isActive {
+            // ولا نشتغل والتطبيق بالخلفية (iOS ما يسمح بكرت الشاشة هناك)
+            while ChatStore.shared.isGenerating || CallController.isActive
+                    || UIApplication.shared.applicationState != .active {
                 try? await Task.sleep(for: .seconds(2))
                 if Task.isCancelled { return }
             }
