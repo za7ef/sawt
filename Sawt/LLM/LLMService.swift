@@ -40,6 +40,17 @@ actor LLMService {
     private var warmedID: String?
 
     /// تسخين: نولّد كلمة وحدة عشان أول رد في المكالمة يكون أسرع (تجهيز كرت الشاشة والكاش).
+    /// مصنّف سريع: هل الرسالة تحتاج تفكير عميق؟ (رموز قليلة جدًا، بدون جلسة)
+    func classifyNeedsThinking(_ text: String) async -> Bool {
+        let sys = """
+        صنّف رسالة المستخدم: إذا تحتاج تفكير أو استنتاج قبل الجواب (لغز، مسألة، منطق، حساب، تخطيط، مقارنة، شرح سبب، برمجة) اكتب THINK.         إذا سؤال بسيط أو معلومة سريعة أو سوالف اكتب NO. اكتب كلمة وحدة بس.
+        """
+        guard let s = try? stream(system: sys, history: [], user: String(text.prefix(500)), maxTokens: 3) else { return false }
+        var out = ""
+        do { for try await c in s { out += c } } catch { return false }
+        return out.uppercased().contains("THINK")
+    }
+
     func warmup(system: String) async {
         guard let id = loadedID, warmedID != id else { return }
         warmedID = id
