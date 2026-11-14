@@ -1,10 +1,10 @@
 name: بناء IPA
 
+# البناء يدوي أو عند وسم إصدار (v0.4.0 مثلًا) فقط، لتوفير دقائق Actions
 on:
   workflow_dispatch:
   push:
-    branches: [main]
-    paths-ignore: ['README.md']
+    tags: ['v*']
 
 permissions:
   contents: write
@@ -48,22 +48,28 @@ jobs:
           def get(repo, dest, pats):
               p = snapshot_download(repo, allow_patterns=pats)
               shutil.copytree(p, os.path.join(V, dest), dirs_exist_ok=True)
-          get("csukuangfj/vits-piper-ar_JO-SA_miro_V2-high-int8", "piper-miro", ["*.onnx", "tokens.txt"])
+          # ميرو (CC BY-NC-ND) لا يُدمج في التطبيق العام؛ يُنزَّل على الجهاز عند الطلب
           get("csukuangfj/nabra-82m-arabic-int8", "nabra-msa", ["model.int8.onnx", "tokens.txt", "voices.bin"])
           p = snapshot_download("csukuangfj/vits-piper-ar_JO-SA_miro_V2-high-int8", allow_patterns=["espeak-ng-data/*", "espeak-ng-data/**"])
           shutil.copytree(os.path.join(p, "espeak-ng-data"), os.path.join(V, "espeak-ng-data"), dirs_exist_ok=True)
           PY
           curl -fsSL -o $V/silero_vad.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
-          # الصوت السعودي (نبرة) محفوظ كملف في إصدار voices بالمستودع
-          mkdir -p /tmp/nparts
-          if gh release download voices -R ${{ github.repository }} -p 'nabra-saudi.tar.gz.part-*' -D /tmp/nparts; then
-            cat /tmp/nparts/nabra-saudi.tar.gz.part-* > /tmp/nabra-saudi.tar.gz
-            mkdir -p $V/nabra-saudi && tar -xzf /tmp/nabra-saudi.tar.gz -C $V/nabra-saudi
-          else
-            echo "nabra-saudi not available, skipping"
-          fi
+          # «نبرة سعودية» لا يُدمج: مصدر النموذج ورخصته غير مؤكَّدين والمستودع عام
           find $V -name '.cache' -prune -exec rm -rf {} + || true
           du -sh $V/*
+
+      - name: اختبارات المنطق
+        run: |
+          xcrun swiftc -O Sawt/Core/*.swift Tests/main.swift -o /tmp/coretests
+          /tmp/coretests
+
+      - name: ذاكرة الحزم المؤقتة
+        uses: actions/cache@v4
+        with:
+          path: spm
+          # المفتاح يُحسب قبل تعديل رقم البناء، فلا يتغير مع كل تشغيل
+          key: spm-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          restore-keys: spm-${{ runner.os }}-
 
       - name: رقم الإصدار
         id: ver
@@ -76,13 +82,6 @@ jobs:
 
       - name: توليد المشروع
         run: xcodegen generate
-
-      - name: ذاكرة الحزم المؤقتة
-        uses: actions/cache@v4
-        with:
-          path: spm
-          key: spm-${{ runner.os }}-${{ hashFiles('project.yml') }}
-          restore-keys: spm-${{ runner.os }}-
 
       - name: حل الحزم
         run: |
