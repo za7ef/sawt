@@ -663,7 +663,7 @@ final class CallController: ObservableObject {
                     full += chunk
                     pending += chunk
                     self.liveAI = full
-                    let (ready, rest) = TextCleaner.splitSentences(pending, first: first)
+                    let (ready, rest) = TextCleaner.splitSentences(pending, first: first, firstWords: voice.kind == .namaa ? 3 : 7)
                     pending = rest
                     for s in ready { cont.yield(s); first = false }
                 }
