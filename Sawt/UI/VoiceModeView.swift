@@ -36,6 +36,18 @@ struct VoiceModeView: View {
                 controls.padding(.bottom, 24)
             }
         }
+        .overlay(alignment: .top) {
+            if let n = call.notice {
+                Text(n)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(.top, 60).padding(.horizontal, 24)
+                    .onTapGesture { call.notice = nil }
+            }
+        }
         .onAppear {
             call.onTurnsChanged = { turns in Task { @MainActor in ChatStore.shared.syncFromCall(turns) } }
             call.start(seed: store.seedForCall())
