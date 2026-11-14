@@ -709,8 +709,13 @@ final class CallController: ObservableObject {
                 }
                 if !mem.isEmpty { self.lastMemBlock = mem }
                 // بحث في المكالمة: بالقواعد بس (بدون مصنّف عشان السرعة)، إذا الإنترنت مو طافي
-                if frame == nil, NetworkGate.shared.on, SearchHeuristic.verdict(text) == .yes {
-                    let q = WebSearch.query(from: text, previous: self.turns.dropLast().last(where: { $0.role == .user })?.text)
+                let prevU = self.turns.dropLast().last(where: { $0.role == .user })?.text
+                if frame == nil, NetworkGate.shared.on, SearchHeuristic.verdict(text) == .yes || LiveIntent.isWeather(text.lowercased()) {
+                    let q = WebSearch.query(from: text, previous: prevU)
+                    if case let (ctx, srcs)? = await LiveData.context(for: text, previous: prevU) {
+                        slog("call: live data \(srcs.count)")
+                        userText = (srcs.isEmpty ? "[\(ctx)]\n\n" : "<<بيانات مباشرة>>\n\(ctx)\n<<نهاية>>\n\n") + userText
+                    } else {
                     do {
                         let pages = try await WebSearch.search(q, maxPages: 3)
                         let (ctx, srcs) = WebSearch.context(pages, query: q, budget: 2500)
@@ -720,6 +725,7 @@ final class CallController: ObservableObject {
                         }
                     } catch {
                         slog("call: web search failed \(error)")
+                    }
                     }
                     if Task.isCancelled || myID != self.replyID { return }
                 }
