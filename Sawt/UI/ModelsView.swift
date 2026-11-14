@@ -162,6 +162,7 @@ struct ModelsView: View {
             }
             .font(.caption).foregroundStyle(.secondary)
             .environment(\.layoutDirection, .rightToLeft)
+            if m.ramGB > 0 { fitChips(m) }
             Text("العربي: \(m.arabic)" + (tooBig ? " • قد يكون ثقيل على جهازك" : ""))
                 .font(.caption).foregroundStyle(tooBig ? .orange : .secondary)
 
@@ -215,5 +216,38 @@ struct ModelsView: View {
             let list = await Task.detached(priority: .utility) { Storage.modelFolders(downloaded: down, downloadedSTT: downS) }.value
             files = list
         }
+    }
+
+    /// أي آيفونات تشغّله: للكتابة وللمكالمة، وهل يناسب هالجوال.
+    @ViewBuilder private func fitChips(_ m: LLMOption) -> some View {
+        let text = DeviceFit.minTier(needGB: DeviceFit.textNeed(m))
+        let call = DeviceFit.minTier(needGB: DeviceFit.callNeed(m))
+        let fit = DeviceFit.fitHere(m)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                chip("كتابة: " + (text?.label ?? "ثقيل على الآيفون"), icon: "text.bubble")
+                chip("مكالمة: " + (call?.label ?? "ثقيل على الآيفون"), icon: "phone")
+            }
+            switch fit {
+            case .both:
+                Label("يناسب جوالك", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
+            case .textOnly:
+                Label("على جوالك يناسب الكتابة، المكالمة ممكن تقفل", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            case .none:
+                Label("ثقيل على جوالك", systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+            case .unknown:
+                EmptyView()
+            }
+        }
+        .font(.caption2.weight(.semibold))
+    }
+
+    private func chip(_ text: String, icon: String) -> some View {
+        Label(text, systemImage: icon)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .foregroundStyle(.secondary)
+            .glassEffect(.regular, in: .capsule)
     }
 }
