@@ -143,6 +143,8 @@ final class ModelManager: ObservableObject {
     /// قبل المكالمة: نرجع للوضع النصي الأخف إذا كان محمّل بوضع النظر.
     func ensureTextMode() async {
         guard await LLMService.shared.visionLoaded else { return }
+        // إذا الذاكرة تكفي نخليه بوضع النظر: يرد على النص عادي، ونتجنب إعادة تحميل ~3ث كل مرة تشغّل الكاميرا
+        if RAM.availableMB > 3000 { slog("call: keeping vision model (avail=\(RAM.availableMB)MB)"); return }
         llmToken += 1
         let token = llmToken
         llm = .preparing
