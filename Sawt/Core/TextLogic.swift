@@ -254,8 +254,18 @@ enum ThinkHeuristic {
                        "شيء إذا", "شيء اذا", "شي اذا", "شي إذا", "خمن", "خمّن", "منطق", "استنتج",
                        "why", "explain", "compare", "plan", "step by step", "prove", "calculate", "debug", "analy",
                        "riddle", "puzzle", "guess", "logic"]
-    static let smallTalk = ["كيفك", "كيف حالك", "شلونك", "وش اخبارك", "وش أخبارك", "ايش اخبارك", "وش تسوي", "وينك",
-                            "how are you", "what's up", "whats up"]
+    static let smallTalk = ["كيفك", "كيف حالك", "كيف الحال", "كيف الحال", "شلونك", "شخبارك", "وش اخبارك", "وش أخبارك", "ايش اخبارك",
+                            "وش تسوي", "وينك", "السلام عليكم", "سلام عليكم", "وعليكم السلام", "مرحبا", "مرحباً", "هلا", "أهلا", "اهلا",
+                            "صباح الخير", "صباح النور", "مساء الخير", "مساء النور", "شكرا", "شكراً", "يعطيك العافية", "تسلم",
+                            "مشكور", "الله يعافيك", "تصبح على خير", "ok", "تمام", "طيب",
+                            "how are you", "what's up", "whats up", "hello", "hi ", "thanks", "thank you", "good morning", "good night"]
+
+    /// رسالة مجاملة/تحية بس (قصيرة وكلها مجاملة)
+    static func isSmallTalk(_ text: String) -> Bool {
+        let t = " " + text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) + " "
+        let words = text.split(separator: " ").count
+        return words <= 6 && smallTalk.contains(where: { t.contains($0) })
+    }
 
     enum Verdict { case yes, no, unsure }
 
@@ -299,6 +309,7 @@ enum SearchHeuristic {
     static func verdict(_ text: String) -> Verdict {
         let t = " " + text.lowercased() + " "
         if cues.contains(where: { t.contains($0) }) { return .yes }
+        if ThinkHeuristic.isSmallTalk(text) { return .no }
         let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let words = s.split(separator: " ").count
         if words <= 3 || ThinkHeuristic.smallTalk.contains(where: { t.contains($0) }) { return .no }
@@ -373,5 +384,43 @@ enum Refusal {
     static func detect(_ text: String) -> Bool {
         let t = text.lowercased()
         return phrases.contains { t.contains($0) }
+    }
+}
+
+
+/// صلة نتائج البحث بالسؤال: كلمات مميزة مشتركة (بدون الكلمات العامة)
+enum Relevance {
+    static let generic: Set<String> = ["الموسم", "موسم", "الجزء", "جزء", "موعد", "متى", "الحلقة", "حلقة", "عرض", "تاريخ", "نزول", "ينزل",
+        "الثالث", "الثاني", "الأول", "الرابع", "جديد", "الجديد", "اخبار", "أخبار", "آخر", "اخر", "كم", "وش", "ايش", "كيف", "هل", "عن",
+        "في", "من", "على", "إلى", "الى", "مع", "هو", "هي", "ما", "متي", "season", "release", "date", "episode", "when", "the", "of",
+        "and", "for", "what", "how", "new", "latest", "news", "2024", "2025", "2026", "2027", "ابحث", "بحث", "قوقل", "الويب", "عطني", "ابي"]
+
+    static func norm(_ w: String) -> String {
+        var x = w.lowercased()
+        for (a, b) in [("أ", "ا"), ("إ", "ا"), ("آ", "ا"), ("ة", "ه"), ("ى", "ي"), ("ـ", "")] { x = x.replacingOccurrences(of: a, with: b) }
+        x = x.trimmingCharacters(in: CharacterSet.punctuationCharacters.union(.symbols))
+        return x
+    }
+
+    static func keywords(_ q: String) -> [String] {
+        let g = Set(generic.map(norm))
+        var out: [String] = []
+        for w in q.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "،" || $0 == "؟" || $0 == "?" || $0 == "," }) {
+            var n = norm(String(w))
+            if n.hasPrefix("ال"), n.count > 4 { n = String(n.dropFirst(2)) }
+            if n.count >= 3, !g.contains(n), !g.contains("ال" + n), !out.contains(n) { out.append(n) }
+        }
+        return out
+    }
+
+    /// صفحة لها صلة: كلمة مميزة في العنوان، أو كلمتين في النص (أو الكل إذا الكلمات أقل)
+    static func isRelevant(title: String, text: String, query: String) -> Bool {
+        let kw = keywords(query)
+        if kw.isEmpty { return true }
+        let tt = norm(title)
+        if kw.contains(where: { tt.contains($0) }) { return true }
+        let body = norm(String(text.prefix(4000)))
+        let hits = kw.filter { body.contains($0) }.count
+        return hits >= min(2, kw.count)
     }
 }
