@@ -550,10 +550,10 @@ final class CallController: ObservableObject {
     // MARK: الرد
 
     private func history() -> [Chat.Message] {
-        // آخر الأدوار بحد ~4000 حرف (ذاكرة وسرعة)
+        // آخر الأدوار بحد ~6000 حرف (نفس الدردشة)
         var msgs: [Chat.Message] = []
-        var budget = 4000
-        for t in turns.dropLast().suffix(16).reversed() {
+        var budget = 6000
+        for t in turns.dropLast().suffix(20).reversed() {
             budget -= t.text.count
             if budget < 0, !msgs.isEmpty { break }
             msgs.insert(t.role == .user ? .user(t.text) : .assistant(t.text), at: 0)
@@ -586,7 +586,7 @@ final class CallController: ObservableObject {
         let hist = history()
         // التعليمات ثابتة (الجلسة تنعاد استخدامها)، والذاكرة المناسبة تنحط مع كل دور
         let system = settings.systemPrompt(chat: false, query: "", memory: false)
-        let mem = MemoryStore.promptBlock(for: text, limit: 4)
+        let mem = MemoryStore.promptBlock(for: text)
         // الكاميرا شغالة: نلتقط إطار واحد مصغّر مع نهاية كلامك
         // الصورة تاخذ ذاكرة كثير وقت الترميز: نتخطاها إذا الذاكرة قليلة
         var picked: URL? = nil
@@ -685,7 +685,11 @@ final class CallController: ObservableObject {
                 try await self.makeRoomForLLM()
                 // نضيف الذاكرة بس إذا تغيّرت، أو إذا الجلسة جديدة (بعد مقاطعة أو خطأ أو جلسة طويلة)
                 // دور فيه صورة: جلسة جديدة بالنص بس (بدون كاش قديم ولا صور سابقة)، وما نحتفظ فيها بعدين
-                if frame != nil { await LLMService.shared.resetCallSession() }
+                // تفكير تلقائي في المكالمة: بس للأسئلة الصعبة، بميزانية قصيرة، ومع كلمة انتظار "دقيقة أفكر"
+                let think = frame == nil && ChatStore.shared.thinkMode != .off && !ThermalWatch.isHot
+                    && (ChatStore.shared.thinkMode == .on || ThinkHeuristic.shouldThink(text))
+                if think { slog("call: auto think") }
+                if frame != nil || think { await LLMService.shared.resetCallSession() }
                 if !(await LLMService.shared.hasCallSession) { self.lastMemBlock = "" }
                 var userText = (mem.isEmpty || mem == self.lastMemBlock) ? text : "[\(mem)]\n\n\(text)"
                 if frame != nil {
@@ -693,8 +697,9 @@ final class CallController: ObservableObject {
                 }
                 if !mem.isEmpty { self.lastMemBlock = mem }
                 slog.stage("call:llm")
-                let stream = try await LLMService.shared.stream(system: system, history: hist, user: userText, maxTokens: 300, reuse: frame == nil,
-                                                                images: frame.map { [$0] } ?? [])
+                let stream = try await LLMService.shared.stream(system: system, history: hist, user: userText, maxTokens: think ? 900 : 450,
+                                                                reuse: frame == nil && !think,
+                                                                images: frame.map { [$0] } ?? [], think: think)
                 for try await chunk in stream {
                     if Task.isCancelled || myID != self.replyID { break }
                     if full.isEmpty {
