@@ -15,6 +15,7 @@ struct SettingsView: View {
     @AppStorage("namaaSteps") private var namaaSteps = 7
     @AppStorage("llmDevice") private var llmDevice = "gpu"
     @State private var cpuWarn = false
+    @State private var cpuTest: String?
     @ObservedObject private var memory = MemoryStore.shared
     @ObservedObject private var voiceDL = VoiceDownloads.shared
     @State private var namaaWarn = false
@@ -97,11 +98,22 @@ struct SettingsView: View {
                     .onChange(of: llmDevice) { _, v in
                         slog("settings: llmDevice=\(v)")
                         if v == "cpu" { cpuWarn = true }
+                        if v != "gpu" {
+                            cpuTest = "يختبر المعالج…"
+                            Task {
+                                let r = await LLMService.shared.cpuSelfTest()
+                                cpuTest = r.ok ? "المعالج يشتغل (\(r.info))" : "المعالج ما اشتغل: \(r.info)"
+                                if !r.ok && r.info != "النموذج مو محمّل" { llmDevice = "gpu" }
+                            }
+                        }
                     }
                 } header: {
                     Text("تشغيل النموذج")
                 } footer: {
-                    Text("المعالج: يشتغل في الخلفية لكن بطيء. كرت الشاشة: سريع وسلس لكن ما يشتغل في الخلفية. تلقائي: كرت الشاشة والتطبيق قدّامك، والمعالج لما تقفل الشاشة أو تطلع من التطبيق.")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("المعالج: يشتغل في الخلفية لكن بطيء. كرت الشاشة: سريع وسلس لكن ما يشتغل في الخلفية. تلقائي: كرت الشاشة والتطبيق قدّامك، والمعالج لما تقفل الشاشة أو تطلع من التطبيق.")
+                        if let cpuTest { Text(cpuTest).foregroundStyle(cpuTest.contains("ما اشتغل") ? .red : .secondary) }
+                    }
                 }
 
                 Section {

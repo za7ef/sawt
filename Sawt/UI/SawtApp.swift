@@ -24,6 +24,11 @@ struct SawtApp: App {
             slog("bg: continued-processing gpu=\(BGTaskScheduler.supportedResources.contains(.gpu)) llmDevice=\(ComputeMode.current)")
         }
         let l = Log.shared
+        // لو طاح في التوليد والنموذج على المعالج: نرجّع كرت الشاشة عشان ما يتكرر الكراش
+        if l.previousRunCrashed, l.previousStage.contains("llm"), (UserDefaults.standard.string(forKey: "llmDevice") ?? "gpu") != "gpu" {
+            UserDefaults.standard.set("gpu", forKey: "llmDevice")
+            slog("launch: llm crashed on cpu/auto → reset llmDevice=gpu")
+        }
         slog("launch \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "") prevCrashed=\(l.previousRunCrashed) at=\(l.previousStage)")
     }
 
