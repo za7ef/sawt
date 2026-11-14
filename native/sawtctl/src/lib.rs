@@ -60,10 +60,17 @@ async fn connect(cfg: &Config, steps: &mut Vec<Json>) -> Res<Session> {
     let bytes = std::fs::read(&cfg.pairing_file).map_err(|e| format!("ملف الاقتران: {e}"))?;
     let kind = pairing_kind(&bytes);
     steps.push(json!({"step": "pairing_kind", "kind": kind}));
-    match kind {
-        "rppairing" => connect_rp(cfg, &bytes, steps).await,
-        "lockdown" | "unknown" => connect_lockdown(cfg, &bytes, steps).await,
-        _ => Err("ملف الاقتران مو plist صالح".into()),
+    if kind == "rppairing" {
+        return connect_rp(cfg, &bytes, steps).await;
+    }
+    match connect_lockdown(cfg, &bytes, steps).await {
+        Ok(s) => Ok(s),
+        // إذا فشل تحليل lockdown نجرب RemotePairing
+        Err(e) if e.contains("ملف الاقتران (lockdown)") => {
+            steps.push(json!({"step": "lockdown_parse_failed", "error": e}));
+            connect_rp(cfg, &bytes, steps).await.map_err(|e2| format!("{e} | RP: {e2}"))
+        }
+        Err(e) => Err(e),
     }
 }
 
