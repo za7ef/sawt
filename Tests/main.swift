@@ -106,5 +106,13 @@ check(MemoryLine.parse("x ٤") == .delete(index: 4), "MemoryLine: حذف")
 check(MemoryLine.parse("لا شيء") == nil, "MemoryLine: لا شيء")
 check(MemoryLine.hasRememberCue("تذكر إني ما أحب البصل"), "MemoryLine: تذكر")
 
+// مجاملات وصلة المصادر
+check(SearchHeuristic.verdict("كيف حالك") == .no, "Search: كيف حالك مو بحث")
+check(SearchHeuristic.verdict("السلام عليكم") == .no, "Search: السلام مو بحث")
+check(SearchHeuristic.verdict("تمام وش سعر الذهب اليوم") == .yes, "Search: سعر مع تمام بحث")
+check(ThinkHeuristic.isSmallTalk("هلا والله كيف الحال"), "SmallTalk: تحية")
+check(!Relevance.isRelevant(title: "الرجل العنكبوت: خارج عالم العنكبوت - ويكيبيديا", text: "فيلم أبطال خارقين من مارفل الموسم", query: "سولو ليفلينغ الموسم الثالث موعد"), "Relevance: يحذف غير المرتبط")
+check(Relevance.isRelevant(title: "سولو ليفلينغ الموسم الثالث | موعد العرض", text: "", query: "سولو ليفلينغ الموسم الثالث موعد"), "Relevance: يبقي المرتبط")
+
 print(failures == 0 ? "كل الاختبارات نجحت" : "فشل \(failures)")
 exit(failures == 0 ? 0 : 1)
