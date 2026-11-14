@@ -158,6 +158,9 @@ enum TextCleaner {
             } else if soft.contains(ch), words >= ((first && out.isEmpty) ? 3 : 8) {
                 // أول جملة نقطعها بدري عشان يبدأ يتكلم بسرعة
                 out.append(current); current = ""
+            } else if ch == " ", first, out.isEmpty, words >= 7 {
+                // ما فيه علامة ترقيم بعد: نبدأ الكلام بأول سبع كلمات بدل ما نستنى
+                out.append(current); current = ""
             }
         }
         return (out.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }, current)
