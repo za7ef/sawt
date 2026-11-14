@@ -21,7 +21,7 @@ final class VoiceDownloads: ObservableObject {
     enum State: Equatable { case idle, downloading(Double), failed(String) }
     @Published var state: [String: State] = [:]
 
-    static var root: URL {
+    nonisolated static var root: URL {
         let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Voices", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
