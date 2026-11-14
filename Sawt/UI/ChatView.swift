@@ -84,6 +84,7 @@ struct ChatView: View {
         case .ready: EmptyView()
         case .loading(let p):
             ProgressView(value: p).progressViewStyle(.circular).controlSize(.mini)
+        case .preparing: ProgressView().controlSize(.mini)
         case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
         case .idle: Image(systemName: "arrow.down.circle").foregroundStyle(.secondary)
         }
@@ -176,7 +177,7 @@ struct ChatView: View {
             }
             .buttonStyle(.glassProminent)
             .buttonBorderShape(.circle)
-            .disabled(!models.llm.isReady)
+            .disabled(store.isGenerating)
             .transition(.scale.combined(with: .opacity))
         } else {
             Button(action: startVoice) {
@@ -190,9 +191,14 @@ struct ChatView: View {
     }
 
     private func send() {
+        guard models.llm.isReady else {
+            store.error = models.llm.isBusy ? "النموذج للحين يتجهز، لحظات." : "اختر نموذج ونزّله من شاشة النماذج أول."
+            if !models.llm.isBusy { showModels = true }
+            return
+        }
         let t = draft
         draft = ""
-        store.send(t)
+        store.send(t) { failed in draft = failed }
     }
 
     private func startVoice() {
@@ -232,8 +238,8 @@ struct MessageRow: View {
     var body: some View {
         HStack(alignment: .top) {
             if message.role == .user {
-                Spacer(minLength: 50)
-                VStack(alignment: .trailing, spacing: 4) {
+                // في الواجهة العربية بداية السطر يمين، فرسائلك تطلع يمين مثل ChatGPT
+                VStack(alignment: .leading, spacing: 4) {
                     Text(message.text)
                         .padding(.horizontal, 14).padding(.vertical, 10)
                         .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -241,6 +247,7 @@ struct MessageRow: View {
                         Image(systemName: "waveform").font(.caption2).foregroundStyle(.tertiary)
                     }
                 }
+                Spacer(minLength: 50)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     if streaming && message.text.isEmpty {

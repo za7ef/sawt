@@ -37,7 +37,7 @@ struct ModelsView: View {
                     }
                 }
 
-                Section("السمع (تحويل الكلام لنص)") {
+                Section {
                     ForEach(Catalog.stts) { s in
                         Button {
                             settings.sttID = s.id
@@ -50,8 +50,23 @@ struct ModelsView: View {
                                 }
                                 Spacer()
                                 if settings.sttID == s.id { phaseView(models.stt) }
+                                else if models.downloadedSTT.contains(s.id) {
+                                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(.secondary)
+                                }
                             }
                         }
+                    }
+                } header: {
+                    Text("السمع (تحويل الكلام لنص)")
+                } footer: {
+                    if let p = models.stt.progress {
+                        Text("ينزل… \(Int(p * 100))٪")
+                    } else if models.stt == .preparing {
+                        Text("يجهّز نموذج السمع. أول مرة ممكن ياخذ دقيقة أو دقيقتين.")
+                    } else if case .failed(let e) = models.stt {
+                        Text(e).foregroundStyle(.red)
+                    } else {
+                        Text("اضغط على النموذج عشان ينزل ويشتغل.")
                     }
                 }
             }
@@ -106,12 +121,17 @@ struct ModelsView: View {
                 ProgressView(value: p) {
                     Text("ينزل… \(Int(p * 100))٪").font(.caption)
                 }
+            } else if active && models.llm == .preparing {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("يجهّز النموذج في الذاكرة…").font(.caption).foregroundStyle(.secondary)
+                }
             }
 
             HStack(spacing: 10) {
                 if downloading {
                     Button("إيقاف مؤقت") { models.pauseDownload() }.buttonStyle(.glass)
-                } else if !(active && models.llm.isReady) {
+                } else if !(active && (models.llm.isReady || models.llm == .preparing)) {
                     Button(isDown ? "تشغيل" : "تنزيل وتشغيل") { models.activate(m) }
                         .buttonStyle(.glassProminent)
                 }
@@ -134,6 +154,8 @@ struct ModelsView: View {
         switch p {
         case .ready: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
         case .loading(let v): ProgressView(value: v).frame(width: 60)
+        case .preparing:
+            HStack(spacing: 6) { ProgressView().controlSize(.small); Text("يجهّز…").font(.caption) }
         case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
         case .idle: EmptyView()
         }
