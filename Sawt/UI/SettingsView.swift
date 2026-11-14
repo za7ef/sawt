@@ -13,6 +13,8 @@ struct SettingsView: View {
     @ObservedObject private var namaa = NamaaVoice.shared
     /// خطوات توليد نماء: أقل = أسرع وجودة أقل. "جرّب" يستخدم نفس الاختيار عشان تقارن بأذنك
     @AppStorage("namaaSteps") private var namaaSteps = 7
+    @AppStorage("llmDevice") private var llmDevice = "gpu"
+    @State private var cpuWarn = false
     @ObservedObject private var memory = MemoryStore.shared
     @ObservedObject private var voiceDL = VoiceDownloads.shared
     @State private var namaaWarn = false
@@ -83,6 +85,23 @@ struct SettingsView: View {
                     Text("متى يرد عليك")
                 } footer: {
                     Text("سريع: يرد أول ما توقف. صبور: يعطيك وقت تفكر بين الكلام. يتطبق من المكالمة الجاية.")
+                }
+
+                Section {
+                    Picker("تشغيل النموذج", selection: $llmDevice) {
+                        Text("كرت الشاشة").tag("gpu")
+                        Text("المعالج").tag("cpu")
+                        Text("تلقائي").tag("auto")
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: llmDevice) { _, v in
+                        slog("settings: llmDevice=\(v)")
+                        if v == "cpu" { cpuWarn = true }
+                    }
+                } header: {
+                    Text("تشغيل النموذج")
+                } footer: {
+                    Text("المعالج: يشتغل في الخلفية لكن بطيء. كرت الشاشة: سريع وسلس لكن ما يشتغل في الخلفية. تلقائي: كرت الشاشة والتطبيق قدّامك، والمعالج لما تقفل الشاشة أو تطلع من التطبيق.")
                 }
 
                 Section {
@@ -191,6 +210,11 @@ struct SettingsView: View {
             } message: { Text("بتحتاج تنزلها من جديد.") }
             .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) {
                 if let u = shareURL { ActivityView(items: [u]) }
+            }
+            .alert("المعالج", isPresented: $cpuWarn) {
+                Button("تمام", role: .cancel) {}
+            } message: {
+                Text("المعالج: يشتغل في الخلفية لكن بطيء. كرت الشاشة: سريع وسلس لكن ما يشتغل في الخلفية.")
             }
             .alert("نماء ثقيل على المكالمات", isPresented: $namaaWarn) {
                 Button("تمام") {}

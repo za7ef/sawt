@@ -1,4 +1,6 @@
 import SwiftUI
+import BackgroundTasks
+import UIKit
 
 @main
 struct SawtApp: App {
@@ -13,6 +15,14 @@ struct SawtApp: App {
     init() {
         CrashCollector.shared.start()
         PickerFix.install()
+        // نعرف إذا التطبيق قدّام (كرت الشاشة مسموح) أو راح للخلفية
+        let nc = NotificationCenter.default
+        nc.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: nil) { _ in AppPhase.active = false }
+        nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { _ in AppPhase.active = false }
+        nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { _ in AppPhase.active = true }
+        if #available(iOS 26.0, *) {
+            slog("bg: continued-processing gpu=\(BGTaskScheduler.supportedResources.contains(.gpu)) llmDevice=\(ComputeMode.current)")
+        }
         let l = Log.shared
         slog("launch \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "") prevCrashed=\(l.previousRunCrashed) at=\(l.previousStage)")
     }
