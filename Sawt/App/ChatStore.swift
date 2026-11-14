@@ -15,6 +15,8 @@ struct Message: Identifiable, Codable, Equatable {
     /// تفكير النموذج (تفكير عميق) — للعرض بس، ما يرجع للسجل أبدًا
     var thinking: String?
     var thinkSeconds: Double?
+    /// التفكير اشتغل تلقائيًا (وضع تلقائي)
+    var autoThink: Bool?
     /// مصادر بحث الويب
     var sources: [WebSource]?
     /// ملاحظة رمادية فوق الرد (مثلًا: البحث فشل). ما تدخل السجل.
@@ -26,8 +28,20 @@ struct Conversation: Identifiable, Codable, Equatable {
     var title: String = "محادثة جديدة"
     var messages: [Message] = []
     var updated = Date()
-    /// تفكير عميق مفعّل لهالمحادثة
+    /// تفكير عميق مفعّل لهالمحادثة (قديم، يتحول لـ thinkMode)
     var deepThink: Bool?
+    /// off / auto / on — الافتراضي auto
+    var thinkMode: String?
+}
+
+enum ThinkMode: String, CaseIterable {
+    case off, auto, on
+    var label: String {
+        switch self { case .off: "طافي"; case .auto: "تلقائي"; case .on: "دايم" }
+    }
+    var next: ThinkMode {
+        switch self { case .off: .auto; case .auto: .on; case .on: .off }
+    }
 }
 
 /// النص اللي ينكتب الحين: كائن صغير منفصل عشان تحديثاته ما تعيد رسم قائمة الرسائل كلها.
@@ -170,11 +184,18 @@ final class ChatStore: ObservableObject {
 
     // MARK: الدردشة الكتابية
 
-    var deepThink: Bool { current?.deepThink ?? false }
+    var thinkMode: ThinkMode {
+        if let m = current?.thinkMode, let v = ThinkMode(rawValue: m) { return v }
+        if current?.deepThink == true { return .on }
+        return .auto
+    }
+    var deepThink: Bool { thinkMode == .on }
 
-    func setDeepThink(_ on: Bool) {
+    func cycleThinkMode() {
+        let next = thinkMode.next
         let i = ensureCurrent()
-        conversations[i].deepThink = on
+        conversations[i].thinkMode = next.rawValue
+        conversations[i].deepThink = nil
         save()
     }
 
@@ -192,7 +213,9 @@ final class ChatStore: ObservableObject {
         if t.isEmpty { t = attachments.contains { $0.kind == .image } ? "وش تشوف في الصورة؟" : "لخّص لي الملف باختصار." }
         let earlier = (current?.messages ?? []).flatMap { $0.attachments ?? [] }
         // تفكير عميق يطفي إذا الجوال حار (يطول ويسخّن أكثر)
-        let think = deepThink && !ThermalWatch.isHot
+        let mode = thinkMode
+        let auto = mode == .auto && ThinkHeuristic.shouldThink(t, hasAttachment: !attachments.isEmpty)
+        let think = (mode == .on || auto) && !ThermalWatch.isHot
         // آخر الرسائل بحد أقصى ~6000 حرف (عشان سياق النموذج والذاكرة). التفكير ما يدخل السجل.
         var budget = 6000
         var recent: [Message] = []
@@ -308,6 +331,7 @@ final class ChatStore: ObservableObject {
                 if !th.isEmpty {
                     reply.thinking = th.count > 4000 ? String(th.prefix(4000)) + "…" : th
                     reply.thinkSeconds = (answerAt ?? Date()).timeIntervalSince(genStart)
+                    if auto { reply.autoThink = true }
                 }
                 if !sources.isEmpty { reply.sources = sources }
                 reply.notice = notice
