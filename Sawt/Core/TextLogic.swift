@@ -217,3 +217,31 @@ enum MemoryLine: Equatable {
         return ["تذكر", "تذكّر", "احفظ", "لا تنسى", "لا تنس", "remember"].contains { t.contains($0) }
     }
 }
+
+/// كلمة انتظار قصيرة تنقال لو الرد تأخر، حسب نوع السؤال (بدون نداء إضافي للنموذج).
+enum FillerPicker {
+    static let casual = ["طيب", "ممم", "اها"]
+    static let think = ["دقيقة أفكر", "خلني أشوف", "دقيقة أشيك"]
+    /// ترتيب التجهيز: وحدة من كل نوع أول، بعدين الباقي
+    static let renderOrder = ["طيب", "دقيقة أفكر", "ممم", "خلني أشوف", "اها", "دقيقة أشيك"]
+
+    static let thinkCues = ["كيف", "ليش", "ليه", "لماذا", "اشرح", "وضح", "وضّح", "فسر", "فسّر", "احسب",
+                            "كم ", "ابحث", "دور", "قارن", "الفرق", "وش رأيك", "ايش رأيك", "why", "how", "explain",
+                            "calculate", "compare", "search"]
+
+    static func needsThought(_ text: String) -> Bool {
+        let t = " " + text.lowercased() + " "
+        if text.split(separator: " ").count >= 12 { return true }
+        if text.contains(where: { $0.isNumber }) { return true }
+        return thinkCues.contains { t.contains($0) }
+    }
+
+    /// يختار من القائمة المناسبة، بدون تكرار آخر واحدة، ومن الجاهز بس إذا انعطت قائمة الجاهز
+    static func pick(for text: String, last: String?, available: Set<String>? = nil, random: (Int) -> Int = { Int.random(in: 0 ..< max($0, 1)) }) -> String? {
+        var pool = needsThought(text) ? think : casual
+        if let available { pool = pool.filter { available.contains($0) } }
+        if pool.count > 1, let last { pool.removeAll { $0 == last } }
+        guard !pool.isEmpty else { return nil }
+        return pool[random(pool.count)]
+    }
+}
