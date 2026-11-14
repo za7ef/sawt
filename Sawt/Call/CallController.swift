@@ -44,6 +44,8 @@ final class CallController: ObservableObject {
     private var tick = 0
     /// فكّينا نموذج السمع مؤقتًا عشان الذاكرة وقت الرد
     private var sttUnloaded = false
+    private var userTalking = false
+    private var fragmentTimer: Task<Void, Never>?
     private var sttReload: Task<Void, Never>?
 
     private let audio = AudioIO.shared
@@ -105,6 +107,8 @@ final class CallController: ObservableObject {
             await ModelManager.shared.prepareVoice()
             slog.stage("call:listening")
             let avail = RAM.availableMB
+            let persona = AppSettings.shared.persona
+            Task { await LLMService.shared.warmup(system: persona) }
             slog("call: after voice load footprint=\(RAM.footprintMB)MB avail=\(avail)MB")
             if avail < 1500, !AppSettings.shared.llmID.lowercased().contains("2b") {
                 self.error = "الذاكرة قليلة لهالنموذج في المكالمة (باقي \(avail)MB). إذا انقفل التطبيق، جرّب Qwen3.5 2B."
@@ -113,7 +117,8 @@ final class CallController: ObservableObject {
             self.proc.sync {
                 self.vad = VoiceDetector()
                 self.resetProc()
-                self.patienceMs = 450 + patience * 600
+                // مهلة أطول: الافتراضي حوالي ثانية قبل ما نعتبره خلص
+                self.patienceMs = 650 + patience * 700
             }
             self.audio.onMic = { [weak self] samples in
                 guard let self else { return }
@@ -173,6 +178,9 @@ final class CallController: ObservableObject {
         proc.sync { resetProc() }
         state = .idle
         slog.stage("idle")
+        fragmentTimer?.cancel()
+        fragmentTimer = nil
+        userTalking = false
         carryUserText = ""
         liveUser = ""
         liveAI = ""
@@ -262,9 +270,11 @@ final class CallController: ObservableObject {
                 if TurnHeuristics.soundsUnfinished(t) { endMs *= 1.8 }
             }
             let tooLong = utter.count > 16_000 * 25
-            if silenceMs >= endMs || tooLong {
+            // لازم كلام كافي (حوالي ثلث ثانية) قبل ما ننهي الدور، عشان كلمة أو نفس ما يطلق رد
+            let enoughSpeech = voicedWindows >= 10
+            if tooLong || (silenceMs >= endMs && enoughSpeech) {
                 commitTurn()
-            } else if silenceMs >= 1_500, voicedWindows < 6 {
+            } else if silenceMs >= 1_800, !enoughSpeech {
                 // صوت قصير جدًا (كحة أو طقة): نتجاهله
                 inSpeech = false
                 utter.removeAll()
@@ -293,7 +303,7 @@ final class CallController: ObservableObject {
 
     private func commitTurn() {
         inSpeech = false
-        DispatchQueue.main.async { if self.state == .hearing { self.state = .thinking } }
+        DispatchQueue.main.async { self.userTalking = false }
         slog("turn: commit \(utter.count / 16)ms audio, spec=\(specTask != nil)")
         let audioCopy = utter
         utter.removeAll()
@@ -335,23 +345,52 @@ final class CallController: ObservableObject {
         if bargeIn || state == .thinking || state == .speaking {
             cancelReply(recordPartial: true)
         }
-        liveUser = ""
+        fragmentTimer?.cancel()
+        fragmentTimer = nil
+        userTalking = true
+        if carryUserText.isEmpty { liveUser = "" }
         state = .hearing
     }
 
     private func userCancelled() {
-        if state == .hearing { state = .listening }
+        userTalking = false
+        if state == .hearing { state = carryUserText.isEmpty ? .listening : .hearing }
+        if !carryUserText.isEmpty { scheduleFragmentFlush() }
     }
 
-    private func userFinished(text: String) {
+    /// إذا قال كلمة وحدة أو جملة ناقصة وسكت، نستنى شوي ثم نرد على اللي قاله.
+    private func scheduleFragmentFlush() {
+        fragmentTimer?.cancel()
+        fragmentTimer = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1400))
+            guard !Task.isCancelled, !self.userTalking, !self.carryUserText.isEmpty else { return }
+            slog("turn: fragment wait over → reply")
+            self.userFinished(text: "", force: true)
+        }
+    }
+
+    private func userFinished(text: String, force: Bool = false) {
         // رجع يتكلم قبل ما يوصل النص: نخزنه ونضيفه لكلامه الجاي بدل ما نرد مرتين
-        if state == .hearing {
+        if userTalking {
             let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !t.isEmpty { carryUserText += (carryUserText.isEmpty ? "" : " ") + t }
             slog("turn: carried (user speaking again)")
             return
         }
-        guard state == .thinking || state == .listening else { return }
+        guard state != .idle, state != .starting else { return }
+        let joined = ((carryUserText.isEmpty ? "" : carryUserText + " ") + text)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // جملة ناقصة أو كلمة وحدة: نخليه يكمل بدل ما نرد على طول
+        if !force, !joined.isEmpty, TurnHeuristics.isFragment(joined) {
+            carryUserText = joined
+            liveUser = joined
+            state = .hearing
+            slog("turn: fragment \"\(joined)\" → waiting")
+            scheduleFragmentFlush()
+            return
+        }
+        fragmentTimer?.cancel()
+        fragmentTimer = nil
         let full = (carryUserText.isEmpty ? "" : carryUserText + " ") + text
         let trimmed = full.trimmingCharacters(in: .whitespacesAndNewlines)
         carryUserText = ""
@@ -554,6 +593,24 @@ enum TurnHeuristics {
         "اممم", "امم", "ام", "طيب", "في", "على", "من", "مع", "عن",
         "and", "but", "so", "because", "the", "a", "to", "of", "or", "um", "uh", "like", "with",
     ]
+
+    /// ردود قصيرة كاملة بحد ذاتها
+    static let shortComplete: Set<String> = [
+        "نعم", "لا", "اي", "إي", "ايه", "إيه", "ايوه", "أيوه", "تمام", "طيب", "اوكي", "شكرا", "شكرًا", "مرحبا", "هلا",
+        "السلام", "كمل", "وقف", "خلاص", "صح", "يب", "لا لا", "مشكور",
+        "yes", "no", "ok", "okay", "thanks", "hi", "hello", "stop", "continue", "yeah", "yep", "nope",
+    ]
+
+    /// كلام ناقص: نستنى بدل ما نرد عليه.
+    static func isFragment(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: CharacterSet.whitespaces.union(.punctuationCharacters)).lowercased()
+        if t.isEmpty { return false }
+        if let last = text.trimmingCharacters(in: .whitespaces).last, "؟?".contains(last) { return false }
+        if shortComplete.contains(t) { return false }
+        let words = t.split(separator: " ")
+        if words.count <= 1 { return true }
+        return soundsUnfinished(text)
+    }
 
     static func soundsUnfinished(_ text: String) -> Bool {
         let t = text.trimmingCharacters(in: CharacterSet.whitespaces.union(.punctuationCharacters))
