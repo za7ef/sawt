@@ -18,6 +18,11 @@ final class AudioIO {
     var onMic: (([Float]) -> Void)?
 
     private(set) var isRunning = false
+    /// مين شغّل المحرك: المكالمة لها الأولوية، وزر القراءة ما يطفيه إذا المكالمة شغالة.
+    var ownedByCall = false
+    /// يُستدعى (على الخيط الرئيسي) لما ينقطع الصوت أو يرجع. true = رجع يشتغل.
+    var onStateChange: ((Bool) -> Void)?
+    private var observers: [NSObjectProtocol] = []
     private var micConverter: AVAudioConverter?
     private var playConverters: [Double: AVAudioConverter] = [:]
     private let lock = NSLock()
@@ -71,10 +76,58 @@ final class AudioIO {
         try engine.start()
         player.play()
         isRunning = true
+        observe()
+    }
+
+    // MARK: المقاطعات وتغيّر السماعات
+
+    private func observe() {
+        let nc = NotificationCenter.default
+        observers.append(nc.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] n in
+            guard let self, let raw = n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+            if type == .began {
+                slog("audio: interruption began")
+                self.stopPlayback()
+                self.onStateChange?(false)
+            } else {
+                slog("audio: interruption ended")
+                self.restart()
+            }
+        })
+        observers.append(nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { n in
+            let reason = (n.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) ?? 0
+            slog("audio: route change reason=\(reason) → \(AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portName))")
+        })
+        observers.append(nc.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            slog("audio: engine configuration change")
+            self?.restart()
+        })
+    }
+
+    /// يعيد تشغيل المحرك بنفس الإعدادات (بعد مكالمة، أو سماعة بلوتوث، إلخ).
+    func restart() {
+        guard isRunning else { return }
+        let mic = onMic
+        let owned = ownedByCall
+        stop()
+        onMic = mic
+        ownedByCall = owned
+        do {
+            try start()
+            slog("audio: restarted")
+            onStateChange?(true)
+        } catch {
+            slog("audio: restart failed \(error)")
+            onStateChange?(false)
+        }
     }
 
     func stop() {
         guard isRunning else { return }
+        for o in observers { NotificationCenter.default.removeObserver(o) }
+        observers.removeAll()
+        ownedByCall = false
         stopPlayback()
         engine.inputNode.removeTap(onBus: 0)
         player.removeTap(onBus: 0)
