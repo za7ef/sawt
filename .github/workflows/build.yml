@@ -140,7 +140,8 @@ jobs:
           N=${{ github.run_number }}
           V=${{ steps.ver.outputs.version }}
           PUB=za7ef/sawt-releases
-          git log -1 --pretty=%B > /tmp/notes.txt
+          # ملاحظات منتقاة من whatsnew.md فقط (المستودع خاص، فما ننشر رسائل الـcommit)
+          if [ -f whatsnew.md ]; then cp whatsnew.md /tmp/notes.txt; else : > /tmp/notes.txt; fi
           python3 - "$V" "$N" "${{ github.repository }}" <<'PY'
           import json, sys
           v, n, repo = sys.argv[1], int(sys.argv[2]), sys.argv[3]
