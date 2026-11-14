@@ -27,7 +27,7 @@ struct STTOption: Identifiable, Hashable {
 
 /// صوت مدمج داخل التطبيق.
 struct VoiceOption: Identifiable, Hashable {
-    enum Kind: Hashable { case piper(onnx: String), kokoro(model: String), apple }
+    enum Kind: Hashable { case piper(onnx: String), kokoro(model: String), apple, namaa }
     let id: String
     let title: String
     let subtitle: String
@@ -111,7 +111,11 @@ enum Catalog {
                     kind: .piper(onnx: "ar_JO-SA_miro_V2-high.onnx")),
         VoiceOption(id: "apple", title: "صوت آبل",
                     subtitle: "أصوات النظام، تشتغل دايم", folder: "", kind: .apple),
+        VoiceOption(id: "namaa", title: "نماء سعودي (تجريبي)",
+                    subtitle: "صوت رجّالي سعودي، ثقيل وياخذ وقت قبل كل جملة في المكالمة", folder: "", kind: .namaa),
     ]
+
+    static var namaaVoice: VoiceOption? { allVoices.first { $0.kind == .namaa } }
 
     static var voicesRoot: URL? { Bundle.main.url(forResource: "Voices", withExtension: nil) }
 
@@ -119,6 +123,7 @@ enum Catalog {
         allVoices.filter { v in
             switch v.kind {
             case .apple: return true
+            case .namaa: return NamaaVoice.isInstalled
             case .piper(let onnx): return exists("\(v.folder)/\(onnx)")
             case .kokoro(let model): return exists("\(v.folder)/\(model)")
             }
@@ -183,5 +188,5 @@ final class AppSettings: ObservableObject {
 
     var llm: LLMOption { Catalog.llms.first { $0.id == llmID } ?? Catalog.llms[0] }
     var stt: STTOption { Catalog.stts.first { $0.id == sttID } ?? Catalog.stts[0] }
-    var voice: VoiceOption { Catalog.voices.first { $0.id == voiceID } ?? Catalog.voices.last! }
+    var voice: VoiceOption { Catalog.voices.first { $0.id == voiceID } ?? Catalog.voices.first { $0.kind == .apple }! }
 }
