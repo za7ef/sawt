@@ -233,12 +233,27 @@ final class NamaaEngine: @unchecked Sendable {
     private var secPerChar: Double = 0
     private let statLock = NSLock()
     /// "ممم" جاهزة بصوت نماء تنقال لو الرد الأول تأخر
-    private var filler: [Float] {
-        get { statLock.lock(); defer { statLock.unlock() }; return _filler }
-        set { statLock.lock(); _filler = newValue; statLock.unlock() }
+    /// كلمات الانتظار الجاهزة بصوت نماء
+    private var _fillers: [String: [Float]] = [:]
+    func filler(_ text: String) -> [Float]? {
+        statLock.lock(); defer { statLock.unlock() }; return _fillers[text]
     }
-    private var _filler: [Float] = []
-    var fillerSamples: [Float] { filler }
+    var readyFillers: Set<String> {
+        statLock.lock(); defer { statLock.unlock() }; return Set(_fillers.keys)
+    }
+    private func renderFillers(max n: Int) {
+        var done = 0
+        for f in FillerPicker.renderOrder where done < n && self.filler(f) == nil {
+            guard let o = try? self.generate(f, speed: 1.0, steps: 6) else { return }
+            statLock.lock(); _fillers[f] = o.samples; statLock.unlock()
+            slog("namaa: filler \"\(f)\" \(String(format: "%.2f", o.genSeconds))s")
+            done += 1
+        }
+    }
+    /// يجهّز كلمة انتظار وحدة زيادة (ينادى بعد ما يخلص الرد عشان ما يزاحمه)
+    func renderNextFiller() {
+        queue.async { if self.dit != nil { self.renderFillers(max: 1) } }
+    }
 
     func estimatedSeconds(_ text: String) -> Double {
         statLock.lock(); defer { statLock.unlock() }
@@ -354,18 +369,15 @@ final class NamaaEngine: @unchecked Sendable {
     func preload() {
         queue.async {
             guard (try? self.loadIfNeeded()) != nil else { return }
-            // تسخين: أول توليد يجهّز النوى، ونحفظ ناتجه كـ"ممم" نغطي فيها تأخير أول رد
-            guard self.filler.isEmpty else { return }
-            if let o = try? self.generate("ممم، طيب", speed: 1.0) {
-                self.filler = o.samples
-                slog("namaa: warmup+filler \(String(format: "%.2f", o.genSeconds))s")
-            }
+            // تسخين: أول توليد يجهّز النوى، ونحفظ ناتجه ككلمات انتظار (وحدة عادية ووحدة للتفكير)
+            self.renderFillers(max: 2)
         }
     }
 
     func unload() {
         queue.async {
-            self.dit = nil; self.vocos = nil; self.filterbank = nil; self.filler = []
+            self.dit = nil; self.vocos = nil; self.filterbank = nil
+            self.statLock.lock(); self._fillers = [:]; self.statLock.unlock()
             MLX.Memory.clearCache()
         }
     }
@@ -392,10 +404,10 @@ final class NamaaEngine: @unchecked Sendable {
 
     // MARK: التوليد
 
-    func synthesizeTimed(_ text: String, speed: Double) async -> Result<Output, Error> {
+    func synthesizeTimed(_ text: String, speed: Double, steps: Int? = nil) async -> Result<Output, Error> {
         await withCheckedContinuation { cont in
             queue.async {
-                do { cont.resume(returning: .success(try self.generate(text, speed: speed))) }
+                do { cont.resume(returning: .success(try self.generate(text, speed: speed, steps: steps))) }
                 catch { cont.resume(returning: .failure(error)) }
             }
         }
@@ -403,10 +415,10 @@ final class NamaaEngine: @unchecked Sendable {
 
     /// للاستخدام من SpeechSynth (القراءة والمكالمة).
     /// النص الطويل بدون ترقيم يتقسم لقطع ≤150 حرف (النموذج يخرب مع الطويل) ونوصلها بسكتة قصيرة.
-    func synthesize(_ text: String, speed: Double) async -> [Float] {
+    func synthesize(_ text: String, speed: Double, steps: Int? = nil) async -> [Float] {
         var out: [Float] = []
         for piece in Self.chunks(text, max: 150) {
-            switch await synthesizeTimed(piece, speed: speed) {
+            switch await synthesizeTimed(piece, speed: speed, steps: steps) {
             case .success(let o):
                 if !out.isEmpty { out += [Float](repeating: 0, count: 2_880) }   // ~0.12ث على 24kHz
                 out += o.samples
@@ -446,7 +458,7 @@ final class NamaaEngine: @unchecked Sendable {
         s.unicodeScalars.map { Int32(vocab[String($0)] ?? 0) }
     }
 
-    private func generate(_ text: String, speed inSpeed: Double) throws -> Output {
+    private func generate(_ text: String, speed inSpeed: Double, steps stepsOverride: Int? = nil) throws -> Output {
         let loadS = try loadIfNeeded()
         guard let dit, let vocos, let filterbank else { throw NamaaError.missing("الصوت مو جاهز") }
         let t0 = Date()
@@ -476,7 +488,7 @@ final class NamaaEngine: @unchecked Sendable {
 
         // عدد الخطوات من الإعدادات (الافتراضي 7 بجدول EPSS)، والتجربة بالإعدادات تستخدم نفس العدد
         // عشان يسمع نفس جودة المكالمة. إذا الجوال حار في مكالمة: 6 كحد أقصى.
-        var steps = Self.chosenSteps
+        var steps = stepsOverride ?? Self.chosenSteps
         if CallController.isActive, ThermalWatch.isHot { steps = min(steps, 6) }
         // جداول EPSS من F5-TTS v1 (من 32)، ثم sway
         let epssTable: [Int: [Float]] = [
