@@ -64,6 +64,7 @@ final class NamaaVoice: ObservableObject {
     func download() {
         guard task == nil else { return }
         task = Task {
+            guard await NetworkGate.shared.permit("تنزيل صوت نماء") else { task = nil; return }
             do {
                 try FileManager.default.createDirectory(at: Self.dir, withIntermediateDirectories: true)
                 var excluded = URLResourceValues(); excluded.isExcludedFromBackup = true
@@ -329,11 +330,44 @@ final class NamaaEngine: @unchecked Sendable {
     }
 
     /// للاستخدام من SpeechSynth (القراءة والمكالمة).
+    /// النص الطويل بدون ترقيم يتقسم لقطع ≤150 حرف (النموذج يخرب مع الطويل) ونوصلها بسكتة قصيرة.
     func synthesize(_ text: String, speed: Double) async -> [Float] {
-        switch await synthesizeTimed(text, speed: speed) {
-        case .success(let o): return o.samples
-        case .failure(let e): slog("namaa: synth failed \(e)"); return []
+        var out: [Float] = []
+        for piece in Self.chunks(text, max: 150) {
+            switch await synthesizeTimed(piece, speed: speed) {
+            case .success(let o):
+                if !out.isEmpty { out += [Float](repeating: 0, count: 2_880) }   // ~0.12ث على 24kHz
+                out += o.samples
+            case .failure(let e): slog("namaa: synth failed \(e)"); return out
+            }
+            if Task.isCancelled { break }
         }
+        return out
+    }
+
+    static func chunks(_ text: String, max: Int) -> [String] {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.count > max else { return t.isEmpty ? [] : [t] }
+        var res: [String] = []
+        var cur = ""
+        for word in t.split(separator: " ", omittingEmptySubsequences: true) {
+            let w = String(word)
+            if cur.count + w.count + 1 > max, !cur.isEmpty {
+                res.append(cur); cur = ""
+            }
+            // كلمة أطول من الحد (نادر): نقصها
+            if w.count > max {
+                var s = Substring(w)
+                while s.count > max { res.append(String(s.prefix(max))); s = s.dropFirst(max) }
+                cur = String(s)
+            } else {
+                cur += (cur.isEmpty ? "" : " ") + w
+            }
+            // نفضّل القص بعد الفاصلة
+            if cur.count > max / 2, let last = cur.last, "،,؛;:".contains(last) { res.append(cur); cur = "" }
+        }
+        if !cur.isEmpty { res.append(cur) }
+        return res
     }
 
     private func tokens(_ s: String) -> [Int32] {
