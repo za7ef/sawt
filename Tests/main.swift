@@ -76,6 +76,12 @@ check(SearchHeuristic.verdict("هلا والله") == .no, "Search: تحية")
 check(SearchHeuristic.verdict("مين اخترع المصباح الكهربائي؟") == .unsure, "Search: سؤال عام = مصنّف")
 check(SearchHeuristic.verdict("اكتب لي قصيدة عن البحر") == .no, "Search: طلب كتابة")
 
+// LiveIntent
+check(LiveIntent.isWeather("كيف الطقس"), "Live: طقس")
+check(LiveIntent.placeCandidates("في السعودية تحديدا في المدينة المنورة").first == "المدينة المنورة", "Live: مكان بعد في")
+check(LiveIntent.placeCandidates("كيف الطقس؟").isEmpty, "Live: بدون مكان")
+check(SearchHeuristic.verdict("ابحث في الويب عن اجابة") == .yes, "Search: ابحث")
+
 // MemoryLine
 let now0 = Date(timeIntervalSince1970: 1_800_000_000)
 if case .add(let t, let imp, let cat, let exp)? = MemoryLine.parse("+ 4 | ناس | دائم | أخته اسمها سميرة", now: now0) {
