@@ -27,6 +27,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>يحوّل كلامك لنص على الجهاز عشان يفهمك.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>يحتاج صوت المايك عشان تكلّمه مباشرة، وكل شي يتعالج على جوالك بدون نت.</string>
 	<key>UIBackgroundModes</key>
