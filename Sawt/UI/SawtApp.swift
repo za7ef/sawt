@@ -6,6 +6,13 @@ struct SawtApp: App {
     @StateObject private var settings = AppSettings.shared
     @StateObject private var store = ChatStore.shared
     @StateObject private var call = CallController()
+    @Environment(\.scenePhase) private var phase
+
+    init() {
+        CrashCollector.shared.start()
+        let l = Log.shared
+        slog("launch \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "") prevCrashed=\(l.previousRunCrashed) at=\(l.previousStage)")
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -25,6 +32,11 @@ struct SawtApp: App {
                     // الصوت يرجع يتحمل وقت الحاجة؛ نفكه إذا ما فيه مكالمة
                     if !AudioIO.shared.ownedByCall { SpeechSynth.shared.unload() }
                     URLCache.shared.removeAllCachedResponses()
+                }
+                .onChange(of: phase) { _, p in
+                    // الخلفية مو كراش: النظام يقفل التطبيقات اللي بالخلفية عادي
+                    if p == .background { slog("background"); if !AudioIO.shared.ownedByCall { slog.stage("") } }
+                    if p == .active { slog.stage(call.state == .idle ? "idle" : "call") }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
                     slog("thermal: \(ThermalWatch.label)")

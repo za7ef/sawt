@@ -4,6 +4,8 @@ struct RootView: View {
     @EnvironmentObject var store: ChatStore
     @EnvironmentObject var models: ModelManager
     @State private var orphans: [Storage.ModelFolder] = []
+    @State private var crashNotice = Log.shared.previousRunCrashed
+    @State private var shareURL: URL?
     @State private var drawerOpen = false
     @State private var drag: CGFloat = 0
     private let drawerWidth: CGFloat = 300
@@ -35,8 +37,18 @@ struct RootView: View {
             .task {
                 // بعد الفتح بشوي: ندوّر على تنزيلات ناقصة أو ملفات قديمة
                 try? await Task.sleep(for: .seconds(3))
+                while crashNotice || shareURL != nil { try? await Task.sleep(for: .seconds(1)) }
                 if models.downloadingID == nil { orphans = await models.orphanFolders() }
                 if !orphans.isEmpty { slog("orphans: \(orphans.map(\.name))") }
+            }
+            .alert("التطبيق انقفل المرة اللي فاتت", isPresented: $crashNotice) {
+                Button("صدّر السجل") { shareURL = Log.shared.export() }
+                Button("خلاص", role: .cancel) {}
+            } message: {
+                Text("كان وقتها في: \(Log.shared.previousStage). السجل محفوظ، صدّره وأرسله عشان نعرف السبب.")
+            }
+            .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) {
+                if let u = shareURL { ActivityView(items: [u]) }
             }
             .alert("فيه ملفات نماذج ناقصة أو قديمة",
                    isPresented: Binding(get: { !orphans.isEmpty }, set: { if !$0 { orphans = [] } })) {
@@ -44,7 +56,10 @@ struct RootView: View {
                     for f in orphans { models.deleteFolder(f) }
                     orphans = []
                 }
-                Button("خلها", role: .cancel) { orphans = [] }
+                Button("خلها", role: .cancel) {
+                    Storage.dismissOrphans(orphans)
+                    orphans = []
+                }
             } message: {
                 Text("\(orphans.count) مجلد بحجم \(Storage.format(orphanBytes)) ما تستخدمها. تحذفها عشان تفضي مساحة؟")
             }
