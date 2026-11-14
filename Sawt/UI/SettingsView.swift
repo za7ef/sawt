@@ -9,6 +9,9 @@ struct SettingsView: View {
     @State private var unused: [Storage.ModelFolder] = []
     @AppStorage("showCallDebug") private var showCallDebug = false
     @State private var shareURL: URL?
+    @ObservedObject private var namaa = NamaaVoice.shared
+    @State private var namaaWarn = false
+    @State private var confirmNamaaDelete = false
 
     var body: some View {
         NavigationStack {
@@ -18,6 +21,7 @@ struct SettingsView: View {
                         Button {
                             settings.voiceID = v.id
                             models.voiceChanged()
+                            if v.kind == .namaa { namaaWarn = true }
                         } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 3) {
@@ -40,6 +44,14 @@ struct SettingsView: View {
                     Text("الصوت")
                 } footer: {
                     Text("الأصوات العربية مدمجة في التطبيق. الجمل الإنجليزية تُقرأ بصوت آبل.")
+                }
+
+                Section {
+                    namaaRow
+                } header: {
+                    Text("نماء سعودي (تجريبي)")
+                } footer: {
+                    Text("تجريبي وثقيل: ياخذ وقت قبل كل جملة ويسخّن الجوال، وثقيل على المكالمات.\nنموذج NAMAA-Saudi-TTS-V2، رخصته للاستخدام الشخصي غير التجاري.")
                 }
 
                 Section("سرعة الكلام") {
@@ -128,9 +140,57 @@ struct SettingsView: View {
             .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) {
                 if let u = shareURL { ActivityView(items: [u]) }
             }
+            .alert("نماء ثقيل على المكالمات", isPresented: $namaaWarn) {
+                Button("تمام") {}
+            } message: {
+                Text("بيتأخر الرد في المكالمة لأنه يولّد كل جملة كاملة قبل ما يتكلم، ويسخّن الجوال. الجمل الإنجليزية تنقرأ بصوت آبل.")
+            }
+            .confirmationDialog("تحذف صوت نماء؟", isPresented: $confirmNamaaDelete, titleVisibility: .visible) {
+                Button("حذف", role: .destructive) { namaa.delete(); models.voiceChanged() }
+            }
             .navigationTitle("الإعدادات")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("تم") { dismiss() } } }
+        }
+    }
+
+    @ViewBuilder private var namaaRow: some View {
+        switch namaa.state {
+        case .notDownloaded, .failed:
+            if case .failed(let msg) = namaa.state {
+                Text("ما كمل: \(msg)").font(.caption).foregroundStyle(.red)
+            }
+            Button {
+                namaa.download()
+            } label: {
+                LabeledContent {
+                    Text("~1.4 GB تنزيل • ~700 MB بعدها")
+                } label: {
+                    Label("نزّل الصوت", systemImage: "arrow.down.circle")
+                }
+            }
+        case .downloading(let p):
+            VStack(alignment: .leading, spacing: 6) {
+                ProgressView(value: p) { Text("ينزّل… \(Int(p * 100))٪") }
+                Button("إلغاء", role: .cancel) { namaa.cancel() }.font(.caption)
+            }
+        case .converting:
+            HStack { ProgressView(); Text("يجهّز النموذج… (دقيقة تقريبًا)").foregroundStyle(.secondary) }
+        case .ready:
+            Button {
+                namaa.test()
+            } label: {
+                HStack {
+                    Label("جرّب", systemImage: "play.circle")
+                    Spacer()
+                    if namaa.testing { ProgressView() }
+                }
+            }
+            .disabled(namaa.testing)
+            if let r = namaa.lastTest {
+                Text(r).font(.caption).foregroundStyle(.secondary)
+            }
+            Button("حذف صوت نماء", role: .destructive) { confirmNamaaDelete = true }
         }
     }
 

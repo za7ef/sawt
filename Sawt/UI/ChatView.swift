@@ -267,6 +267,13 @@ struct MessageRow: View {
                             Button { Speaker.shared.speak(message.text) } label: {
                                 Image(systemName: "speaker.wave.2")
                             }
+                            if NamaaVoice.isInstalled, let namaa = Catalog.namaaVoice {
+                                Button { Speaker.shared.speak(message.text, voice: namaa) } label: {
+                                    Label("نماء", systemImage: "person.wave.2")
+                                        .labelStyle(.titleAndIcon)
+                                }
+                                .accessibilityLabel("اقرأ بصوت نماء السعودي (تجريبي)")
+                            }
                             if message.viaVoice { Image(systemName: "waveform") }
                         }
                         .font(.footnote)
