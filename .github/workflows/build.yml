@@ -1,0 +1,101 @@
+name: بناء IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore: ['README.md']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: اختيار أحدث Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_26*.app /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)
+          echo "Using $XC"
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+          xcodebuild -downloadComponent MetalToolchain || true
+
+      - name: تثبيت الأدوات
+        run: |
+          brew install xcodegen
+          python3 -m pip install --break-system-packages -q huggingface_hub || python3 -m pip install -q huggingface_hub
+
+      - name: تنزيل الأصوات المدمجة
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          V=Sawt/Resources/Voices
+          mkdir -p $V
+          python3 - <<'PY'
+          from huggingface_hub import snapshot_download
+          import shutil, os
+          V = "Sawt/Resources/Voices"
+          def get(repo, dest, pats):
+              p = snapshot_download(repo, allow_patterns=pats)
+              shutil.copytree(p, os.path.join(V, dest), dirs_exist_ok=True)
+          get("csukuangfj/vits-piper-ar_JO-SA_miro_V2-high-int8", "piper-miro", ["*.onnx", "tokens.txt"])
+          get("csukuangfj/nabra-82m-arabic-int8", "nabra-msa", ["model.int8.onnx", "tokens.txt", "voices.bin"])
+          p = snapshot_download("csukuangfj/vits-piper-ar_JO-SA_miro_V2-high-int8", allow_patterns=["espeak-ng-data/*", "espeak-ng-data/**"])
+          shutil.copytree(os.path.join(p, "espeak-ng-data"), os.path.join(V, "espeak-ng-data"), dirs_exist_ok=True)
+          PY
+          curl -fsSL -o $V/silero_vad.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
+          # الصوت السعودي (نبرة) محفوظ كملف في إصدار voices بالمستودع
+          if gh release download voices -p 'nabra-saudi.tar.gz' -D /tmp 2>/dev/null; then
+            mkdir -p $V/nabra-saudi && tar -xzf /tmp/nabra-saudi.tar.gz -C $V/nabra-saudi
+          else
+            echo "nabra-saudi not available, skipping"
+          fi
+          find $V -name '.cache' -prune -exec rm -rf {} + || true
+          du -sh $V/*
+
+      - name: توليد المشروع
+        run: xcodegen generate
+
+      - name: حل الحزم
+        run: |
+          xcodebuild -resolvePackageDependencies -project Sawt.xcodeproj -scheme Sawt \
+            -skipMacroValidation -skipPackagePluginValidation
+
+      - name: البناء
+        run: |
+          set -o pipefail
+          xcodebuild archive -project Sawt.xcodeproj -scheme Sawt -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath build/Sawt.xcarchive \
+            -skipMacroValidation -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            2>&1 | tee build.log | grep -E "error:|warning: unre|BUILD|ARCHIVE" || true
+          test -d build/Sawt.xcarchive/Products/Applications/Sawt.app
+
+      - name: سجل الأخطاء
+        if: failure()
+        run: grep -E "error:" -A3 build.log | head -200 || true
+
+      - name: تجهيز IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Sawt.xcarchive/Products/Applications/Sawt.app Payload/
+          zip -qry Sawt.ipa Payload
+          ls -lh Sawt.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sawt-ipa
+          path: Sawt.ipa
+
+      - name: نشر إصدار
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: صوت - بناء ${{ github.run_number }}
+          prerelease: true
+          files: Sawt.ipa
