@@ -10,6 +10,7 @@ import Network
 @_silgen_name("sawtctl_tap") private func c_tap(_ cfg: UnsafePointer<CChar>, _ x: UInt16, _ y: UInt16) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("sawtctl_keys") private func c_keys(_ cfg: UnsafePointer<CChar>, _ what: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("sawtctl_ax") private func c_ax(_ cfg: UnsafePointer<CChar>, _ waitMs: UInt32) -> UnsafeMutablePointer<CChar>?
+@_silgen_name("sawtctl_pair") private func c_pair(_ cfg: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("sawtctl_free") private func c_free(_ p: UnsafeMutablePointer<CChar>?)
 #endif
 
@@ -55,7 +56,9 @@ enum PhoneControl {
         if dict["public_key"] != nil && dict["private_key"] != nil && dict["identifier"] != nil { kind = "RemotePairing" }
         else if dict["HostID"] != nil || dict["DeviceCertificate"] != nil { kind = "lockdown" }
         else { kind = "غير معروف" }
-        let xml = try? PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0)
+        // نحفظ البايتات الأصلية كما هي (مثل StikDebug)؛ نحوّل بس لو كانت base64 أو فيها BOM
+        let original = !fmt.contains("base64") && !fmt.contains("bom")
+        let xml = original ? d : (try? PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0))
         return (xml, "format=\(fmt.joined(separator: "+")) kind=\(kind) size=\(raw.count) keys=[\(keys)]")
     }
 
@@ -100,7 +103,7 @@ enum PhoneControl {
         return String(decoding: data, as: UTF8.self)
     }
 
-    enum Op: Sendable { case probe, ax(UInt32), tap(UInt16, UInt16), keys(String) }
+    enum Op: Sendable { case probe, pair, ax(UInt32), tap(UInt16, UInt16), keys(String) }
 
     nonisolated(unsafe) static var lastRPHost = ""
 
@@ -159,6 +162,7 @@ enum PhoneControl {
             let p: UnsafeMutablePointer<CChar>? = cfg.withCString { c in
                 switch op {
                 case .probe: return c_probe(c)
+                case .pair: return c_pair(c)
                 case .ax(let ms): return c_ax(c, ms)
                 case .tap(let x, let y): return c_tap(c, x, y)
                 case .keys(let w): return w.withCString { c_keys(c, $0) }
@@ -193,12 +197,13 @@ struct PhoneControlView: View {
                 LabeledContent("ملف الاقتران", value: hasPairing ? "موجود" : "ناقص")
                 Button("استيراد ملف الاقتران") { importing = true }
                 Button("الصق محتوى الملف") { pasting = true }
+                Button("سوّ ملف اقتران من الجوال") { go(.pair, delay: false, label: "pair") }
                 TextField("العنوان", text: $host)
                     .keyboardType(.numbersAndPunctuation)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
             } footer: {
-                Text("لازم LocalDevVPN شغال، وصورة المطوّر (DDI) مركّبة (مثلاً من StikDebug). نفس ملف الاقتران حق StikDebug.")
+                Text("لازم LocalDevVPN شغال، وصورة المطوّر (DDI) مركّبة (مثلاً من StikDebug). تقدر تستورد ملف StikDebug، أو تسوّي ملف جديد من الجوال (وافق لو طلع لك طلب ثقة، والملف القديم ينحفظ نسخة).")
             }
 
             Section {
@@ -287,9 +292,10 @@ struct PhoneControlView: View {
             let info = PhoneControl.storedInfo()
             Log.shared("phonectl pairing: \(info)")
             var rp: (port: UInt16, info: String) = (0, "lockdown")
-            if info.contains("kind=RemotePairing") { rp = await PhoneControl.discoverRPPort() }
+            if info.contains("kind=RemotePairing") || label == "pair" { rp = await PhoneControl.discoverRPPort() }
             Log.shared("phonectl rp port: \(rp.port) \(rp.info)")
             var r = await PhoneControl.run(op, host: h, rpPort: rp.port, rpHost: PhoneControl.lastRPHost)
+            if label == "pair" { r = "new pairing: \(PhoneControl.storedInfo())\n" + r }
             r = "pairing: \(info)\nrp: \(rp.port) \(rp.info)\n" + r
             Log.shared("phonectl \(label): \(r.prefix(6000))")
             UIPasteboard.general.string = r
