@@ -82,6 +82,10 @@ check(LiveIntent.placeCandidates("في السعودية تحديدا في الم
 check(LiveIntent.placeCandidates("كيف الطقس؟").isEmpty, "Live: بدون مكان")
 check(SearchHeuristic.verdict("ابحث في الويب عن اجابة") == .yes, "Search: ابحث")
 
+// Refusal
+check(Refusal.detect("كنموذج لغوي ليس لدي وصول للإنترنت"), "Refusal: فصحى")
+check(!Refusal.detect("الجو اليوم حار في المدينة"), "Refusal: جواب عادي")
+
 // MemoryLine
 let now0 = Date(timeIntervalSince1970: 1_800_000_000)
 if case .add(let t, let imp, let cat, let exp)? = MemoryLine.parse("+ 4 | ناس | دائم | أخته اسمها سميرة", now: now0) {
