@@ -143,7 +143,7 @@ final class ModelManager: ObservableObject {
         return await Task.detached(priority: .utility) {
             Storage.modelFolders(downloaded: d, downloadedSTT: s).filter { f in
                 if case .llm(let r) = f.kind, r == busy { return false }
-                return f.isOrphan
+                return f.isOrphan && f.bytes > 1_000_000 && !Storage.isDismissed(f)
             }
         }.value
     }

@@ -134,6 +134,8 @@ enum Storage {
         }
         for d in (try? fm.contentsOfDirectory(at: whisperDir, includingPropertiesForKeys: nil)) ?? [] {
             let name = d.lastPathComponent
+            // نموذج Whisper الحقيقي مجلده يبدأ بـ openai_whisper أو distil؛ غيره كاش وإعدادات
+            guard name.hasPrefix("openai_whisper") || name.hasPrefix("distil") else { continue }
             let variant = downloadedSTT.first { name.hasSuffix($0) }
             out.append(ModelFolder(url: d, name: name, kind: .whisper(variant ?? name), bytes: size(d),
                                    incomplete: hasPartial(d), known: variant != nil))
@@ -147,6 +149,19 @@ enum Storage {
             return true
         }
         return false
+    }
+
+    private static let dismissedKey = "storage.dismissedOrphans"
+
+    /// المجلدات اللي قال عنها "خلها": ما نسأل عنها مرة ثانية.
+    static func dismissOrphans(_ list: [ModelFolder]) {
+        var s = Set(UserDefaults.standard.stringArray(forKey: dismissedKey) ?? [])
+        for f in list { s.insert(f.url.lastPathComponent) }
+        UserDefaults.standard.set(Array(s), forKey: dismissedKey)
+    }
+
+    static func isDismissed(_ f: ModelFolder) -> Bool {
+        (UserDefaults.standard.stringArray(forKey: dismissedKey) ?? []).contains(f.url.lastPathComponent)
     }
 
     static func remove(_ folder: ModelFolder) {

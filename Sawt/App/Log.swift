@@ -1,6 +1,7 @@
 import Foundation
 import os
 import UIKit
+import MetricKit
 
 /// سجل بسيط للتشخيص: يحفظ آخر الأحداث في ملف عشان تقدر تصدّره.
 final class Log: @unchecked Sendable {
@@ -15,18 +16,55 @@ final class Log: @unchecked Sendable {
         return f
     }()
 
-    let fileURL: URL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("sawt-log.txt")
+    static let dir: URL = {
+        let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("logs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }()
+    /// السجل الحي: يُكتب سطر سطر عشان يبقى حتى لو انقفل التطبيق فجأة.
+    let liveURL = Log.dir.appendingPathComponent("current.txt")
+    /// سجل التشغيلة السابقة (اللي ممكن انتهت بكراش).
+    let prevURL = Log.dir.appendingPathComponent("previous.txt")
+    let crashURL = Log.dir.appendingPathComponent("crash-reports.txt")
+    let fileURL: URL = FileManager.default.temporaryDirectory.appendingPathComponent("sawt-log.txt")
+    private var handle: FileHandle?
+
+    /// وش كان التطبيق يسوي آخر شي (لو انقفل فجأة نعرف وين).
+    private(set) var previousRunCrashed = false
+    private(set) var previousStage = ""
+    private let stageKey = "log.lastStage"
 
     init() {
-        try? FileManager.default.removeItem(at: fileURL)
+        let fm = FileManager.default
+        try? fm.removeItem(at: prevURL)
+        if fm.fileExists(atPath: liveURL.path) { try? fm.moveItem(at: liveURL, to: prevURL) }
+        fm.createFile(atPath: liveURL.path, contents: nil)
+        handle = try? FileHandle(forWritingTo: liveURL)
+        let d = UserDefaults.standard
+        if let s = d.string(forKey: stageKey), !s.isEmpty, s != "idle" {
+            previousRunCrashed = true
+            previousStage = s
+        }
+        d.set("launch", forKey: stageKey)
     }
 
+    /// يحدد المرحلة الحالية. "" = خروج نظيف.
+    func stage(_ s: String) {
+        UserDefaults.standard.set(s, forKey: stageKey)
+    }
+
+    func cleanExit() { stage("") }
+
     func callAsFunction(_ message: String) {
-        let line = "\(df.string(from: Date())) [\(RAM.footprintMB)MB] \(message)"
+        let line = "\(df.string(from: Date())) [\(RAM.footprintMB)MB/\(RAM.availableMB)MB] \(message)"
         queue.async {
             self.lines.append(line)
             if self.lines.count > 3000 { self.lines.removeFirst(500) }
+            if let data = (line + "\n").data(using: .utf8) {
+                try? self.handle?.write(contentsOf: data)
+                try? self.handle?.synchronize()
+            }
         }
         #if DEBUG
         print(line)
@@ -46,7 +84,15 @@ final class Log: @unchecked Sendable {
 
         """
         let body = queue.sync { lines.joined(separator: "\n") }
-        try? (header + body).write(to: fileURL, atomically: true, encoding: .utf8)
+        var text = header + body
+        if let prev = try? String(contentsOf: prevURL, encoding: .utf8), !prev.isEmpty {
+            text += "\n\n==== التشغيلة السابقة\(previousRunCrashed ? " (انتهت فجأة عند: \(previousStage))" : "") ====\n"
+            text += String(prev.suffix(200_000))
+        }
+        if let crash = try? String(contentsOf: crashURL, encoding: .utf8), !crash.isEmpty {
+            text += "\n\n==== تقارير الكراش من النظام ====\n" + String(crash.suffix(200_000))
+        }
+        try? text.write(to: fileURL, atomically: true, encoding: .utf8)
         return fileURL
     }
 }
@@ -83,6 +129,40 @@ enum ThermalWatch {
         case .serious: return "حار"
         case .critical: return "حار جدًا"
         @unknown default: return "؟"
+        }
+    }
+}
+
+/// يستقبل تقارير الكراش والذاكرة من النظام (توصل غالبًا في التشغيلة اللي بعدها).
+final class CrashCollector: NSObject, MXMetricManagerSubscriber {
+    static let shared = CrashCollector()
+
+    func start() { MXMetricManager.shared.add(self) }
+
+    func didReceive(_ payloads: [MXDiagnosticPayload]) {
+        var out = ""
+        for p in payloads {
+            for c in p.crashDiagnostics ?? [] {
+                out += "CRASH \(c.metaData.applicationBuildVersion) signal=\(c.signal.map { "\($0)" } ?? "-") "
+                out += "exception=\(c.exceptionType.map { "\($0)" } ?? "-") code=\(c.exceptionCode.map { "\($0)" } ?? "-")\n"
+                out += "reason: \(c.terminationReason ?? "-")\n"
+                out += String(data: c.callStackTree.jsonRepresentation(), encoding: .utf8) ?? ""
+                out += "\n----\n"
+            }
+        }
+        guard !out.isEmpty else { return }
+        slog("metrickit: received crash diagnostics")
+        let url = Log.shared.crashURL
+        let old = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        try? (old + out).write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    func didReceive(_ payloads: [MXMetricPayload]) {
+        for p in payloads {
+            if let exits = p.applicationExitMetrics {
+                let bg = exits.backgroundExitData, fg = exits.foregroundExitData
+                slog("metrickit exits: fg memLimit=\(fg.cumulativeMemoryResourceLimitExitCount) crash=\(fg.cumulativeAbnormalExitCount) bg memLimit=\(bg.cumulativeMemoryResourceLimitExitCount)")
+            }
         }
     }
 }

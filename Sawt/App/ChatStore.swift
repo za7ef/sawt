@@ -143,6 +143,8 @@ final class ChatStore: ObservableObject {
         genTask = Task {
             var full = ""
             do {
+                slog.stage("chat:llm")
+                slog("chat: gen start avail=\(RAM.availableMB)MB")
                 let stream = try await LLMService.shared.stream(system: system, history: Array(history), user: t, maxTokens: 1500)
                 for try await chunk in stream {
                     if Task.isCancelled { break }
@@ -164,6 +166,8 @@ final class ChatStore: ObservableObject {
             if !answer.isEmpty { append(Message(role: .assistant, text: answer)) }
             streamingText = ""
             isGenerating = false
+            slog.stage("idle")
+            slog("chat: gen done \(full.count) chars")
         }
     }
 
