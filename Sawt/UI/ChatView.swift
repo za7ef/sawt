@@ -14,7 +14,7 @@ struct ChatView: View {
     @State private var voiceMode = false
     @State private var showModels = false
     @StateObject private var dictation = Dictation()
-    @FocusState private var focused: Bool
+    @State private var focused = false
     @State private var pending: [Attachment] = []
     @State private var showCamera = false
     @State private var showPhotos = false
@@ -276,11 +276,8 @@ struct ChatView: View {
                     attachMenu
                     thinkButton
                     webButton
-                    TextField(dictation.isRecording ? "أسمعك…" : "اكتب رسالة", text: $draft, axis: .vertical)
-                        .lineLimit(1...6)
-                        .focused($focused)
-                        .padding(.vertical, 12)
-                        .submitLabel(.send)
+                    ComposerField(text: $draft, placeholder: dictation.isRecording ? "أسمعك…" : "اكتب رسالة",
+                                  focused: $focused, clearToken: sendGen)
 
                     Button {
                         if dictation.isRecording {
@@ -355,20 +352,7 @@ struct ChatView: View {
         if dictation.isRecording { dictation.stop { _ in } }
         draft = ""
         pending = []
-        // لوحة المفاتيح أحيانًا تثبّت النص المعلّم (التصحيح/الاقتراحات) بعد ما فضّينا الحقل فيرجع النص:
-        // نفضيه مرة ثانية بعد لحظة إذا رجع نفس النص المرسل، ونعيد ضبط التركيز عشان تنتهي الكتابة المعلّقة
-        let sent = t.trimmingCharacters(in: .whitespacesAndNewlines)
-        let wasFocused = focused
-        for delay in [0.05, 0.25, 0.6] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                let now = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !now.isEmpty, !sent.isEmpty, now == sent || sent.hasPrefix(now) || now.hasPrefix(sent) && now.count - sent.count <= 2 {
-                    slog("chat: composer text came back after send → cleared")
-                    draft = ""
-                    if wasFocused, delay < 0.1 { focused = false; DispatchQueue.main.async { focused = true } }
-                }
-            }
-        }
+        // التفضية الفعلية (وإنهاء إملاء النظام) تصير داخل ComposerField لما يتغير sendGen
         store.send(t, attachments: atts, web: net.on) { failed in draft = failed; pending = atts }
     }
 
