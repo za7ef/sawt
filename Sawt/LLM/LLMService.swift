@@ -64,7 +64,12 @@ actor LLMService {
         // كاش صغير لكرت الشاشة عشان ما تتكدس الذاكرة بين الردود
         MLX.Memory.cacheLimit = 32 * 1024 * 1024
         slog("llm: loading \(option.id)")
-        let cfg = option.configuration
+        var cfg = option.configuration
+        // نازل كامل؟ نحمّله من المجلد مباشرة: ولا طلب واحد للإنترنت (حتى فحص النسخة)
+        if let local = Storage.llmLocalSnapshot(option.id) {
+            cfg.id = .directory(local)
+            slog("llm: loading offline from local snapshot")
+        }
         // نحدد المصنع بنفسنا: النصي أخف على الذاكرة، والنظر بس لما يحتاجه المستخدم
         let c: ModelContainer
         if vision {
@@ -145,7 +150,8 @@ actor LLMService {
                 for (i, make) in attempts.enumerated() {
                     let (session, prompt) = make()
                     var yielded = false
-                    var inThink = false
+                    // بعض قوالب Qwen تفتح <think> بنفسها في البرومبت: نعتبر البداية تفكير من أول حرف (بدون وميض)
+                    var inThink = think && isQwen3
                     var pendingTag = ""
                     do {
                         let imgs: [UserInput.Image] = images.compactMap { u in CIImage(contentsOf: u).map { .ciImage($0) } }
@@ -156,6 +162,7 @@ actor LLMService {
                             var visible = ""
                             while !text.isEmpty {
                                 if inThink {
+                                    if let r = text.range(of: "<think>") { text.removeSubrange(r) }
                                     if let r = text.range(of: "</think>") {
                                         onThink?(String(text[..<r.lowerBound]))
                                         text = String(text[r.upperBound...]); inThink = false
@@ -172,6 +179,7 @@ actor LLMService {
                                 }
                             }
                             if !visible.isEmpty { yielded = true; cont.yield(visible) }
+                            else if inThink { cont.yield("") }   // نبّه الواجهة تحدّث التفكير
                         }
                         if !pendingTag.isEmpty, !inThink { cont.yield(pendingTag) }
                         withExtendedLifetime(session) {}
