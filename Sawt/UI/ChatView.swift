@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 struct ChatView: View {
@@ -12,6 +13,12 @@ struct ChatView: View {
     @State private var showModels = false
     @StateObject private var dictation = Dictation()
     @FocusState private var focused: Bool
+    @State private var pending: [Attachment] = []
+    @State private var showCamera = false
+    @State private var showPhotos = false
+    @State private var showFiles = false
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var attaching = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,6 +32,34 @@ struct ChatView: View {
                 .environment(\.layoutDirection, .rightToLeft)
         }
         .sheet(isPresented: $showModels) { ModelsView() }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker { img in addImage(img) }.ignoresSafeArea()
+        }
+        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 3, matching: .images)
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            attaching = true
+            Task {
+                for it in items {
+                    if let data = try? await it.loadTransferable(type: Data.self), let img = UIImage(data: data) {
+                        addImage(img)
+                    }
+                }
+                photoItems = []
+                attaching = false
+            }
+        }
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: Attachments.fileTypes, allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result else { return }
+            attaching = true
+            Task {
+                for u in urls.prefix(3) {
+                    do { pending.append(try await Attachments.addFile(u)) }
+                    catch { store.error = error.localizedDescription }
+                }
+                attaching = false
+            }
+        }
         .onChange(of: dictation.error) { _, e in if let e { store.error = e; dictation.error = nil } }
         .alert("تنبيه", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             Button("تمام", role: .cancel) {}
@@ -102,7 +137,7 @@ struct ChatView: View {
                             .padding(.top, 120)
                     }
                     ForEach(store.current?.messages ?? []) { m in
-                        MessageRow(message: m).id(m.id)
+                        MessageRow(message: m).equatable().id(m.id)
                     }
                     if store.isGenerating {
                         MessageRow(message: Message(role: .assistant, text: store.streamingText), streaming: true)
@@ -124,15 +159,70 @@ struct ChatView: View {
 
     // MARK: خانة الكتابة
 
+    private func addImage(_ img: UIImage) {
+        do { pending.append(try Attachments.addImage(img)) }
+        catch { store.error = error.localizedDescription }
+    }
+
+    @ViewBuilder private var pendingBar: some View {
+        if !pending.isEmpty || attaching {
+            VStack(alignment: .leading, spacing: 6) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(pending) { a in
+                            AttachmentChip(a: a, size: 56)
+                                .overlay(alignment: .topTrailing) {
+                                    Button { pending.removeAll { $0.id == a.id } } label: {
+                                        Image(systemName: "xmark.circle.fill").font(.callout)
+                                            .symbolRenderingMode(.palette)
+                                            .foregroundStyle(.white, .black.opacity(0.6))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .offset(x: 6, y: -6)
+                                }
+                        }
+                        if attaching { ProgressView().frame(width: 56, height: 56) }
+                    }
+                    .padding(.horizontal, 16).padding(.top, 6)
+                }
+                if pending.contains(where: { $0.kind == .image }) && !settings.llm.vision {
+                    HStack(spacing: 6) {
+                        Text("\(settings.llm.title) ما يشوف الصور، بيقرأ النص اللي فيها بس.")
+                        if let v = Catalog.llms.first(where: { $0.vision && models.downloaded.contains($0.id) })
+                            ?? Catalog.llms.first(where: { $0.vision }) {
+                            Button("بدّل لـ \(v.title)") { models.activate(v) }.font(.caption.weight(.semibold))
+                        }
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+                }
+            }
+        }
+    }
+
+    private var attachMenu: some View {
+        Menu {
+            Button { showCamera = true } label: { Label("الكاميرا", systemImage: "camera") }
+            Button { showPhotos = true } label: { Label("الصور", systemImage: "photo.on.rectangle") }
+            Button { showFiles = true } label: { Label("الملفات", systemImage: "folder") }
+        } label: {
+            Image(systemName: "plus").font(.title3.weight(.medium)).frame(width: 40, height: 44)
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, 4)
+    }
+
     private var composer: some View {
+        VStack(spacing: 0) {
+        pendingBar
         GlassEffectContainer(spacing: 12) {
             HStack(alignment: .bottom, spacing: 10) {
                 HStack(alignment: .bottom, spacing: 8) {
+                    attachMenu
                     TextField(dictation.isRecording ? "أسمعك…" : "اكتب رسالة", text: $draft, axis: .vertical)
                         .lineLimit(1...6)
                         .focused($focused)
                         .padding(.vertical, 12)
-                        .padding(.leading, 16)
                         .submitLabel(.send)
 
                     Button {
@@ -162,6 +252,7 @@ struct ChatView: View {
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: draft.isEmpty)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: store.isGenerating)
+        }
     }
 
     @ViewBuilder private var actionButton: some View {
@@ -172,7 +263,7 @@ struct ChatView: View {
             .buttonStyle(.glassProminent)
             .buttonBorderShape(.circle)
             .transition(.scale.combined(with: .opacity))
-        } else if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        } else if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pending.isEmpty {
             Button(action: send) {
                 Image(systemName: "arrow.up").font(.body.weight(.bold)).frame(width: 48, height: 48)
             }
@@ -198,8 +289,10 @@ struct ChatView: View {
             return
         }
         let t = draft
+        let atts = pending
         draft = ""
-        store.send(t) { failed in draft = failed }
+        pending = []
+        store.send(t, attachments: atts) { failed in draft = failed; pending = atts }
     }
 
     private func startVoice() {
@@ -232,16 +325,24 @@ struct EmptyState: View {
     }
 }
 
-struct MessageRow: View {
+struct MessageRow: View, Equatable {
     let message: Message
     var streaming = false
     @State private var showMemory = false
+
+    static func == (a: MessageRow, b: MessageRow) -> Bool { a.message == b.message && a.streaming == b.streaming }
 
     var body: some View {
         HStack(alignment: .top) {
             if message.role == .user {
                 // في الواجهة العربية بداية السطر يمين، فرسائلك تطلع يمين مثل ChatGPT
                 VStack(alignment: .leading, spacing: 4) {
+                    if let atts = message.attachments, !atts.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) { ForEach(atts) { AttachmentChip(a: $0, size: 72) } }
+                        }
+                        .frame(maxWidth: 260)
+                    }
                     Text(message.text)
                         .padding(.horizontal, 14).padding(.vertical, 10)
                         .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 20, style: .continuous))

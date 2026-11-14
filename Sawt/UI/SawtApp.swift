@@ -7,6 +7,7 @@ struct SawtApp: App {
     @StateObject private var store = ChatStore.shared
     @StateObject private var call = CallController()
     @Environment(\.scenePhase) private var phase
+    @State private var bgTask: Task<Void, Never>?
 
     init() {
         CrashCollector.shared.start()
@@ -25,7 +26,11 @@ struct SawtApp: App {
                 .environment(\.locale, Locale(identifier: "ar"))
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
-                .task { models.loadAll() }
+                .task {
+                    // نخلي أول إطار يطلع قبل تحميل النموذج الثقيل
+                    try? await Task.sleep(for: .milliseconds(400))
+                    models.loadAll()
+                }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
                     slog("⚠️ memory warning: footprint=\(RAM.footprintMB)MB avail=\(RAM.availableMB)MB llm=\(AppSettings.shared.llmID) stt=\(AppSettings.shared.sttID) voice=\(AppSettings.shared.voiceID)")
                     Task { await LLMService.shared.trim() }
@@ -36,8 +41,21 @@ struct SawtApp: App {
                 }
                 .onChange(of: phase) { _, p in
                     // الخلفية مو كراش: النظام يقفل التطبيقات اللي بالخلفية عادي
-                    if p == .background { slog("background"); if !AudioIO.shared.ownedByCall { slog.stage("") } }
-                    if p == .active { slog.stage(call.state == .idle ? "idle" : "call") }
+                    if p == .background {
+                        slog("background"); if !AudioIO.shared.ownedByCall { slog.stage("") }
+                        Task { await LLMService.shared.trim() }
+                        bgTask?.cancel()
+                        bgTask = Task {
+                            try? await Task.sleep(for: .seconds(180))
+                            if Task.isCancelled { return }
+                            await models.unloadForBackground()
+                        }
+                    }
+                    if p == .active {
+                        bgTask?.cancel(); bgTask = nil
+                        slog.stage(call.state == .idle ? "idle" : "call")
+                        if models.llm == .idle { models.loadAll() }
+                    }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
                     slog("thermal: \(ThermalWatch.label)")
