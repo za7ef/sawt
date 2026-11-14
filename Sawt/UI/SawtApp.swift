@@ -30,7 +30,8 @@ struct SawtApp: App {
                     slog("⚠️ memory warning: footprint=\(RAM.footprintMB)MB avail=\(RAM.availableMB)MB llm=\(AppSettings.shared.llmID) stt=\(AppSettings.shared.sttID) voice=\(AppSettings.shared.voiceID)")
                     Task { await LLMService.shared.trim() }
                     // الصوت يرجع يتحمل وقت الحاجة؛ نفكه إذا ما فيه مكالمة
-                    if !AudioIO.shared.ownedByCall { SpeechSynth.shared.unload() }
+                    // ما نفك شي إلا إذا الذاكرة فعلًا قليلة (iOS أحيانًا يحذّر والمتبقي كثير)
+                    if !AudioIO.shared.ownedByCall, RAM.availableMB < 1000 { SpeechSynth.shared.unload() }
                     URLCache.shared.removeAllCachedResponses()
                 }
                 .onChange(of: phase) { _, p in

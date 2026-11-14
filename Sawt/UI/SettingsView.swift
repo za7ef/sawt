@@ -6,6 +6,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var usage: Storage.Usage?
     @State private var confirmAll = false
+    @State private var unused: [Storage.ModelFolder] = []
     @State private var shareURL: URL?
 
     var body: some View {
@@ -80,6 +81,16 @@ struct SettingsView: View {
                     } else {
                         HStack { ProgressView(); Text("يحسب…").foregroundStyle(.secondary) }
                     }
+                    if !unused.isEmpty {
+                        Button(role: .destructive) {
+                            for f in unused { models.deleteFolder(f) }
+                            unused = []
+                            Task { await refreshUsage() }
+                        } label: {
+                            LabeledContent("حذف ملفات النماذج غير المستخدمة",
+                                           value: Storage.format(unused.reduce(0) { $0 + $1.bytes }))
+                        }
+                    }
                     Button("حذف ملفات الكاش") {
                         Task.detached { Storage.clearCache() ; await refreshUsage() }
                     }
@@ -123,6 +134,13 @@ struct SettingsView: View {
 
     private func refreshUsage() async {
         let u = await Task.detached(priority: .utility) { Storage.usage() }.value
-        await MainActor.run { usage = u }
+        let d = models.downloaded, s = models.downloadedSTT, busy = models.downloadingID
+        let list = await Task.detached(priority: .utility) {
+            Storage.modelFolders(downloaded: d, downloadedSTT: s).filter { f in
+                if case .llm(let r) = f.kind, r == busy { return false }
+                return f.isOrphan && f.bytes > 1_000_000
+            }
+        }.value
+        await MainActor.run { usage = u; unused = list }
     }
 }
