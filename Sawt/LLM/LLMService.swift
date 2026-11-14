@@ -51,6 +51,17 @@ actor LLMService {
         return out.uppercased().contains("THINK")
     }
 
+    /// مصنّف سريع: هل السؤال يحتاج بحث في الويب (معلومة حديثة أو متغيرة)؟
+    func classifyNeedsSearch(_ text: String) async -> Bool {
+        let sys = """
+        هل يحتاج سؤال المستخدم معلومات حديثة أو متغيرة من الإنترنت (أخبار، أسعار، أحداث جارية، مواعيد، نتائج، منتجات جديدة، شيء بعد ٢٠٢٤)؟         إذا نعم اكتب SEARCH، وإذا يكفيه العلم العام اكتب NO. كلمة وحدة بس.
+        """
+        guard let s = try? stream(system: sys, history: [], user: String(text.prefix(500)), maxTokens: 3) else { return false }
+        var out = ""
+        do { for try await c in s { out += c } } catch { return false }
+        return out.uppercased().contains("SEARCH")
+    }
+
     func warmup(system: String) async {
         guard let id = loadedID, warmedID != id else { return }
         warmedID = id
