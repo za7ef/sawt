@@ -75,6 +75,25 @@ actor LLMService {
         }
     }
 
+    /// اختبار قصير للمعالج: يرجع nil إذا نجح، أو رسالة الخطأ
+    func cpuSelfTest() async -> (ok: Bool, info: String) {
+        guard container != nil else { return (false, "النموذج مو محمّل") }
+        return await ComputeMode.$forced.withValue("cpu") {
+            let t0 = Date()
+            do {
+                let st = try await self.stream(system: "جاوب بكلمة.", history: [], user: "هلا", maxTokens: 8)
+                var out = ""
+                for try await c in st { out += c }
+                let ms = Int(Date().timeIntervalSince(t0) * 1000)
+                slog("llm: cpu self-test ok \(ms)ms out=\(out.prefix(40))")
+                return (true, "\(ms)ms")
+            } catch {
+                slog("llm: cpu self-test failed \(error)")
+                return (false, error.localizedDescription)
+            }
+        }
+    }
+
     /// يُستدعى لما النظام يحذّر من الذاكرة.
     func trim() { MLX.Memory.clearCache() }
 
@@ -169,7 +188,7 @@ actor LLMService {
         return AsyncThrowingStream { cont in
             // أولوية userInitiated (مو background) عشان المعالج يشتغل بسرعة في الخلفية والمايك مفتوح
             let task = Task(priority: .userInitiated) {
-                let mode = ComputeMode.current
+                let mode = ComputeMode.forced ?? ComputeMode.current
                 var dev = ComputeMode.device(for: mode)
                 if dev == nil {
                     // كرت الشاشة ممنوع في الخلفية: نوقف بدل ما يطيح التطبيق
@@ -187,6 +206,9 @@ actor LLMService {
                     var finished = false
                     let t0 = Date()
                     var chunks = 0
+                    // أخطاء MLX (مثل عملية ما لها نسخة على المعالج) ترجع خطأ بدل ما تطيّح التطبيق
+                    let mlxErr = MLXErrBox()
+                    await withErrorHandler({ m in mlxErr.set(m) }) {
                     await Device.withDefaultDevice(useCPU ? Device.cpu : Device.gpu) {
                 for (i, make) in attempts.enumerated() {
                     let (session, prompt) = make()
@@ -200,6 +222,7 @@ actor LLMService {
                             if Task.isCancelled { break }
                             // التطبيق راح للخلفية وإحنا على كرت الشاشة: نوقف قبل ما يرفض النظام الشغل
                             if !useCPU && !AppPhase.active { interrupted = true; break }
+                            if mlxErr.message != nil { break }
                             chunks += 1
                             var text = pendingTag + chunk
                             pendingTag = ""
@@ -238,7 +261,20 @@ actor LLMService {
                     }
                 }
                     }
+                    }
                     let dt = Date().timeIntervalSince(t0)
+                    if let m = mlxErr.message {
+                        slog("llm: mlx error device=\(useCPU ? "cpu" : "gpu"): \(m)")
+                        if useCPU { ComputeMode.cpuError = m }
+                        MLX.Memory.clearCache()
+                        // تلقائي والمعالج فشل وإحنا قدّام: نرجع لكرت الشاشة
+                        if useCPU, mode == "auto", AppPhase.active, !anyYielded, round == 1, !Task.isCancelled {
+                            dev = "gpu"
+                            continue
+                        }
+                        cont.finish(throwing: MLXRunError(message: m, cpu: useCPU))
+                        return
+                    }
                     if chunks > 1 {
                         slog("llm: device=\(useCPU ? "cpu" : "gpu") \(chunks) tok in \(Int(dt * 1000))ms ≈ \(String(format: "%.1f", Double(chunks) / max(dt, 0.001))) tok/s")
                     }
@@ -287,6 +323,10 @@ actor LLMService {
 
 /// طريقة تشغيل النموذج: "gpu" كرت الشاشة، "cpu" المعالج، "auto" كرت الشاشة قدّام والمعالج في الخلفية
 enum ComputeMode {
+    /// لاختبار جهاز معيّن (اختبار المعالج من الإعدادات)
+    @TaskLocal static var forced: String?
+    /// آخر خطأ من MLX على المعالج (يطلع في الإعدادات)
+    nonisolated(unsafe) static var cpuError: String?
     static var current: String { UserDefaults.standard.string(forKey: "llmDevice") ?? "gpu" }
     /// nil = ممنوع الحين (كرت الشاشة بس والتطبيق في الخلفية)
     static func device(for mode: String) -> String? {
@@ -310,4 +350,20 @@ enum AppPhase {
 
 struct BackgroundPause: LocalizedError {
     var errorDescription: String? { "افتح التطبيق عشان أكمل" }
+}
+
+final class MLXErrBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _m: String?
+    var message: String? { lock.lock(); defer { lock.unlock() }; return _m }
+    func set(_ m: String) { lock.lock(); if _m == nil { _m = m }; lock.unlock() }
+}
+
+struct MLXRunError: LocalizedError {
+    var message: String
+    var cpu: Bool
+    var errorDescription: String? {
+        cpu ? "النموذج ما اشتغل على المعالج: \(message.prefix(160)). رجّع «تشغيل النموذج» لكرت الشاشة."
+            : "صار خطأ في النموذج: \(message.prefix(160))"
+    }
 }
