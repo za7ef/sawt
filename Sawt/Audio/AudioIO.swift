@@ -108,10 +108,15 @@ final class AudioIO {
             }
             slog("audio: engine configuration change → quick restart")
             do {
+                // بعد تغيّر الإعدادات المشغّل أحيانًا يبقى موصول بصيغة قديمة فيطلع أول رد بدون صوت:
+                // نعيد توصيله ونصفّر حالته قبل ما نكمل
+                self.player.stop()
+                self.engine.disconnectNodeOutput(self.player)
+                self.engine.connect(self.player, to: self.engine.mainMixerNode, format: self.playFormat)
                 self.engine.prepare()
                 try self.engine.start()
                 self.player.play()
-                slog("audio: resumed")
+                slog("audio: resumed (player reconnected)")
             } catch {
                 slog("audio: quick restart failed \(error) → full restart")
                 self.restart()
