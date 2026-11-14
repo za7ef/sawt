@@ -12,7 +12,29 @@ final class NetworkGate: ObservableObject {
         didSet { UserDefaults.standard.set(on, forKey: "netOn") }
     }
 
-    private init() { on = UserDefaults.standard.bool(forKey: "netOn") }
+    /// تلقائي: يبحث بس لما السؤال يحتاج معلومة حديثة (on لازم يكون شغال)
+    @Published var auto: Bool {
+        didSet { UserDefaults.standard.set(auto, forKey: "netAuto") }
+    }
+
+    enum Mode { case off, auto, on }
+    var mode: Mode { !on ? .off : (auto ? .auto : .on) }
+    var modeLabel: String {
+        switch mode { case .off: "طافي"; case .auto: "تلقائي"; case .on: "دايم" }
+    }
+    /// طافي ← تلقائي ← دايم ← طافي
+    func cycle() {
+        switch mode {
+        case .off: auto = true; on = true
+        case .auto: auto = false
+        case .on: on = false
+        }
+    }
+
+    private init() {
+        on = UserDefaults.standard.bool(forKey: "netOn")
+        auto = UserDefaults.standard.bool(forKey: "netAuto")
+    }
 
     /// مسموح الحين؟ إذا مقفول يسأل المستخدم سماح لهالمرة بس.
     /// التنبيه يطلع من UIKit فوق أعلى شاشة (حتى لو فيه sheet مفتوح)، وإذا ما قدر يعرضه يرجع "لا" بدل ما يعلّق.

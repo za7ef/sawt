@@ -15,6 +15,8 @@ struct Message: Identifiable, Codable, Equatable {
     /// تفكير النموذج (تفكير عميق) — للعرض بس، ما يرجع للسجل أبدًا
     var thinking: String?
     var thinkSeconds: Double?
+    /// البحث في الويب اشتغل تلقائيًا
+    var autoSearch: Bool?
     /// التفكير اشتغل تلقائيًا (وضع تلقائي)
     var autoThink: Bool?
     /// مصادر بحث الويب
@@ -206,7 +208,7 @@ final class ChatStore: ObservableObject {
         return (think.trimmingCharacters(in: .whitespacesAndNewlines), String(s[r.upperBound...]))
     }
 
-    func send(_ text: String, attachments: [Attachment] = [], web: Bool = false,
+    func send(_ text: String, attachments: [Attachment] = [], web webAlways: Bool = false, webAuto: Bool = false,
               onFail: @escaping (String) -> Void = { _ in }) {
         var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty || !attachments.isEmpty, !isGenerating else { return }
@@ -218,6 +220,7 @@ final class ChatStore: ObservableObject {
         let autoRule = verdict == .yes
         let thinkRule = (mode == .on || autoRule) && !ThermalWatch.isHot
         let askClassifier = verdict == .unsure && !ThermalWatch.isHot
+        let searchVerdict = webAuto ? SearchHeuristic.verdict(t) : .no
         // آخر الرسائل بحد أقصى ~6000 حرف (عشان سياق النموذج والذاكرة). التفكير ما يدخل السجل.
         var budget = 6000
         var recent: [Message] = []
@@ -257,7 +260,15 @@ final class ChatStore: ObservableObject {
             let thinkAcc = TextAccumulator()
             var auto = autoRule
             var think = thinkRule
+            var web = webAlways || searchVerdict == .yes
+            var searchedAuto = searchVerdict == .yes
             do {
+                if searchVerdict == .unsure {
+                    let c0 = Date()
+                    let need = await LLMService.shared.classifyNeedsSearch(t)
+                    slog("chat: search classifier → \(need) in \(Int(Date().timeIntervalSince(c0) * 1000))ms")
+                    if need { web = true; searchedAuto = true }
+                }
                 // القواعد مو متأكدة: مصنّف سريع (رمز أو رمزين) يقرر إذا السؤال يحتاج تفكير
                 if askClassifier {
                     let c0 = Date()
@@ -345,6 +356,7 @@ final class ChatStore: ObservableObject {
                     if auto { reply.autoThink = true }
                 }
                 if !sources.isEmpty { reply.sources = sources }
+                if searchedAuto { reply.autoSearch = true }
                 reply.notice = notice
                 append(reply, to: convID)
                 MemoryStore.shared.extractLater(exchanges: [(t, answer)]) { [weak self] in
