@@ -167,7 +167,8 @@ actor LLMService {
         if !reuse || !hadSession { callTurns = 0 }
 
         return AsyncThrowingStream { cont in
-            let task = Task {
+            // أولوية userInitiated (مو background) عشان المعالج يشتغل بسرعة في الخلفية والمايك مفتوح
+            let task = Task(priority: .userInitiated) {
                 let mode = ComputeMode.current
                 var dev = ComputeMode.device(for: mode)
                 if dev == nil {
