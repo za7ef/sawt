@@ -7,6 +7,9 @@ struct ModelsView: View {
     @State private var customRepo = ""
     @State private var refresh = 0
     @State private var confirmDelete: LLMOption?
+    @State private var confirmSTT: STTOption?
+    @State private var confirmAll = false
+    @State private var files: [Storage.ModelFolder] = []
 
     private let ramGB = Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824
 
@@ -53,6 +56,12 @@ struct ModelsView: View {
                                 else if models.downloadedSTT.contains(s.id) {
                                     Image(systemName: "arrow.down.circle.fill").foregroundStyle(.secondary)
                                 }
+                                if s.id != "apple" && models.downloadedSTT.contains(s.id) {
+                                    Button(role: .destructive) { confirmSTT = s } label: {
+                                        Image(systemName: "trash")
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
                             }
                         }
                     }
@@ -69,8 +78,46 @@ struct ModelsView: View {
                         Text("اضغط على النموذج عشان ينزل ويشتغل.")
                     }
                 }
+
+                Section {
+                    if files.isEmpty {
+                        Text("ما فيه ملفات نماذج على الجهاز").foregroundStyle(.secondary)
+                    }
+                    ForEach(files) { f in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(f.name).font(.subheadline).lineLimit(1)
+                                    .environment(\.layoutDirection, .leftToRight)
+                                Text(f.statusText).font(.caption).foregroundStyle(f.isOrphan ? .orange : .secondary)
+                            }
+                            Spacer()
+                            Text(Storage.format(f.bytes)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                            Button(role: .destructive) {
+                                models.deleteFolder(f)
+                                reloadFiles()
+                            } label: { Image(systemName: "trash") }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                    Button("حذف كل النماذج", role: .destructive) { confirmAll = true }
+                } header: {
+                    Text("الملفات على الجهاز")
+                } footer: {
+                    Text("كل مجلدات النماذج الموجودة فعليًا، حتى التنزيلات الناقصة والقديمة.")
+                }
             }
+            .task { reloadFiles() }
             .id(refresh)
+            .confirmationDialog("تحذف نموذج السمع؟", isPresented: Binding(get: { confirmSTT != nil },
+                                                                     set: { if !$0 { confirmSTT = nil } }),
+                                titleVisibility: .visible) {
+                Button("حذف من الجهاز", role: .destructive) {
+                    if let s = confirmSTT { models.deleteSTT(s.id); reloadFiles() }
+                }
+            }
+            .confirmationDialog("تحذف كل النماذج من الجوال؟", isPresented: $confirmAll, titleVisibility: .visible) {
+                Button("حذف الكل", role: .destructive) { models.deleteAllModels(); reloadFiles() }
+            }
             .navigationTitle("النماذج")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -82,6 +129,7 @@ struct ModelsView: View {
                 Button("حذف من الجهاز", role: .destructive) {
                     if let m = confirmDelete {
                         models.delete(m)
+                        reloadFiles()
                         if m.custom { Catalog.removeCustom(m.id); refresh += 1 }
                     }
                 }
@@ -158,6 +206,14 @@ struct ModelsView: View {
             HStack(spacing: 6) { ProgressView().controlSize(.small); Text("يجهّز…").font(.caption) }
         case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
         case .idle: EmptyView()
+        }
+    }
+
+    private func reloadFiles() {
+        Task {
+            let down = models.downloaded, downS = models.downloadedSTT
+            let list = await Task.detached(priority: .utility) { Storage.modelFolders(downloaded: down, downloadedSTT: downS) }.value
+            files = list
         }
     }
 }

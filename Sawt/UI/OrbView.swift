@@ -5,6 +5,7 @@ struct OrbView: View {
     var mic: Float
     var out: Float
     var state: CallController.State
+    var animated = true
 
     @State private var smoothMic: Double = 0
     @State private var smoothOut: Double = 0
@@ -19,7 +20,8 @@ struct OrbView: View {
     }
 
     var body: some View {
-        TimelineView(.animation) { ctx in
+        // 30 إطار بالثانية (15 لو الجوال حار) بدل 120، أخف بكثير على كرت الشاشة
+        TimelineView(.animation(minimumInterval: ThermalWatch.isHot ? 1.0 / 15 : 1.0 / 30, paused: !animated)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             let energy = max(smoothMic, smoothOut)
             let thinkPulse = state == .thinking ? 0.06 * sin(t * 4) : 0
@@ -37,7 +39,7 @@ struct OrbView: View {
                                                  endPoint: CGPoint(x: size.width, y: size.height)))
                 }
                 // الطبقات الداخلية
-                for i in 0..<3 {
+                for i in 0..<2 {
                     let k = Double(i)
                     gc.drawLayer { l in
                         l.addFilter(.blur(radius: 6 + k * 4))

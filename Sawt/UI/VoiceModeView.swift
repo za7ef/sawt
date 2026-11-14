@@ -8,12 +8,14 @@ struct VoiceModeView: View {
     @EnvironmentObject var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
     @State private var showCaptions = true
+    @AppStorage("showDebug") private var showDebug = true
 
     var body: some View {
         ZStack {
             background
             VStack(spacing: 0) {
                 header
+                if showDebug { DebugOverlay(debug: call.debug).padding(.horizontal, 16).padding(.top, 8) }
                 Spacer()
                 OrbView(mic: call.micLevel, out: call.outLevel, state: call.state)
                     .frame(width: 260, height: 260)
@@ -70,7 +72,10 @@ struct VoiceModeView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Color.clear.frame(width: 44, height: 44)
+            Button { showDebug.toggle() } label: {
+                Image(systemName: showDebug ? "ladybug.fill" : "ladybug").frame(width: 44, height: 44)
+            }
+            .buttonStyle(.glass).buttonBorderShape(.circle)
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
@@ -131,4 +136,47 @@ struct VoiceModeView: View {
             }
         }
     }
+}
+
+/// لوحة تشخيص صغيرة: توضح وين يعلق.
+struct DebugOverlay: View {
+    let debug: CallController.Debug
+    @State private var shareURL: URL?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("الحالة: \(debug.stage)").bold()
+                Spacer()
+                Circle().fill(debug.vadSpeech ? .green : .gray).frame(width: 9, height: 9)
+                Text(String(format: "%.0f dB", debug.micDB)).monospacedDigit()
+            }
+            Text("آخر كلام: \(debug.lastTranscript.isEmpty ? "—" : debug.lastTranscript)").lineLimit(2)
+            Text("سمع \(debug.sttMs)ms • أول كلمة \(debug.firstTokenMs)ms • أول صوت \(debug.firstAudioMs)ms")
+                .monospacedDigit()
+            HStack {
+                Text("ذاكرة \(debug.ramMB)MB • متبقي \(debug.availMB)MB • حرارة \(debug.thermal)").monospacedDigit()
+                Spacer()
+                Button { shareURL = Log.shared.export() } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .padding(10)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) {
+            if let u = shareURL { ActivityView(items: [u]) }
+        }
+    }
+}
+
+struct ActivityView: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }

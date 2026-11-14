@@ -19,6 +19,14 @@ struct SawtApp: App {
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
                 .task { models.loadAll() }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                    slog("⚠️ memory warning")
+                    Task { await LLMService.shared.trim() }
+                    URLCache.shared.removeAllCachedResponses()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
+                    slog("thermal: \(ThermalWatch.label)")
+                }
         }
     }
 }

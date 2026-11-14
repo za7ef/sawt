@@ -214,7 +214,7 @@ struct EmptyState: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            OrbView(mic: 0, out: 0, state: .idle)
+            OrbView(mic: 0, out: 0, state: .idle, animated: false)
                 .frame(width: 110, height: 110)
                 .scaleEffect(appear ? 1 : 0.6)
                 .opacity(appear ? 1 : 0)

@@ -2,6 +2,8 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject var store: ChatStore
+    @EnvironmentObject var models: ModelManager
+    @State private var orphans: [Storage.ModelFolder] = []
     @State private var drawerOpen = false
     @State private var drag: CGFloat = 0
     private let drawerWidth: CGFloat = 300
@@ -30,6 +32,22 @@ struct RootView: View {
                     }
             }
             .background(Theme.bg.ignoresSafeArea())
+            .task {
+                // بعد الفتح بشوي: ندوّر على تنزيلات ناقصة أو ملفات قديمة
+                try? await Task.sleep(for: .seconds(3))
+                if models.downloadingID == nil { orphans = await models.orphanFolders() }
+                if !orphans.isEmpty { slog("orphans: \(orphans.map(\.name))") }
+            }
+            .alert("فيه ملفات نماذج ناقصة أو قديمة",
+                   isPresented: Binding(get: { !orphans.isEmpty }, set: { if !$0 { orphans = [] } })) {
+                Button("احذفها", role: .destructive) {
+                    for f in orphans { models.deleteFolder(f) }
+                    orphans = []
+                }
+                Button("خلها", role: .cancel) { orphans = [] }
+            } message: {
+                Text("\(orphans.count) مجلد بحجم \(Storage.format(orphanBytes)) ما تستخدمها. تحذفها عشان تفضي مساحة؟")
+            }
             .gesture(
                 DragGesture(minimumDistance: 20)
                     .onChanged { v in
@@ -46,6 +64,8 @@ struct RootView: View {
             )
         }
     }
+
+    private var orphanBytes: Int64 { orphans.reduce(0) { $0 + $1.bytes } }
 
     private func setDrawer(_ open: Bool) {
         withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
