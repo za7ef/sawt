@@ -26,8 +26,6 @@ final class CallController: ObservableObject {
     /// الكاميرا شغالة في المكالمة (طافية افتراضيًا)
     @Published var cameraOn = false
     @Published var cameraBusy = false
-    /// صوت بديل وقت الكاميرا: نماء + نموذج النظر + ترميز الصورة يتعدون ذاكرة الجوال (انقفل التطبيق في بناء 108)
-    private var voiceOverride: VoiceOption?
     /// تنبيه قصير يظهر في شاشة المكالمة
     @Published var notice: String?
 
@@ -196,7 +194,6 @@ final class CallController: ObservableObject {
     func end() {
         cancelReply(recordPartial: true)
         if cameraOn { cameraOn = false }
-        voiceOverride = nil
         notice = nil
         Task { @MainActor in CallCamera.shared.stop() }
         CallController.isActive = false
@@ -240,11 +237,6 @@ final class CallController: ObservableObject {
             cameraOn = false
             CallCamera.shared.stop()
             slog("call: camera off")
-            if voiceOverride != nil {
-                voiceOverride = nil
-                SpeechSynth.shared.prepare(AppSettings.shared.voice)   // يرجّع نماء
-                notice = nil
-            }
             return
         }
         guard AppSettings.shared.llm.vision else {
@@ -258,19 +250,6 @@ final class CallController: ObservableObject {
             return
         }
         cancelReply(recordPartial: true)
-        if AppSettings.shared.voice.kind == .namaa {
-            // نفك نماء قبل نموذج النظر ونتكلم بنبرة لين تطفي الكاميرا
-            let alt = Catalog.voices.first { $0.id == "nabra-saudi" }
-                ?? Catalog.voices.first { $0.id == "nabra-msa" }
-                ?? Catalog.voices.first { $0.kind == .apple }
-            if let alt {
-                voiceOverride = alt
-                NamaaEngine.shared.unload()
-                SpeechSynth.shared.prepare(alt)
-                notice = "مع الكاميرا الصوت صار \(alt.title) عشان الذاكرة. يرجع نماء لما تطفيها."
-                slog("call: camera with namaa → voice \(alt.id), namaa unloaded")
-            }
-        }
         let ok = await ModelManager.shared.ensureVision()
         await LLMService.shared.resetCallSession()   // النموذج تغيّر: الجلسة القديمة ما تصلح
         lastMemBlock = ""
@@ -605,7 +584,7 @@ final class CallController: ObservableObject {
         proc.async { self.aiActive = true }
 
         let settings = AppSettings.shared
-        let voice = voiceOverride ?? settings.voice
+        let voice = settings.voice
         let rate = settings.speechRate
         let hist = history()
         // التعليمات ثابتة (الجلسة تنعاد استخدامها)، والذاكرة المناسبة تنحط مع كل دور
@@ -615,10 +594,10 @@ final class CallController: ObservableObject {
         // الصورة تاخذ ذاكرة كثير وقت الترميز: نتخطاها إذا الذاكرة قليلة
         var picked: URL? = nil
         if cameraOn {
-            if RAM.availableMB < (NamaaEngine.shared.isLoaded ? 2800 : 2300) {
+            if RAM.availableMB < (NamaaEngine.shared.isLoaded ? 2600 : 2300) {
                 slog("call: skip camera frame, low memory avail=\(RAM.availableMB)MB")
             } else {
-                picked = CallCamera.shared.snapshot(maxSide: 448)
+                picked = CallCamera.shared.snapshot(maxSide: 384)   // أصغر = رموز صورة أقل وذاكرة أقل
             }
         }
         let frame = picked
@@ -714,6 +693,15 @@ final class CallController: ObservableObject {
                     && (ChatStore.shared.thinkMode == .on || ThinkHeuristic.shouldThink(text))
                 if think { slog("call: auto think") }
                 if frame != nil || think { await LLMService.shared.resetCallSession() }
+                // دور الصورة: نماء ونموذج النظر ما يشتغلون على الـGPU مع بعض (ذروة الذاكرة قفلت التطبيق في 108):
+                // نوقف نماء بعد ما يخلص جملته الحالية، ونفضي كاش MLX، ونرجعه أول ما يطلع أول رمز
+                var namaaHeld = false
+                if frame != nil, NamaaEngine.shared.isLoaded {
+                    await NamaaEngine.shared.hold()
+                    namaaHeld = true
+                    slog("call: namaa held for image prefill avail=\(RAM.availableMB)MB")
+                }
+                defer { if namaaHeld { NamaaEngine.shared.release() } }
                 if !(await LLMService.shared.hasCallSession) { self.lastMemBlock = "" }
                 var userText = (mem.isEmpty || mem == self.lastMemBlock) ? text : "[\(mem)]\n\n\(text)"
                 if frame != nil {
@@ -726,6 +714,7 @@ final class CallController: ObservableObject {
                                                                 images: frame.map { [$0] } ?? [], think: think)
                 for try await chunk in stream {
                     if Task.isCancelled || myID != self.replyID { break }
+                    if namaaHeld { NamaaEngine.shared.release(); namaaHeld = false }
                     if full.isEmpty {
                         self.debug.firstTokenMs = Int(Date().timeIntervalSince(self.turnStart) * 1000)
                         slog("llm: first token after \(self.debug.firstTokenMs)ms")
@@ -804,7 +793,7 @@ final class CallController: ObservableObject {
         guard llmDone, ttsDone, played >= enqueued, state == .thinking || state == .speaking else { return }
         state = .listening
         slog.stage("call:listening")
-        if AppSettings.shared.voice.kind == .namaa { NamaaEngine.shared.renderNextFiller() }
+        if AppSettings.shared.voice.kind == .namaa, !cameraOn { NamaaEngine.shared.renderNextFiller() }
         Task { @MainActor in _ = self.pendingSTTReload() }
         proc.async { self.aiActive = false }
     }
