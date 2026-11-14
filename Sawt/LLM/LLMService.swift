@@ -42,21 +42,23 @@ actor LLMService {
 
     /// يرجع تدفق نص الرد. السجل يحتوي الرسائل السابقة بدون الرسالة الحالية.
     /// إذا رفض قالب المحادثة (بعض النماذج ما تقبل رسالة النظام)، نعيد المحاولة بدمج التعليمات في رسالة المستخدم.
-    func stream(system: String, history: [Chat.Message], user: String) throws -> AsyncThrowingStream<String, Error> {
+    func stream(system: String, history: [Chat.Message], user: String, maxTokens: Int = 400) throws -> AsyncThrowingStream<String, Error> {
         guard let container else { throw SawtError.notReady("النموذج اللغوي") }
         var params = GenerateParameters()
-        params.maxTokens = ThermalWatch.isHot ? 200 : 400
+        params.maxTokens = ThermalWatch.isHot ? min(200, maxTokens) : maxTokens
         params.maxKVSize = 4096
         params.temperature = 0.7
         params.topP = 0.9
-        let isQwen = (loadedID ?? "").lowercased().contains("qwen")
-        let sys = isQwen ? system + "\n/no_think" : system
+        // وضع التفكير موجود بس في عائلة Qwen3 (ومنها Qwen3.5)، مو Qwen2.5
+        let isQwen3 = (loadedID ?? "").lowercased().contains("qwen3")
+        let sys = isQwen3 ? system + "\n/no_think" : system
+        let ctx: [String: any Sendable]? = isQwen3 ? ["enable_thinking": false] : nil
 
         // المحاولة الأولى: رسالة نظام عادية. الثانية: بدون رسالة نظام وبتناوب صارم.
         let attempts: [() -> (ChatSession, String)] = [
             {
                 (ChatSession(container, instructions: sys, history: history, generateParameters: params,
-                             additionalContext: isQwen ? ["enable_thinking": false] : nil), user)
+                             additionalContext: ctx), user)
             },
             {
                 let merged = Self.strictAlternation(history)
@@ -67,7 +69,8 @@ actor LLMService {
                 if !hist.isEmpty, case .user = hist[0].role {
                     hist[0] = .user("تعليمات: \(sys)\n\n" + hist[0].content)
                 }
-                return (ChatSession(container, instructions: nil, history: hist, generateParameters: params), first)
+                return (ChatSession(container, instructions: nil, history: hist, generateParameters: params,
+                                    additionalContext: ctx), first)
             },
         ]
 
