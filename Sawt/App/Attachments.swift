@@ -55,8 +55,8 @@ enum Attachments {
               let small = downscale(image, maxSide: 240).jpegData(compressionQuality: 0.7) else {
             throw AttachmentError.unreadable
         }
-        try big.write(to: a.imageURL, options: .completeFileProtection)
-        try small.write(to: a.thumbURL, options: .completeFileProtection)
+        try big.write(to: a.imageURL, options: .completeFileProtectionUntilFirstUserAuthentication)
+        try small.write(to: a.thumbURL, options: .completeFileProtectionUntilFirstUserAuthentication)
         return a
     }
 

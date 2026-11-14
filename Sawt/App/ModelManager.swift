@@ -239,6 +239,8 @@ final class ModelManager: ObservableObject {
     }
 
     /// يغيّر الصوت: نفك الصوت القديم من الذاكرة، والجديد يتحمل وقت الحاجة.
+    func voiceIdle() { voiceReady = false }
+
     func voiceChanged() {
         voiceReady = false
         SpeechSynth.shared.unload()

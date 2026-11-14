@@ -35,20 +35,14 @@ final class MemoryStore: ObservableObject {
     }()
 
     private init() {
-        if let data = try? Data(contentsOf: fileURL),
-           let list = try? JSONDecoder().decode([MemoryItem].self, from: data) {
+        if let list = SafeFile.load([MemoryItem].self, from: fileURL) {
             items = list
             MemoryStore.snapshot = list
         }
     }
 
     private func save() {
-        let list = items, url = fileURL
-        Task.detached(priority: .utility) {
-            if let data = try? JSONEncoder().encode(list) {
-                try? data.write(to: url, options: [.atomic, .completeFileProtection])
-            }
-        }
+        SafeFile.write(items, to: fileURL)
     }
 
     // MARK: تعديل يدوي
@@ -122,7 +116,13 @@ final class MemoryStore: ObservableObject {
         let words = normalize(s).components(separatedBy: CharacterSet.alphanumerics.inverted)
         var out = Set<String>()
         for var w in words where !w.isEmpty {
+            // حروف ملتصقة شائعة: و/ف/ب/ل/ك + ال (والقهوة → قهوه)
+            if w.count > 4, let f = w.first, "وفبلك".contains(f) {
+                let rest = String(w.dropFirst())
+                if rest.hasPrefix("ال") { w = rest }
+            }
             if w.hasPrefix("ال"), w.count > 3 { w = String(w.dropFirst(2)) }
+            if w.hasPrefix("لل"), w.count > 4 { w = String(w.dropFirst(2)) }
             if w.count < 2 || stop.contains(w) { continue }
             out.insert(w)
         }

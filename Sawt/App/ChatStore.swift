@@ -47,8 +47,7 @@ final class ChatStore: ObservableObject {
     }()
 
     init() {
-        if let data = try? Data(contentsOf: fileURL),
-           let list = try? JSONDecoder().decode([Conversation].self, from: data) {
+        if let list = SafeFile.load([Conversation].self, from: fileURL) {
             conversations = list.sorted { $0.updated > $1.updated }
         }
         currentID = conversations.first?.id
@@ -129,13 +128,7 @@ final class ChatStore: ObservableObject {
         saveTask = Task {
             try? await Task.sleep(for: .milliseconds(500))
             if Task.isCancelled { return }
-            let list = conversations
-            let url = fileURL
-            await Task.detached(priority: .utility) {
-                if let data = try? JSONEncoder().encode(list) {
-                    try? data.write(to: url, options: [.atomic, .completeFileProtection])
-                }
-            }.value
+            SafeFile.write(conversations, to: fileURL)
         }
     }
 
@@ -153,10 +146,13 @@ final class ChatStore: ObservableObject {
         var userMsg = Message(role: .user, text: t)
         if !attachments.isEmpty { userMsg.attachments = attachments }
         append(userMsg)
+        let convID = currentID
         isGenerating = true
         streamingText = ""
         MemoryStore.shared.cancel()
         let system = AppSettings.shared.systemPrompt(chat: true, query: t)
+        genID += 1
+        let myGen = genID
         genTask = Task {
             var full = ""
             do {
@@ -177,7 +173,7 @@ final class ChatStore: ObservableObject {
                 self.error = SawtError.friendly(error).localizedDescription
                 if full.isEmpty {
                     // ما فيه رد: نشيل رسالتك ونرجعها لخانة الكتابة عشان ما تتكرر
-                    if let i = conversations.firstIndex(where: { $0.id == currentID }) {
+                    if let i = conversations.firstIndex(where: { $0.id == convID }) {
                         conversations[i].messages.removeAll { $0.id == userMsg.id }
                         save()
                     }
@@ -186,15 +182,17 @@ final class ChatStore: ObservableObject {
             }
             let answer = full.trimmingCharacters(in: .whitespacesAndNewlines)
             if !answer.isEmpty {
+                // الرد يروح لنفس المحادثة حتى لو تنقّلت لغيرها، ومرة وحدة بس (حتى مع الإيقاف)
                 let reply = Message(role: .assistant, text: answer)
-                append(reply)
-                let convID = currentID
+                append(reply, to: convID)
                 MemoryStore.shared.extractLater(exchanges: [(t, answer)]) { [weak self] in
                     self?.markMemorySaved(reply.id, in: convID)
                 }
             }
-            streamingText = ""
-            isGenerating = false
+            if genID == myGen {
+                streamingText = ""
+                isGenerating = false
+            }
             slog.stage("idle")
             slog("chat: gen done \(full.count) chars")
         }
@@ -239,14 +237,21 @@ final class ChatStore: ObservableObject {
         save()
     }
 
+    private var genID = 0
+
+    /// يوقف التوليد؛ المهمة نفسها تحفظ الجزء اللي انكتب (عشان ما يتكرر الرد).
     func stop() {
         genTask?.cancel()
         genTask = nil
-        if isGenerating {
-            let partial = streamingText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !partial.isEmpty { append(Message(role: .assistant, text: partial)) }
-        }
+        genID += 1
         streamingText = ""
         isGenerating = false
+    }
+
+    func append(_ m: Message, to conv: UUID?) {
+        guard let conv, let i = conversations.firstIndex(where: { $0.id == conv }) else { append(m); return }
+        conversations[i].messages.append(m)
+        conversations[i].updated = Date()
+        save()
     }
 }

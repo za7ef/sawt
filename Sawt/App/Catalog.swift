@@ -167,10 +167,14 @@ final class AppSettings: ObservableObject {
     """
 
     /// التعليمات الكاملة وقت التشغيل: الشخصية + الاسم وصيغة المخاطبة (إذا محددة) + الذاكرة.
-    func systemPrompt(chat: Bool, query: String) -> String {
+    func systemPrompt(chat: Bool, query: String, memory: Bool = true) -> String {
         var s = persona
         if chat {
             s = s.replacingOccurrences(of: "تتكلم معه في مكالمة صوتية مباشرة.", with: "تكلمه في دردشة كتابية.")
+            s = s.replacingOccurrences(of: "لا تستخدم قوائم ولا رموز ولا إيموجي ولا تنسيق، لأن كلامك يتحول لصوت.",
+                                       with: "في الدردشة تقدر تستخدم قوائم وتنسيق Markdown وكود إذا يفيد، وطوّل إذا السؤال يحتاج.")
+            s = s.replacingOccurrences(of: "ردودك قصيرة وطبيعية كأنك صاحبه تتكلم مو تكتب: جملة إلى ثلاث جمل غالبًا.",
+                                       with: "ردودك واضحة ومباشرة، قصيرة إذا السؤال بسيط.")
         }
         var extra: [String] = []
         let name = userName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -181,8 +185,10 @@ final class AppSettings: ObservableObject {
         default: break
         }
         if !extra.isEmpty { s += "\n" + extra.joined(separator: "\n") }
-        let mem = MemoryStore.promptBlock(for: query)
-        if !mem.isEmpty { s += "\n\n" + mem }
+        if memory {
+            let mem = MemoryStore.promptBlock(for: query)
+            if !mem.isEmpty { s += "\n\n" + mem }
+        }
         return s
     }
 
@@ -208,7 +214,7 @@ final class AppSettings: ObservableObject {
         } else {
             // ترقية أي شخصية افتراضية قديمة (كانت فيها معلومات شخصية) للعامة الجديدة
             persona = AppSettings.defaultPersona
-            d.set(persona, forKey: "persona")
+            d.set(AppSettings.defaultPersona, forKey: "persona")
         }
         userName = d.string(forKey: "userName") ?? ""
         addressForm = d.string(forKey: "addressForm") ?? ""
