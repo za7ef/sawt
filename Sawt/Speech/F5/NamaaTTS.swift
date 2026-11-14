@@ -223,7 +223,27 @@ final class NamaaEngine: @unchecked Sendable {
     private var refAudio: [Float] = []
     private var refRMS: Float = 0.1
 
-    static let refText = "ابغاك تحقق معاه بس بشكل ودي لانه سلطان يمر بظروف صعبة شوية. "
+    static let fullRefText = "ابغاك تحقق معاه بس بشكل ودي لانه سلطان يمر بظروف صعبة شوية. "
+    /// المرجع المختصر: أول 2.5 ثانية (تنتهي في سكتة بين 2.2 و2.88 ث بعد «بشكل ودي»).
+    /// المرجع يتعالج مع كل جملة، فتقصيره من 5.5 إلى 2.5 ث يقلل الإطارات تقريبًا للنص.
+    static let shortRefText = "ابغاك تحقق معاه بس بشكل ودي. "
+    static let shortRefSeconds = 2.5
+    private var refText = NamaaEngine.fullRefText
+    /// ثواني التوليد لكل حرف (آخر قياس) لتقدير التأخير
+    private var secPerChar: Double = 0
+    private let statLock = NSLock()
+    /// "ممم" جاهزة بصوت نماء تنقال لو الرد الأول تأخر
+    private var filler: [Float] {
+        get { statLock.lock(); defer { statLock.unlock() }; return _filler }
+        set { statLock.lock(); _filler = newValue; statLock.unlock() }
+    }
+    private var _filler: [Float] = []
+    var fillerSamples: [Float] { filler }
+
+    func estimatedSeconds(_ text: String) -> Double {
+        statLock.lock(); defer { statLock.unlock() }
+        return secPerChar * Double(text.count)
+    }
     static let steps = 16
     static let cfg: Float = 2.0
     static let sway: Float = -1.0
@@ -307,6 +327,16 @@ final class NamaaEngine: @unchecked Sendable {
         let rms = sqrt(refAudio.reduce(Float(0)) { $0 + $1 * $1 } / Float(max(refAudio.count, 1)))
         refRMS = rms
         if rms < 0.1, rms > 0 { refAudio = refAudio.map { $0 * 0.1 / rms } }
+        // نقص المرجع لأول 2.5 ثانية (داخل السكتة) مع تلاشي قصير في الآخر
+        let cut = Int(Self.shortRefSeconds * 24_000)
+        if refAudio.count > cut + 2_400 {
+            refAudio = Array(refAudio.prefix(cut))
+            let fade = 1_200
+            for i in 0 ..< fade { refAudio[cut - fade + i] *= Float(fade - i) / Float(fade) }
+            refText = Self.shortRefText
+        } else {
+            refText = Self.fullRefText
+        }
 
         dit = model; vocos = voc; filterbank = fb
         let s = Date().timeIntervalSince(t0)
@@ -316,12 +346,20 @@ final class NamaaEngine: @unchecked Sendable {
 
     /// يحمّل النموذج بالخلفية إذا كان منزّل.
     func preload() {
-        queue.async { _ = try? self.loadIfNeeded() }
+        queue.async {
+            guard (try? self.loadIfNeeded()) != nil else { return }
+            // تسخين: أول توليد يجهّز النوى، ونحفظ ناتجه كـ"ممم" نغطي فيها تأخير أول رد
+            guard self.filler.isEmpty else { return }
+            if let o = try? self.generate("ممم، طيب", speed: 1.0) {
+                self.filler = o.samples
+                slog("namaa: warmup+filler \(String(format: "%.2f", o.genSeconds))s")
+            }
+        }
     }
 
     func unload() {
         queue.async {
-            self.dit = nil; self.vocos = nil; self.filterbank = nil
+            self.dit = nil; self.vocos = nil; self.filterbank = nil; self.filler = []
             MLX.Memory.clearCache()
         }
     }
@@ -409,7 +447,7 @@ final class NamaaEngine: @unchecked Sendable {
         defer { MLX.Memory.clearCache() }
 
         let gen = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let ref = Self.refText
+        let ref = refText
         let genBytes = gen.utf8.count, refBytes = ref.utf8.count
         let speed = genBytes < 10 ? 0.3 : max(0.5, min(inSpeed, 2.0))
 
@@ -462,6 +500,8 @@ final class NamaaEngine: @unchecked Sendable {
         }
         let genS = Date().timeIntervalSince(t0)
         let audioS = Double(samples.count) / 24_000
+        // الجمل القصيرة جدًا تكلفتها ثابتة تقريبًا فما نحسبها
+        if gen.count >= 20 { statLock.lock(); secPerChar = genS / Double(gen.count); statLock.unlock() }
         slog("namaa: gen \(String(format: "%.2f", genS))s audio \(String(format: "%.2f", audioS))s RTF=\(String(format: "%.2f", genS / max(audioS, 0.01))) steps=\(steps) frames=\(total) ref=\(refAudioLen) ram=\(RAM.footprintMB)MB")
         return Output(samples: samples, genSeconds: genS, audioSeconds: audioS, loadSeconds: loadS)
     }
