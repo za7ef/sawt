@@ -46,5 +46,25 @@ check(ForgetCues.matches("it's no longer true"), "ForgetCues: no longer")
 check(!ForgetCues.matches("الانسان مخلوق عجيب"), "ForgetCues: الانسان مو إشارة")
 check(!ForgetCues.matches("I love research"), "ForgetCues: كلام عادي")
 
+// MemoryLine
+let now0 = Date(timeIntervalSince1970: 1_800_000_000)
+if case .add(let t, let imp, let cat, let exp)? = MemoryLine.parse("+ 4 | ناس | دائم | أخته اسمها سميرة", now: now0) {
+    check(t == "أخته اسمها سميرة" && imp == 4 && cat == "ناس" && exp == nil, "MemoryLine: إضافة كاملة")
+} else { check(false, "MemoryLine: إضافة كاملة") }
+if case .add(_, let imp, _, let exp)? = MemoryLine.parse("+ ٢ | خطط | مؤقت | عنده موعد بكرة", now: now0) {
+    check(imp == 2 && exp == now0.addingTimeInterval(14 * 86_400), "MemoryLine: مؤقت + أرقام عربية")
+} else { check(false, "MemoryLine: مؤقت") }
+if case .add(_, _, _, let exp)? = MemoryLine.parse("+ 3 | خطط | 2026-12-01 | مسافر جدة", now: now0) {
+    check(exp != nil, "MemoryLine: تاريخ انتهاء")
+} else { check(false, "MemoryLine: تاريخ") }
+if case .add(let t, let imp, _, _)? = MemoryLine.parse("+ يحب القهوة بدون سكر") {
+    check(t == "يحب القهوة بدون سكر" && imp == 3, "MemoryLine: الصيغة القديمة")
+} else { check(false, "MemoryLine: القديمة") }
+check(MemoryLine.parse("~ 3: صار يشتغل في الرياض") == .update(index: 3, text: "صار يشتغل في الرياض", importance: nil), "MemoryLine: تحديث")
+check(MemoryLine.parse("~ 2 | 5 | اسم ولده أيان") == .update(index: 2, text: "اسم ولده أيان", importance: 5), "MemoryLine: تحديث بأهمية")
+check(MemoryLine.parse("x ٤") == .delete(index: 4), "MemoryLine: حذف")
+check(MemoryLine.parse("لا شيء") == nil, "MemoryLine: لا شيء")
+check(MemoryLine.hasRememberCue("تذكر إني ما أحب البصل"), "MemoryLine: تذكر")
+
 print(failures == 0 ? "كل الاختبارات نجحت" : "فشل \(failures)")
 exit(failures == 0 ? 0 : 1)
