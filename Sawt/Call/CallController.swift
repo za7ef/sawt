@@ -42,6 +42,9 @@ final class CallController: ObservableObject {
     private var procSpeech = false
     private var turnStart = Date()
     private var tick = 0
+    /// فكّينا نموذج السمع مؤقتًا عشان الذاكرة وقت الرد
+    private var sttUnloaded = false
+    private var sttReload: Task<Void, Never>?
 
     private let audio = AudioIO.shared
     private var meterTimer: Timer?
@@ -98,7 +101,14 @@ final class CallController: ObservableObject {
             // نجهز الصوت هنا (مو وقت فتح التطبيق) عشان الذاكرة
             self.debug.stage = "يجهّز الصوت"
             slog("call: preparing voice")
+            slog.stage("call:tts-load")
             await ModelManager.shared.prepareVoice()
+            slog.stage("call:listening")
+            let avail = RAM.availableMB
+            slog("call: after voice load footprint=\(RAM.footprintMB)MB avail=\(avail)MB")
+            if avail < 1500, !AppSettings.shared.llmID.lowercased().contains("2b") {
+                self.error = "الذاكرة قليلة لهالنموذج في المكالمة (باقي \(avail)MB). إذا انقفل التطبيق، جرّب Qwen3.5 2B."
+            }
             guard self.state == .starting else { return }
             self.proc.sync {
                 self.vad = VoiceDetector()
@@ -162,6 +172,7 @@ final class CallController: ObservableObject {
         meterTimer = nil
         proc.sync { resetProc() }
         state = .idle
+        slog.stage("idle")
         carryUserText = ""
         liveUser = ""
         liveAI = ""
@@ -297,6 +308,8 @@ final class CallController: ObservableObject {
             if let spec, !spec.isCancelled {
                 result = await spec.value
             } else {
+                slog.stage("call:stt")
+                if let reload = await self.pendingSTTReload() { await reload.value }
                 let r = try? await SpeechRecognizer.shared.transcribe(audioCopy, language: lang)
                 result = (r?.text ?? "", r?.language ?? "ar")
             }
@@ -392,12 +405,14 @@ final class CallController: ObservableObject {
         speakTask = Task { @MainActor in
             for await sentence in sentences {
                 if Task.isCancelled || myID != self.replyID { break }
+                slog.stage("call:tts")
                 let audioOut = await SpeechSynth.shared.synthesize(sentence, voice: voice, rate: rate)
                 if Task.isCancelled || myID != self.replyID { break }
                 guard !audioOut.samples.isEmpty else { continue }
                 self.enqueued += 1
                 if self.state == .thinking {
                     self.state = .speaking
+                    slog.stage("call:speaking")
                     self.debug.firstAudioMs = Int(Date().timeIntervalSince(self.turnStart) * 1000)
                     slog("tts: first audio after \(self.debug.firstAudioMs)ms")
                 }
@@ -417,6 +432,8 @@ final class CallController: ObservableObject {
             var pending = ""
             var first = true
             do {
+                try await self.makeRoomForLLM()
+                slog.stage("call:llm")
                 let stream = try await LLMService.shared.stream(system: system, history: hist, user: text, maxTokens: 300)
                 for try await chunk in stream {
                     if Task.isCancelled || myID != self.replyID { break }
@@ -463,9 +480,37 @@ final class CallController: ObservableObject {
         audio.stopPlayback()
     }
 
+    @MainActor private func pendingSTTReload() -> Task<Void, Never>? {
+        if sttUnloaded {
+            sttUnloaded = false
+            slog("mem: reloading stt")
+            sttReload = ModelManager.shared.loadSTT()
+        }
+        return sttReload
+    }
+
+    /// قبل التوليد: نتأكد فيه ذاكرة تكفي، وإلا نفك السمع مؤقتًا، وإلا نوقف برسالة بدل ما ينقفل التطبيق.
+    @MainActor private func makeRoomForLLM() async throws {
+        await LLMService.shared.trim()
+        var avail = RAM.availableMB
+        slog("mem: before llm footprint=\(RAM.footprintMB)MB avail=\(avail)MB")
+        if avail < 1500, AppSettings.shared.sttID != "apple", !sttUnloaded {
+            await SpeechRecognizer.shared.unload()
+            sttUnloaded = true
+            avail = RAM.availableMB
+            slog("mem: unloaded stt for generation → avail=\(avail)MB")
+        }
+        if avail < 600 {
+            let name = AppSettings.shared.llm.title
+            throw SawtError.failed("الذاكرة ما تكفي لتشغيل \(name) في المكالمة (باقي \(avail)MB). جرّب Qwen3.5 2B أو سمع آبل.")
+        }
+    }
+
     private func checkReplyFinished() {
         guard llmDone, played >= enqueued, state == .thinking || state == .speaking else { return }
         state = .listening
+        slog.stage("call:listening")
+        Task { @MainActor in _ = self.pendingSTTReload() }
         proc.async { self.aiActive = false }
     }
 
