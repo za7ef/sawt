@@ -314,7 +314,7 @@ final class N5VocosBackbone: Module {
     let norm: LayerNorm
     let convnext: [N5VocosBlock]
     let final_layer_norm: LayerNorm
-    init() {
+    override init() {
         embed = N5Conv1d(inputChannels: 100, outputChannels: 512, kernelSize: 7, padding: 3)
         norm = LayerNorm(dimensions: 512, eps: 1e-6)
         convnext = (0 ..< 8).map { _ in N5VocosBlock(dim: 512, intermediate: 1536) }

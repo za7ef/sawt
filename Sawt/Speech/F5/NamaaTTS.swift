@@ -31,11 +31,11 @@ final class NamaaVoice: ObservableObject {
         ("https://raw.githubusercontent.com/SWivid/Habibi-TTS/main/src/habibi_tts/assets/Hijazi.wav", "ref.wav", 175_758),
     ]
 
-    static var dir: URL {
+    nonisolated static var dir: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("Namaa", isDirectory: true)
     }
-    static var modelURL: URL { dir.appendingPathComponent("namaa-f16.safetensors") }
+    nonisolated static var modelURL: URL { dir.appendingPathComponent("namaa-f16.safetensors") }
     nonisolated static var isInstalled: Bool {
         let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Namaa", isDirectory: true)
@@ -44,7 +44,7 @@ final class NamaaVoice: ObservableObject {
         }
     }
 
-    static let testSentence = "هلا والله يا محمد، كيف حالك اليوم؟ إن شاء الله أمورك طيبة والشغل ماشي تمام."
+    static let testSentence = "هلا والله، كيف حالك اليوم؟ إن شاء الله أمورك طيبة والشغل ماشي تمام."
 
     private var task: Task<Void, Never>?
 
