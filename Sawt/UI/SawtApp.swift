@@ -20,8 +20,10 @@ struct SawtApp: App {
                 .tint(Theme.accent)
                 .task { models.loadAll() }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
-                    slog("⚠️ memory warning")
+                    slog("⚠️ memory warning: footprint=\(RAM.footprintMB)MB avail=\(RAM.availableMB)MB llm=\(AppSettings.shared.llmID) stt=\(AppSettings.shared.sttID) voice=\(AppSettings.shared.voiceID)")
                     Task { await LLMService.shared.trim() }
+                    // الصوت يرجع يتحمل وقت الحاجة؛ نفكه إذا ما فيه مكالمة
+                    if !AudioIO.shared.ownedByCall { SpeechSynth.shared.unload() }
                     URLCache.shared.removeAllCachedResponses()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in

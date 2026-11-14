@@ -25,6 +25,7 @@ struct ChatView: View {
                 .environment(\.layoutDirection, .rightToLeft)
         }
         .sheet(isPresented: $showModels) { ModelsView() }
+        .onChange(of: dictation.error) { _, e in if let e { store.error = e; dictation.error = nil } }
         .alert("تنبيه", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             Button("تمام", role: .cancel) {}
         } message: { Text(store.error ?? "") }
