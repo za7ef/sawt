@@ -34,6 +34,7 @@ struct SawtApp: App {
                     await updater.check()
                 }
                 .sheet(item: $updater.available) { UpdateSheet(info: $0).environment(\.layoutDirection, .rightToLeft) }
+                .modifier(NetworkGateAlert())
                 .alert("التحديثات", isPresented: Binding(get: { updater.lastMessage != nil },
                                                         set: { if !$0 { updater.lastMessage = nil } })) {
                     Button("تمام", role: .cancel) {}

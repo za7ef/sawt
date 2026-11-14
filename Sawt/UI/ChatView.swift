@@ -19,6 +19,8 @@ struct ChatView: View {
     @State private var showFiles = false
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var attaching = false
+    @ObservedObject private var net = NetworkGate.shared
+    @State private var webAsk = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -140,7 +142,7 @@ struct ChatView: View {
                         MessageRow(message: m).equatable().id(m.id)
                     }
                     if store.isGenerating {
-                        MessageRow(message: Message(role: .assistant, text: store.streamingText), streaming: true)
+                        StreamingRow(live: store.live) { proxy.scrollTo("bottom", anchor: .bottom) }
                             .id("stream")
                     }
                     Color.clear.frame(height: 8).id("bottom")
@@ -149,7 +151,6 @@ struct ChatView: View {
                 .padding(.top, 8)
             }
             .scrollDismissesKeyboard(.interactively)
-            .onChange(of: store.streamingText) { proxy.scrollTo("bottom", anchor: .bottom) }
             .onChange(of: store.current?.messages.count) {
                 withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
@@ -160,7 +161,10 @@ struct ChatView: View {
     // MARK: خانة الكتابة
 
     private func addImage(_ img: UIImage) {
-        do { pending.append(try Attachments.addImage(img)) }
+        do {
+            pending.append(try Attachments.addImage(img))
+            ModelManager.shared.preloadVisionIfUseful()
+        }
         catch { store.error = error.localizedDescription }
     }
 
@@ -219,6 +223,42 @@ struct ChatView: View {
         .padding(.leading, 4)
     }
 
+    /// زر الإنترنت/البحث في الويب: مقفول = التطبيق ما يتصل بالإنترنت أبدًا.
+    private var webButton: some View {
+        Button {
+            if net.on { net.on = false } else { webAsk = true }
+        } label: {
+            Image(systemName: "globe")
+                .font(.body.weight(.medium))
+                .foregroundStyle(net.on ? Theme.accent : Color.secondary)
+                .frame(width: 34, height: 44)
+                .background(net.on ? Theme.accent.opacity(0.18) : .clear, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(net.on ? "بحث في الويب: شغال" : "بحث في الويب: مقفول")
+        .alert("بيتم الوصول للإنترنت", isPresented: $webAsk) {
+            Button("متابعة") { net.on = true }
+            Button("إلغاء", role: .cancel) {}
+        } message: {
+            Text("سؤالك بيروح لمحرك بحث (DuckDuckGo، أو ويكيبيديا كبديل) عشان يجيب صفحات، والباقي يظل على جوالك. لما تقفل الزر ينقطع التطبيق عن الإنترنت.")
+        }
+    }
+
+    /// تفكير عميق (لكل محادثة)
+    private var thinkButton: some View {
+        Button {
+            store.setDeepThink(!store.deepThink)
+        } label: {
+            Image(systemName: "brain")
+                .font(.body.weight(.medium))
+                .foregroundStyle(store.deepThink ? Theme.accent : Color.secondary)
+                .frame(width: 34, height: 44)
+                .background(store.deepThink ? Theme.accent.opacity(0.18) : .clear, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(store.deepThink ? "تفكير عميق: شغال" : "تفكير عميق: طافي")
+    }
+
     private var composer: some View {
         VStack(spacing: 0) {
         pendingBar
@@ -226,6 +266,8 @@ struct ChatView: View {
             HStack(alignment: .bottom, spacing: 10) {
                 HStack(alignment: .bottom, spacing: 8) {
                     attachMenu
+                    thinkButton
+                    webButton
                     TextField(dictation.isRecording ? "أسمعك…" : "اكتب رسالة", text: $draft, axis: .vertical)
                         .lineLimit(1...6)
                         .focused($focused)
@@ -299,7 +341,7 @@ struct ChatView: View {
         let atts = pending
         draft = ""
         pending = []
-        store.send(t, attachments: atts) { failed in draft = failed; pending = atts }
+        store.send(t, attachments: atts, web: net.on) { failed in draft = failed; pending = atts }
     }
 
     private func startVoice() {
@@ -366,6 +408,9 @@ struct MessageRow: View, Equatable {
                         }
                         .buttonStyle(.plain)
                     }
+                    if let th = message.thinking, !th.isEmpty {
+                        ThinkingSection(text: th, seconds: message.thinkSeconds, live: false)
+                    }
                     if streaming && message.text.isEmpty {
                         TypingDots()
                     } else {
@@ -373,6 +418,9 @@ struct MessageRow: View, Equatable {
                             .textSelection(.enabled)
                             .lineSpacing(4)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    if let src = message.sources, !src.isEmpty {
+                        SourcesList(sources: src)
                     }
                     if !streaming {
                         HStack(spacing: 14) {
@@ -416,5 +464,97 @@ struct TypingDots: View {
             }
             .padding(.vertical, 8)
         }
+    }
+}
+
+/// الرد اللي ينكتب الحين: يراقب StreamBuffer بس، فالقائمة ما تنعاد كل كلمة.
+struct StreamingRow: View {
+    @ObservedObject var live: StreamBuffer
+    var onGrow: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let st = live.status {
+                HStack(spacing: 6) { ProgressView().controlSize(.mini); Text(st) }
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if !live.thinking.isEmpty {
+                ThinkingSection(text: live.thinking, seconds: nil, live: live.text.isEmpty)
+            }
+            if live.text.isEmpty {
+                if live.status == nil && live.thinking.isEmpty { TypingDots() }
+            } else {
+                Text(LocalizedStringKey(live.text))
+                    .lineSpacing(4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onChange(of: live.text) { onGrow() }
+    }
+}
+
+/// قسم التفكير: رمادي ومطوي افتراضيًا.
+struct ThinkingSection: View {
+    let text: String
+    let seconds: Double?
+    let live: Bool
+    @State private var open = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { withAnimation(.easeOut(duration: 0.2)) { open.toggle() } } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "brain").font(.caption2)
+                    Text(title).font(.caption)
+                    Image(systemName: open ? "chevron.up" : "chevron.down").font(.caption2)
+                }
+                .foregroundStyle(.gray)
+            }
+            .buttonStyle(.plain)
+            if open {
+                Text(text)
+                    .font(.footnote)
+                    .foregroundStyle(.gray)
+                    .padding(.leading, 10)
+                    .overlay(alignment: .leading) { Rectangle().fill(Color.gray.opacity(0.35)).frame(width: 2) }
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private var title: String {
+        if live { return "يفكر…" }
+        if let s = seconds { return "فكّر لمدة \(max(1, Int(s.rounded())))ث" }
+        return "التفكير"
+    }
+}
+
+/// روابط المصادر تحت الرد.
+struct SourcesList: View {
+    let sources: [WebSource]
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("المصادر").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            ForEach(Array(sources.enumerated()), id: \.offset) { i, s in
+                Button {
+                    if let u = URL(string: s.url), u.scheme == "https" || u.scheme == "http" { openURL(u) }
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("[\(i + 1)]").font(.caption.monospacedDigit())
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(s.title).font(.caption).lineLimit(1)
+                            Text(URL(string: s.url)?.host ?? s.url).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                    .foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
