@@ -166,6 +166,15 @@ final class AppSettings: ObservableObject {
     private let d = UserDefaults.standard
 
     static let defaultPersona = """
+    أنت «صوت»، مساعد ذكي يشتغل على جوال المستخدم.
+    تكلّم بالعربي بلهجة سعودية بيضاء عامية إذا كلمك بالعربي، وبالإنجليزي إذا كلمك بالإنجليزي. مثال: بدل «أنا بخير، شكراً لسؤالك» قل «الحمدلله تمام، وأنت كيفك؟».
+    كن طبيعي كأنك صاحبه، وجاوب على اللي قاله مباشرة بدون مقدمات.
+    نوّع كلامك ولا تكرر نفس العبارات أو نفس بداية الرد، ولا تعيد سؤاله عليه.
+    إذا ما فهمت كلامه اسأله يعيد باختصار.
+    """
+
+    /// الشخصية الافتراضية القديمة (للترقية التلقائية)
+    static let legacyPersona = """
     أنت «صوت»، مساعد ذكي يشتغل على جوال المستخدم بدون إنترنت. تتكلم معه في مكالمة صوتية مباشرة.
     تكلّم بالعربي بلهجة بيضاء طبيعية إذا كلمك بالعربي، وبالإنجليزي إذا كلمك بالإنجليزي.
     ردودك قصيرة وطبيعية كأنك صاحبه تتكلم مو تكتب: جملة إلى ثلاث جمل غالبًا.
@@ -179,6 +188,9 @@ final class AppSettings: ObservableObject {
     func systemPrompt(chat: Bool, query: String, memory: Bool = true) -> String {
         // الوصف القديم "بدون إنترنت" مو دقيق مع البحث في الويب
         var s = persona.replacingOccurrences(of: "يشتغل على جوال المستخدم بدون إنترنت", with: "يشتغل على جوال المستخدم")
+        if UserDefaults.standard.bool(forKey: "netOn") {
+            s = s.replacingOccurrences(of: "بدون إنترنت", with: "").replacingOccurrences(of: "بدون انترنت", with: "")
+        }
         // شخصية أساسية وحدة للدردشة والمكالمة (نفس المحتوى والدقة)، والمكالمة تضيف بس أسلوب الكلام
         s = s.replacingOccurrences(of: "تتكلم معه في مكالمة صوتية مباشرة.", with: chat ? "تكلمه في دردشة كتابية." : "تكلمه الحين في مكالمة صوتية مباشرة.")
         s = s.replacingOccurrences(of: "ردودك قصيرة وطبيعية كأنك صاحبه تتكلم مو تكتب: جملة إلى ثلاث جمل غالبًا.",
@@ -188,6 +200,8 @@ final class AppSettings: ObservableObject {
                                        with: "في الدردشة تقدر تستخدم قوائم وتنسيق Markdown وكود إذا يفيد، وطوّل إذا السؤال يحتاج.")
         } else {
             s = s.replacingOccurrences(of: "لا تستخدم قوائم ولا رموز ولا إيموجي ولا تنسيق، لأن كلامك يتحول لصوت.", with: "")
+            s = s.replacingOccurrences(of: "اكتب الأرقام بالحروف إذا كانت قليلة.", with: "")
+            s += "\nتكلمه الحين في مكالمة صوتية مباشرة. اكتب الأرقام القليلة بالحروف لأنها تنقرا بصوت."
             s += """
 
             أسلوب المكالمة: فكّر في نفس الجواب اللي كنت بتكتبه في الدردشة بنفس الدقة والمعلومات، وقله ملخّص للكلام:             جملتين إلى أربع جمل تغطي النقاط الأساسية بدون ما تغيّر المضمون. إذا طلب تفصيل أو قال كمّل، طوّل.             بدون قوائم ولا رموز ولا إيموجي ولا تنسيق، لأن كلامك يتحول لصوت.
@@ -201,7 +215,8 @@ final class AppSettings: ObservableObject {
         df.calendar = Calendar(identifier: .gregorian)
         df.dateFormat = "EEEE d MMMM yyyy"
         let today = df.string(from: Date())
-        var extra: [String] = ["تاريخ اليوم: \(today) (ميلادي). أي تاريخ قبله صار ماضي؛ لا تتكلم عنه كأنه جاي.",
+        var extra: [String] = ["إذا تعارض شي في الوصف اللي فوق مع التعليمات هذي، التعليمات هذي هي اللي تمشي.",
+                               "تاريخ اليوم: \(today) (ميلادي). أي تاريخ قبله صار ماضي؛ لا تتكلم عنه كأنه جاي.",
                                "لهجتك عامية سعودية بيضاء مو فصحى (إلا إذا كلمك بالإنجليزي أو طلب الفصحى). مثال: بدل «أنا بخير، شكراً لسؤالك» قل «الحمدلله تمام، وأنت كيفك؟».",
                                "حاول تجاوب أول دايمًا. لا ترد بأسئلة كثيرة: سؤال توضيحي واحد بالكثير، وبس إذا ما تقدر تجاوب بدونه. إذا كان لغز أو مسألة، فكّر وحلّها وقل الجواب."]
         let name = userName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -236,7 +251,12 @@ final class AppSettings: ObservableObject {
         voiceID = d.string(forKey: "voiceID") ?? (Catalog.voices.first?.id ?? "apple")
         speechRate = d.object(forKey: "speechRate") as? Double ?? 1.0
         language = d.string(forKey: "language") ?? "auto"
-        if let p = d.string(forKey: "persona"), !p.contains("صوت»، مساعد ذكي") || p == AppSettings.defaultPersona {
+        let isOldDefault: (String) -> Bool = { p in
+            let n = p.trimmingCharacters(in: .whitespacesAndNewlines)
+            return n == AppSettings.legacyPersona.trimmingCharacters(in: .whitespacesAndNewlines)
+                || (p.contains("بدون إنترنت") && p.contains("مكالمة صوتية مباشرة"))
+        }
+        if let p = d.string(forKey: "persona"), !isOldDefault(p) {
             persona = p
         } else {
             // ترقية أي شخصية افتراضية قديمة (كانت فيها معلومات شخصية) للعامة الجديدة
