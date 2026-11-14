@@ -589,6 +589,7 @@ final class CallController: ObservableObject {
         let hist = history()
         // التعليمات ثابتة (الجلسة تنعاد استخدامها)، والذاكرة المناسبة تنحط مع كل دور
         let system = settings.systemPrompt(chat: false, query: "", memory: false)
+            + (NetworkGate.shared.on ? Refusal.onRule : Refusal.offRule)
         let mem = MemoryStore.promptBlock(for: text)
         // الكاميرا شغالة: نلتقط إطار واحد مصغّر مع نهاية كلامك
         // الصورة تاخذ ذاكرة كثير وقت الترميز: نتخطاها إذا الذاكرة قليلة
