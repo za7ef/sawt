@@ -113,17 +113,13 @@ final class SpeechSynth {
         }
         if voice.kind == .namaa {
             // إذا الجملة طويلة ونماء بيتأخر فيها كثير، نقولها بنبرة بدل سكتة طويلة
-            let est = NamaaEngine.shared.estimatedSeconds(clean) * (later ? 0.8 : 1)
-            // الفجوة المتوقعة = وقت التوليد - الصوت الباقي في الطابور. فجوة كبيرة (> 2.5ث) أسوأ من تبديل الصوت
-            let gap = est - (gapBudget ?? est)
-            if CallController.isActive, est > 8 || (gapBudget != nil && gap > 2.5) {
-                slog("tts: namaa est \(String(format: "%.1f", est))s gap \(String(format: "%.1f", gap))s → fallback voice")
-                return await arabicFallback(clean, rate: rate)
-            }
             let s = await NamaaEngine.shared.synthesize(clean, speed: rate, steps: later ? min(NamaaEngine.chosenSteps, 6) : nil)
-            if s.isEmpty {
-                slog("tts: namaa gave nothing → fallback voice")
-                return await arabicFallback(clean, rate: rate)
+            if s.isEmpty, !Task.isCancelled {
+                // ما نبدّل الصوت أبدًا (طلب المستخدم): نعيد المحاولة مرة وحدة بس
+                slog("tts: namaa gave nothing → retry once")
+                let again = await NamaaEngine.shared.synthesize(clean, speed: rate, steps: later ? min(NamaaEngine.chosenSteps, 6) : nil)
+                if again.isEmpty { slog("tts: namaa failed twice, sentence skipped") }
+                return (again, 24_000)
             }
             return (s, 24_000)
         }
