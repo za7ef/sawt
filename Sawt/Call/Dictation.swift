@@ -60,11 +60,29 @@ final class Speaker {
     private var task: Task<Void, Never>?
     private var startedEngine = false
 
-    func speak(_ text: String) {
+    /// يشغّل عينات جاهزة (مثل تجربة صوت نماء).
+    func play(samples: [Float], sampleRate: Double) {
+        stop()
+        guard !AudioIO.shared.ownedByCall, !samples.isEmpty else { return }
+        task = Task {
+            if !AudioIO.shared.isRunning {
+                guard (try? AudioIO.shared.start()) != nil else { return }
+                startedEngine = true
+            }
+            AudioIO.shared.enqueue(samples: samples, sampleRate: sampleRate)
+            while AudioIO.shared.isPlaying {
+                try? await Task.sleep(for: .milliseconds(200))
+                if Task.isCancelled { return }
+            }
+            if startedEngine { AudioIO.shared.stop(); startedEngine = false }
+        }
+    }
+
+    func speak(_ text: String, voice override: VoiceOption? = nil) {
         stop()
         let (parts, rest) = TextCleaner.splitSentences(text + "\n", first: false)
         let sentences = parts + (rest.trimmingCharacters(in: .whitespaces).isEmpty ? [] : [rest])
-        let voice = AppSettings.shared.voice
+        let voice = override ?? AppSettings.shared.voice
         let rate = AppSettings.shared.speechRate
         guard !AudioIO.shared.ownedByCall else { return }
         task = Task {
