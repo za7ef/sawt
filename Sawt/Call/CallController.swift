@@ -24,6 +24,25 @@ final class CallController: ObservableObject {
     @Published var error: String?
     @Published var muted = false
 
+    /// معلومات التشخيص اللي تطلع فوق المكالمة.
+    struct Debug: Equatable {
+        var stage = "—"
+        var micDB: Float = -120
+        var vadSpeech = false
+        var lastTranscript = ""
+        var sttMs = 0
+        var firstTokenMs = 0
+        var firstAudioMs = 0
+        var ramMB = 0
+        var availMB = 0
+        var thermal = ""
+    }
+    @Published private(set) var debug = Debug()
+    private var procDB: Float = -120
+    private var procSpeech = false
+    private var turnStart = Date()
+    private var tick = 0
+
     private let audio = AudioIO.shared
     private var meterTimer: Timer?
 
@@ -76,6 +95,11 @@ final class CallController: ObservableObject {
                 self.state = .idle
                 return
             }
+            // نجهز الصوت هنا (مو وقت فتح التطبيق) عشان الذاكرة
+            self.debug.stage = "يجهّز الصوت"
+            slog("call: preparing voice")
+            await ModelManager.shared.prepareVoice()
+            guard self.state == .starting else { return }
             self.proc.sync {
                 self.vad = VoiceDetector()
                 self.resetProc()
@@ -93,11 +117,25 @@ final class CallController: ObservableObject {
                 return
             }
             self.state = .listening
-            self.meterTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            slog("call: started, stt=\(AppSettings.shared.sttID) llm=\(AppSettings.shared.llmID)")
+            // 15 مرة بالثانية تكفي للرسوم، وأخف على البطارية والحرارة
+            self.meterTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 15, repeats: true) { [weak self] _ in
                 Task { @MainActor in
                     guard let self else { return }
                     self.micLevel = self.muted ? 0 : self.audio.micLevel
                     self.outLevel = self.audio.outLevel
+                    self.tick += 1
+                    var d = self.debug
+                    d.stage = "\(self.state)"
+                    let (db, sp) = self.proc.sync { (self.procDB, self.procSpeech) }
+                    d.micDB = db
+                    d.vadSpeech = sp
+                    if self.tick % 8 == 0 {
+                        d.ramMB = RAM.footprintMB
+                        d.availMB = RAM.availableMB
+                        d.thermal = ThermalWatch.label
+                    }
+                    if d != self.debug { self.debug = d }
                 }
             }
         }
@@ -158,6 +196,8 @@ final class CallController: ObservableObject {
         if inSpeech { utter.append(contentsOf: samples) }
 
         for (speech, db) in vad.process(samples) {
+            procDB = db
+            procSpeech = speech
             if !inSpeech {
                 // أثناء كلام الذكاء نحتاج دليل أقوى عشان ما يقاطع نفسه من بقايا الصدى
                 let need = aiActive ? 7 : 3
@@ -210,6 +250,7 @@ final class CallController: ObservableObject {
 
     private func startSpeculative() {
         let snapshot = utter
+        slog("stt: speculative \(snapshot.count / 16)ms")
         let lang = Self.whisperLanguage()
         let task = Task<(String, String), Never> {
             let r = try? await SpeechRecognizer.shared.transcribe(snapshot, language: lang)
@@ -227,6 +268,7 @@ final class CallController: ObservableObject {
 
     private func commitTurn() {
         inSpeech = false
+        slog("turn: commit \(utter.count / 16)ms audio, spec=\(specTask != nil)")
         let audioCopy = utter
         utter.removeAll()
         let spec = specTask
@@ -234,6 +276,7 @@ final class CallController: ObservableObject {
         specText = nil
         aiActive = true
         let lang = Self.whisperLanguage()
+        let t0 = Date()
         Task {
             var result: (String, String)
             if let spec, !spec.isCancelled {
@@ -242,7 +285,13 @@ final class CallController: ObservableObject {
                 let r = try? await SpeechRecognizer.shared.transcribe(audioCopy, language: lang)
                 result = (r?.text ?? "", r?.language ?? "ar")
             }
-            await MainActor.run { self.userFinished(text: result.0) }
+            let ms = Int(Date().timeIntervalSince(t0) * 1000)
+            slog("stt: done in \(ms)ms → \(result.0)")
+            await MainActor.run {
+                self.debug.sttMs = ms
+                self.debug.lastTranscript = result.0.isEmpty ? "(ما فهم شي)" : result.0
+                self.userFinished(text: result.0)
+            }
         }
     }
 
@@ -254,6 +303,7 @@ final class CallController: ObservableObject {
     // MARK: أحداث المستخدم (main)
 
     private func userStarted(bargeIn: Bool) {
+        slog("vad: user started speaking\(bargeIn ? " (barge-in)" : "")")
         if bargeIn || state == .thinking || state == .speaking {
             cancelReply(recordPartial: true)
         }
@@ -293,6 +343,10 @@ final class CallController: ObservableObject {
         replyID += 1
         let myID = replyID
         state = .thinking
+        turnStart = Date()
+        debug.firstTokenMs = 0
+        debug.firstAudioMs = 0
+        slog("llm: start")
         liveAI = ""
         enqueued = 0
         played = 0
@@ -318,7 +372,11 @@ final class CallController: ObservableObject {
                 if Task.isCancelled || myID != self.replyID { break }
                 guard !audioOut.samples.isEmpty else { continue }
                 self.enqueued += 1
-                if self.state == .thinking { self.state = .speaking }
+                if self.state == .thinking {
+                    self.state = .speaking
+                    self.debug.firstAudioMs = Int(Date().timeIntervalSince(self.turnStart) * 1000)
+                    slog("tts: first audio after \(self.debug.firstAudioMs)ms")
+                }
                 self.audio.enqueue(samples: audioOut.samples, sampleRate: audioOut.rate) { [weak self] in
                     Task { @MainActor in
                         guard let self, myID == self.replyID else { return }
@@ -338,6 +396,10 @@ final class CallController: ObservableObject {
                 let stream = try await LLMService.shared.stream(system: system, history: hist, user: text)
                 for try await chunk in stream {
                     if Task.isCancelled || myID != self.replyID { break }
+                    if full.isEmpty {
+                        self.debug.firstTokenMs = Int(Date().timeIntervalSince(self.turnStart) * 1000)
+                        slog("llm: first token after \(self.debug.firstTokenMs)ms")
+                    }
                     full += chunk
                     pending += chunk
                     self.liveAI = full
@@ -350,7 +412,8 @@ final class CallController: ObservableObject {
                     if !tail.isEmpty { cont.yield(tail) }
                 }
             } catch {
-                if myID == self.replyID { self.error = error.localizedDescription }
+                slog("llm: error \(error)")
+                if myID == self.replyID { self.error = SawtError.friendly(error).localizedDescription }
             }
             cont.finish()
             guard myID == self.replyID else { return }
