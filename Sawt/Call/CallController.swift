@@ -756,6 +756,14 @@ final class CallController: ObservableObject {
                     let tail = pending.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !tail.isEmpty { self.sentenceQueue.append(tail); cont.yield(tail) }
                 }
+            } catch is BackgroundPause {
+                // كرت الشاشة ممنوع والتطبيق في الخلفية: نقول له يفتح التطبيق بدل الكراش
+                slog("call: paused in background")
+                if myID == self.replyID {
+                    let msg = "افتح التطبيق عشان أكمل"
+                    self.error = msg
+                    if full.isEmpty { self.sentenceQueue.append(msg); cont.yield(msg) }
+                }
             } catch {
                 slog("llm: error \(error)")
                 if myID == self.replyID { self.error = SawtError.friendly(error).localizedDescription }
