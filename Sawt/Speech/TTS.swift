@@ -97,7 +97,14 @@ final class AppleSynth: NSObject {
             var samples: [Float] = []
             var sr: Double = 22_050
             var done = false
+            let lock = NSLock()
+            // إذا ما رجع النظام خلال 10 ثواني نكمل بدون الجملة بدل ما يعلق
+            DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
+                lock.lock(); defer { lock.unlock() }
+                if !done { done = true; slog("apple tts timeout"); cont.resume(returning: (samples, sr)) }
+            }
             synth.write(utt) { buffer in
+                lock.lock(); defer { lock.unlock() }
                 guard !done else { return }
                 guard let pcm = buffer as? AVAudioPCMBuffer, pcm.frameLength > 0 else {
                     done = true
