@@ -53,6 +53,7 @@ final class TextAccumulator: @unchecked Sendable {
     private var s = ""
     func append(_ t: String) { lock.lock(); s += t; lock.unlock() }
     var value: String { lock.lock(); defer { lock.unlock() }; return s }
+    func reset() { lock.lock(); s = ""; lock.unlock() }
 }
 
 @MainActor
@@ -292,9 +293,13 @@ final class ChatStore: ObservableObject {
                 slog.stage("chat:llm")
                 slog("chat: gen start avail=\(RAM.availableMB)MB think=\(think) web=\(web)")
                 var (prompt, images) = await Self.buildPrompt(t, attachments: attachments, earlier: earlier)
-                if webAvailable {
-                    system += "\n\nالبحث في الويب متاح لك في هالمحادثة: لا تقول أبدًا إنك نموذج بدون اتصال أو ما تقدر توصل للإنترنت. إذا ما عندك نتائج للسؤال، قل إنك ما لقيت معلومة محدثة واقترح يكتب «ابحث» مع سؤاله."
-                }
+                system += webAvailable ? Refusal.onRule : Refusal.offRule
+                let basePrompt = prompt
+                let baseSys = system
+                var attempt = 0
+                retry: while true {
+                prompt = basePrompt
+                system = baseSys
                 var liveDone = false
                 if web {
                     live.status = "يجيب بيانات…"
@@ -342,10 +347,16 @@ final class ChatStore: ObservableObject {
                     onThink: { piece in thinkAcc.append(piece) })
                 // تحديث الواجهة بحد أقصى ~30 مرة بالثانية بدل كل كلمة
                 var lastUI = Date.distantPast
+                var refused = false
                 for try await chunk in stream {
                     if Task.isCancelled { break }
                     raw += chunk
                     let (th, ans) = Self.splitThinking(raw)
+                    // النموذج قال ما عنده إنترنت أو يحتاج يبحث: نوقف ونبحث فعلًا ثم نعيد التوليد
+                    if attempt == 0, !web, webAvailable, ans.count < 400, Refusal.detect(ans) {
+                        refused = true
+                        break
+                    }
                     latestPartial = ans
                     if answerAt == nil, !ans.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { answerAt = Date() }
                     if Date().timeIntervalSince(lastUI) > 0.033 {
@@ -355,6 +366,19 @@ final class ChatStore: ObservableObject {
                         live.text = ans
                         lastUI = Date()
                     }
+                }
+                if refused || (attempt == 0 && !web && webAvailable && !Task.isCancelled && Refusal.detect(Self.splitThinking(raw).1)) {
+                    slog("chat: model refused/asked to search → searching and regenerating")
+                    attempt += 1
+                    web = true
+                    searchedAuto = true
+                    raw = ""
+                    latestPartial = ""
+                    live.text = ""
+                    thinkAcc.reset()
+                    continue retry
+                }
+                break retry
                 }
                 let (th, ans) = Self.splitThinking(raw)
                 thinking = th.isEmpty ? thinkAcc.value : th
