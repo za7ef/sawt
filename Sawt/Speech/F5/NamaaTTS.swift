@@ -440,9 +440,13 @@ final class NamaaEngine: @unchecked Sendable {
                 do {
                     // كرت الشاشة ممنوع في الخلفية: المعالج (تلقائي/معالج) أو نوقف بدون كراش
                     guard let dev = ComputeMode.device(for: ComputeMode.current) else { throw BackgroundPause() }
-                    let out = try Device.withDefaultDevice(dev == "cpu" ? Device.cpu : Device.gpu) {
-                        try self.generate(text, speed: speed, steps: steps)
+                    let box = MLXErrBox()
+                    let out = try withErrorHandler({ m in box.set(m) }) {
+                        try Device.withDefaultDevice(dev == "cpu" ? Device.cpu : Device.gpu) {
+                            try self.generate(text, speed: speed, steps: steps)
+                        }
                     }
+                    if let m = box.message { throw MLXRunError(message: m, cpu: dev == "cpu") }
                     cont.resume(returning: .success(out))
                 }
                 catch { cont.resume(returning: .failure(error)) }
