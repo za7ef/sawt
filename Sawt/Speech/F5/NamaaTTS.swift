@@ -233,6 +233,10 @@ final class NamaaEngine: @unchecked Sendable {
     private var secPerChar: Double = 0
     private let statLock = NSLock()
     /// "ممم" جاهزة بصوت نماء تنقال لو الرد الأول تأخر
+    private var _loaded = false
+    /// نماء محمّل في الذاكرة (لحساب ميزانية الذاكرة مع الكاميرا)
+    var isLoaded: Bool { statLock.lock(); defer { statLock.unlock() }; return _loaded }
+
     /// كلمات الانتظار الجاهزة بصوت نماء
     private var _fillers: [String: [Float]] = [:]
     func filler(_ text: String) -> [Float]? {
@@ -360,6 +364,7 @@ final class NamaaEngine: @unchecked Sendable {
         }
 
         dit = model; vocos = voc; filterbank = fb
+        statLock.lock(); _loaded = true; statLock.unlock()
         let s = Date().timeIntervalSince(t0)
         slog("namaa: loaded in \(Int(s * 1000))ms vocab=\(lines.count) ram=\(RAM.footprintMB)MB")
         return s
@@ -377,7 +382,7 @@ final class NamaaEngine: @unchecked Sendable {
     func unload() {
         queue.async {
             self.dit = nil; self.vocos = nil; self.filterbank = nil
-            self.statLock.lock(); self._fillers = [:]; self.statLock.unlock()
+            self.statLock.lock(); self._fillers = [:]; self._loaded = false; self.statLock.unlock()
             MLX.Memory.clearCache()
         }
     }
