@@ -9,6 +9,8 @@ struct ChatView: View {
     var openDrawer: () -> Void
 
     @State private var draft = ""
+    /// يزيد مع كل إرسال: نتيجة إملاء صوتي متأخرة من قبل الإرسال ما ترجع تنكتب
+    @State private var sendGen = 0
     @State private var voiceMode = false
     @State private var showModels = false
     @StateObject private var dictation = Dictation()
@@ -247,16 +249,22 @@ struct ChatView: View {
     /// تفكير عميق (لكل محادثة)
     private var thinkButton: some View {
         Button {
-            store.setDeepThink(!store.deepThink)
+            store.cycleThinkMode()
         } label: {
-            Image(systemName: "brain")
-                .font(.body.weight(.medium))
-                .foregroundStyle(store.deepThink ? Theme.accent : Color.secondary)
-                .frame(width: 34, height: 44)
-                .background(store.deepThink ? Theme.accent.opacity(0.18) : .clear, in: Circle())
+            let m = store.thinkMode
+            ZStack(alignment: .bottomTrailing) {
+                Image(systemName: "brain")
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(m == .off ? Color.secondary : Theme.accent)
+                    .frame(width: 34, height: 44)
+                    .background(m == .on ? Theme.accent.opacity(0.18) : .clear, in: Circle())
+                if m == .auto {
+                    Text("A").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.accent).offset(x: -2, y: -8)
+                }
+            }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(store.deepThink ? "تفكير عميق: شغال" : "تفكير عميق: طافي")
+        .accessibilityLabel("تفكير عميق: \(store.thinkMode.label)")
     }
 
     private var composer: some View {
@@ -276,7 +284,11 @@ struct ChatView: View {
 
                     Button {
                         if dictation.isRecording {
-                            dictation.stop { text in draft += (draft.isEmpty ? "" : " ") + text }
+                            let gen = sendGen
+                            dictation.stop { text in
+                                guard gen == sendGen else { return }
+                                draft += (draft.isEmpty ? "" : " ") + text
+                            }
                         } else {
                             dictation.start()
                         }
@@ -339,8 +351,24 @@ struct ChatView: View {
         }
         let t = draft
         let atts = pending
+        sendGen += 1
+        if dictation.isRecording { dictation.stop { _ in } }
         draft = ""
         pending = []
+        // لوحة المفاتيح أحيانًا تثبّت النص المعلّم (التصحيح/الاقتراحات) بعد ما فضّينا الحقل فيرجع النص:
+        // نفضيه مرة ثانية بعد لحظة إذا رجع نفس النص المرسل، ونعيد ضبط التركيز عشان تنتهي الكتابة المعلّقة
+        let sent = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        let wasFocused = focused
+        for delay in [0.05, 0.25, 0.6] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                let now = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !now.isEmpty, !sent.isEmpty, now == sent || sent.hasPrefix(now) || now.hasPrefix(sent) && now.count - sent.count <= 2 {
+                    slog("chat: composer text came back after send → cleared")
+                    draft = ""
+                    if wasFocused, delay < 0.1 { focused = false; DispatchQueue.main.async { focused = true } }
+                }
+            }
+        }
         store.send(t, attachments: atts, web: net.on) { failed in draft = failed; pending = atts }
     }
 
@@ -413,7 +441,7 @@ struct MessageRow: View, Equatable {
                             .font(.caption).foregroundStyle(.gray)
                     }
                     if let th = message.thinking, !th.isEmpty {
-                        ThinkingSection(text: th, seconds: message.thinkSeconds, live: false)
+                        ThinkingSection(text: th, seconds: message.thinkSeconds, live: false, auto: message.autoThink == true)
                     }
                     if streaming && message.text.isEmpty {
                         TypingDots()
@@ -503,6 +531,7 @@ struct ThinkingSection: View {
     let text: String
     let seconds: Double?
     let live: Bool
+    var auto = false
     @State private var open = false
 
     var body: some View {
@@ -529,7 +558,7 @@ struct ThinkingSection: View {
 
     private var title: String {
         if live { return "يفكر…" }
-        if let s = seconds { return "فكّر لمدة \(max(1, Int(s.rounded())))ث" }
+        if let s = seconds { return (auto ? "فكّر تلقائيًا " : "فكّر لمدة ") + "\(max(1, Int(s.rounded())))ث" }
         return "التفكير"
     }
 }
