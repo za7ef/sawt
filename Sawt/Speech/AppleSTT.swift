@@ -17,6 +17,12 @@ enum AppleSTT {
     /// المستخدم سمح بإرسال الصوت لآبل إذا الجهاز ما يدعم اللغة محليًا (مقفل افتراضيًا).
     static var serverAllowed: Bool { UserDefaults.standard.bool(forKey: "allowAppleServerSTT") }
 
+    /// رسالة إذا سمع آبل مختار بس ما يقدر يشتغل على الجهاز وما فيه إذن للإنترنت.
+    static var blockedReason: String? {
+        guard AppSettings.shared.sttID == "apple", !supportsOnDevice, !serverAllowed else { return nil }
+        return "جوالك ما يدعم سمع آبل للعربي على الجهاز. من الإعدادات اسمح له يستخدم الإنترنت، أو نزّل Whisper من شاشة النماذج."
+    }
+
     static var supportsOnDevice: Bool { recognizer("ar")?.supportsOnDeviceRecognition ?? false }
 
     /// يحوّل مقطع صوت 16 كيلوهرتز لنص.
