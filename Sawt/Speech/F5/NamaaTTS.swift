@@ -56,7 +56,9 @@ final class NamaaVoice: ObservableObject {
     private var task: Task<Void, Never>?
 
     private init() {
-        state = NamaaVoice.isInstalled ? .ready : .notDownloaded
+        // نعيّن القيمة الأولية مباشرة: الإسناد العادي هنا يشغّل didSet، اللي يقرأ NamaaVoice.shared
+        // وهو لسه يتهيأ (كان هذا سبب الانقفال عند فتح التطبيق في بناء 100)
+        _state = Published(initialValue: NamaaVoice.isInstalled ? .ready : .notDownloaded)
     }
 
     var sizeOnDisk: Int64 { Storage.size(NamaaVoice.dir) }
@@ -105,7 +107,9 @@ final class NamaaVoice: ObservableObject {
     func cancel() {
         task?.cancel()
         task = nil
-        state = NamaaVoice.isInstalled ? .ready : .notDownloaded
+        // نعيّن القيمة الأولية مباشرة: الإسناد العادي هنا يشغّل didSet، اللي يقرأ NamaaVoice.shared
+        // وهو لسه يتهيأ (كان هذا سبب الانقفال عند فتح التطبيق في بناء 100)
+        _state = Published(initialValue: NamaaVoice.isInstalled ? .ready : .notDownloaded)
     }
 
     func delete() {
