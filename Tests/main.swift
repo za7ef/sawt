@@ -66,6 +66,10 @@ check(ThinkHeuristic.shouldThink("كم يطلع 245 * 17 لو سمحت"), "Think
 check(!ThinkHeuristic.shouldThink("وش أخبار الجو اليوم في المدينة"), "Think: سؤال عادي")
 check(ThinkHeuristic.shouldThink("وش تشوف في هالصورة وايش المشكلة فيها؟", hasAttachment: true), "Think: مرفق + سؤال")
 
+check(ThinkHeuristic.shouldThink("عندي لغز لك وش الشي اللي يمشي بلا رجول"), "Think: لغز")
+check(ThinkHeuristic.verdict("وش أفضل وقت أزور فيه العلا؟") == .unsure, "Think: سؤال عادي = مصنّف")
+check(ThinkHeuristic.verdict("كيفك اليوم يا صاحبي؟") == .no, "Think: سوالف")
+
 // MemoryLine
 let now0 = Date(timeIntervalSince1970: 1_800_000_000)
 if case .add(let t, let imp, let cat, let exp)? = MemoryLine.parse("+ 4 | ناس | دائم | أخته اسمها سميرة", now: now0) {
