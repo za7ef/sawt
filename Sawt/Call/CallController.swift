@@ -23,6 +23,9 @@ final class CallController: ObservableObject {
     @Published private(set) var outLevel: Float = 0
     @Published var error: String?
     @Published var muted = false
+    /// الكاميرا شغالة في المكالمة (طافية افتراضيًا)
+    @Published var cameraOn = false
+    @Published var cameraBusy = false
 
     /// معلومات التشخيص اللي تطلع فوق المكالمة.
     struct Debug: Equatable {
@@ -188,6 +191,8 @@ final class CallController: ObservableObject {
 
     func end() {
         cancelReply(recordPartial: true)
+        if cameraOn { cameraOn = false }
+        Task { @MainActor in CallCamera.shared.stop() }
         CallController.isActive = false
         // استخراج الذاكرة بعد المكالمة
         var pairs: [(user: String, assistant: String)] = []
@@ -221,6 +226,37 @@ final class CallController: ObservableObject {
         liveAI = ""
         micLevel = 0
         outLevel = 0
+    }
+
+    /// يشغّل/يطفي الكاميرا. التشغيل يحوّل النموذج لوضع النظر (إذا يدعمه) ويبدأ جلسة جديدة.
+    @MainActor func toggleCamera() async {
+        if cameraOn {
+            cameraOn = false
+            CallCamera.shared.stop()
+            slog("call: camera off")
+            return
+        }
+        guard AppSettings.shared.llm.vision else {
+            error = "النموذج الحالي ما يشوف الصور. اختر نموذج عليه رمز العين (مثل Qwen3.5 أو Gemma) من شاشة النماذج."
+            return
+        }
+        cameraBusy = true
+        defer { cameraBusy = false }
+        guard await CallCamera.shared.start() else {
+            error = "ما قدرت أشغّل الكاميرا. تأكد إن التطبيق مسموح له يستخدمها من الإعدادات."
+            return
+        }
+        cancelReply(recordPartial: true)
+        let ok = await ModelManager.shared.ensureVision()
+        await LLMService.shared.resetCallSession()   // النموذج تغيّر: الجلسة القديمة ما تصلح
+        lastMemBlock = ""
+        guard ok, state != .idle else {
+            CallCamera.shared.stop()
+            if state != .idle { error = "ما قدرت أجهّز وضع النظر (ممكن الذاكرة ما تكفي). كمّل المكالمة بدون كاميرا." }
+            return
+        }
+        cameraOn = true
+        slog("call: camera on")
     }
 
     func toggleMute() {
@@ -512,6 +548,8 @@ final class CallController: ObservableObject {
         // التعليمات ثابتة (الجلسة تنعاد استخدامها)، والذاكرة المناسبة تنحط مع كل دور
         let system = settings.systemPrompt(chat: false, query: "", memory: false)
         let mem = MemoryStore.promptBlock(for: text, limit: 4)
+        // الكاميرا شغالة: نلتقط إطار واحد مصغّر مع نهاية كلامك
+        let frame: URL? = cameraOn ? CallCamera.shared.snapshot() : nil
 
 
         var cont: AsyncStream<String>.Continuation!
@@ -552,10 +590,14 @@ final class CallController: ObservableObject {
                 try await self.makeRoomForLLM()
                 // نضيف الذاكرة بس إذا تغيّرت، أو إذا الجلسة جديدة (بعد مقاطعة أو خطأ أو جلسة طويلة)
                 if !(await LLMService.shared.hasCallSession) { self.lastMemBlock = "" }
-                let userText = (mem.isEmpty || mem == self.lastMemBlock) ? text : "[\(mem)]\n\n\(text)"
+                var userText = (mem.isEmpty || mem == self.lastMemBlock) ? text : "[\(mem)]\n\n\(text)"
+                if frame != nil {
+                    userText = "[مرفقة صورة من كاميرا المستخدم الحين. استخدمها إذا كلامه عنها، وصف باختصار.]\n" + userText
+                }
                 if !mem.isEmpty { self.lastMemBlock = mem }
                 slog.stage("call:llm")
-                let stream = try await LLMService.shared.stream(system: system, history: hist, user: userText, maxTokens: 300, reuse: true)
+                let stream = try await LLMService.shared.stream(system: system, history: hist, user: userText, maxTokens: 300, reuse: true,
+                                                                images: frame.map { [$0] } ?? [])
                 for try await chunk in stream {
                     if Task.isCancelled || myID != self.replyID { break }
                     if full.isEmpty {
