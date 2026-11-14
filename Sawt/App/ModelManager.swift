@@ -90,7 +90,16 @@ final class ModelManager: ObservableObject {
         downloadingID = downloaded.contains(option.id) ? nil : option.id
         // يحتاج إنترنت إذا ما فيه نسخة كاملة على الجهاز (التحميل المحلي ما يتصل أبدًا)
         let needsNet = Storage.llmLocalSnapshot(option.id) == nil
+        slog.stage("llm:load \(option.id.split(separator: "/").last ?? "")")
+        slog("llm: activate \(option.id) local=\(!needsNet)")
         llmTask = Task {
+            defer { if llmToken == token { slog.stage("idle") } }
+            if needsNet, let why = Storage.spaceProblem(forGB: option.sizeGB) {
+                guard llmToken == token else { return }
+                downloadingID = nil
+                llm = .failed(why)
+                return
+            }
             if needsNet {
                 let ok = await NetworkGate.shared.permit("تنزيل النموذج")
                 // انضغط إيقاف أو تغيّر النموذج وقت التنبيه؟ نوقف
@@ -256,6 +265,10 @@ final class ModelManager: ObservableObject {
         let sttNeedsNet = variant != "apple" && Storage.whisperModelDir(variant) == nil
         sttTask = Task {
             defer { if sttToken == token { sttDownloading = false } }
+            if sttNeedsNet, let why = Storage.spaceProblem(forGB: 0.7) {
+                if sttToken == token { stt = .failed(why) }
+                return
+            }
             if sttNeedsNet {
                 let ok = await NetworkGate.shared.permit("تنزيل نموذج السمع")
                 guard sttToken == token, !Task.isCancelled else { return }

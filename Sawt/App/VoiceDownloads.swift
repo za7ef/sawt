@@ -38,6 +38,7 @@ final class VoiceDownloads: ObservableObject {
         if case .downloading = state[item.id] { return }
         state[item.id] = .downloading(0)
         Task {
+            if let why = Storage.spaceProblem(forGB: 0.05) { state[item.id] = .failed(why); return }
             guard await NetworkGate.shared.permit("تنزيل صوت \(item.id == "piper-miro" ? "ميرو" : item.id)") else {
                 state[item.id] = .idle; return
             }

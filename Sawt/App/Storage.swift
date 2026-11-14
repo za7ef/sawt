@@ -39,6 +39,21 @@ enum Storage {
         return total
     }
 
+    /// المساحة الفاضية المتاحة (بالبايت).
+    static var freeBytes: Int64 {
+        let v = try? documents.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return v?.volumeAvailableCapacityForImportantUsage ?? Int64.max
+    }
+
+    /// يكفي المكان لتنزيل بهالحجم + هامش 1GB للنظام؟ يرجع رسالة إذا ما يكفي.
+    static func spaceProblem(forGB gb: Double) -> String? {
+        let need = Int64((gb + 1.0) * 1_073_741_824)
+        let free = freeBytes
+        guard free < need else { return nil }
+        return String(format: "المساحة ما تكفي: يحتاج تقريبًا %.1f GB وفاضي %.1f GB. فضّي مساحة وجرّب.",
+                      gb + 1.0, Double(free) / 1_073_741_824)
+    }
+
     static func llmDir(_ repo: String) -> URL {
         hubDir.appendingPathComponent("models--" + repo.replacingOccurrences(of: "/", with: "--"))
     }
