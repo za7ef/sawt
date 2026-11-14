@@ -33,6 +33,12 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_remotepairing._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>يحتاجه «تحكم بالجوال» للوصول لخدمة الاقتران في جوالك نفسه.</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
