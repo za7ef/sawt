@@ -1,5 +1,6 @@
 import Foundation
 import HuggingFace
+import MLX
 import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
@@ -14,11 +15,22 @@ actor LLMService {
 
     var isReady: Bool { container != nil }
 
-    func unload() { container = nil; loadedID = nil }
+    func unload() {
+        container = nil
+        loadedID = nil
+        MLX.Memory.clearCache()
+    }
+
+    /// يُستدعى لما النظام يحذّر من الذاكرة.
+    func trim() { MLX.Memory.clearCache() }
 
     func load(_ option: LLMOption, progress: @escaping @Sendable (Double) -> Void) async throws {
         if loadedID == option.id, container != nil { return }
         container = nil
+        MLX.Memory.clearCache()
+        // كاش صغير لكرت الشاشة عشان ما تتكدس الذاكرة بين الردود
+        MLX.Memory.cacheLimit = 32 * 1024 * 1024
+        slog("llm: loading \(option.id)")
         let cfg = option.configuration
         let c = try await #huggingFaceLoadModelContainer(configuration: cfg, progressHandler: { p in
             progress(p.fractionCompleted)
@@ -33,7 +45,8 @@ actor LLMService {
     func stream(system: String, history: [Chat.Message], user: String) throws -> AsyncThrowingStream<String, Error> {
         guard let container else { throw SawtError.notReady("النموذج اللغوي") }
         var params = GenerateParameters()
-        params.maxTokens = 400
+        params.maxTokens = ThermalWatch.isHot ? 200 : 400
+        params.maxKVSize = 4096
         params.temperature = 0.7
         params.topP = 0.9
         let isQwen = (loadedID ?? "").lowercased().contains("qwen")
@@ -90,6 +103,7 @@ actor LLMService {
                         }
                         if !pendingTag.isEmpty, !inThink { cont.yield(pendingTag) }
                         withExtendedLifetime(session) {}
+                        MLX.Memory.clearCache()
                         cont.finish()
                         return
                     } catch {
@@ -97,6 +111,7 @@ actor LLMService {
                         if yielded || Task.isCancelled || i == attempts.count - 1 { break }
                     }
                 }
+                MLX.Memory.clearCache()
                 cont.finish(throwing: SawtError.friendly(lastError))
             }
             cont.onTermination = { _ in task.cancel() }
