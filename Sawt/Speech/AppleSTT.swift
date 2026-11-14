@@ -14,12 +14,18 @@ enum AppleSTT {
         return SFSpeechRecognizer(locale: Locale(identifier: id))
     }
 
+    /// المستخدم سمح بإرسال الصوت لآبل إذا الجهاز ما يدعم اللغة محليًا (مقفل افتراضيًا).
+    static var serverAllowed: Bool { UserDefaults.standard.bool(forKey: "allowAppleServerSTT") }
+
     static var supportsOnDevice: Bool { recognizer("ar")?.supportsOnDeviceRecognition ?? false }
 
     /// يحوّل مقطع صوت 16 كيلوهرتز لنص.
     static func transcribe(_ samples: [Float], language: String?) async throws -> (text: String, language: String) {
         guard let rec = recognizer(language), rec.isAvailable else {
             throw SawtError.failed("تمييز الكلام من آبل مو متاح على جهازك. اختر Whisper من شاشة النماذج.")
+        }
+        guard rec.supportsOnDeviceRecognition || AppleSTT.serverAllowed else {
+            throw SawtError.failed("سمع آبل يحتاج يرسل صوتك لآبل على هالجوال. اسمح له من الإعدادات أو اختر Whisper.")
         }
         guard let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false),
               let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(samples.count)) else {
@@ -71,6 +77,10 @@ final class AppleStream: @unchecked Sendable {
 
     func start(language: String?) -> Bool {
         guard let rec = AppleSTT.recognizer(language), rec.isAvailable else { return false }
+        guard rec.supportsOnDeviceRecognition || AppleSTT.serverAllowed else {
+            slog("apple stt: on-device unsupported and server not allowed")
+            return false
+        }
         let r = SFSpeechAudioBufferRecognitionRequest()
         r.shouldReportPartialResults = true
         r.requiresOnDeviceRecognition = rec.supportsOnDeviceRecognition
