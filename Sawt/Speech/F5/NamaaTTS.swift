@@ -442,6 +442,7 @@ final class NamaaEngine: @unchecked Sendable {
                     guard let dev = ComputeMode.device(for: ComputeMode.current) else { throw BackgroundPause() }
                     let box = MLXErrBox()
                     let out = try withErrorHandler({ m in box.set(m) }) {
+                        MLX.compile(enable: dev != "cpu")
                         try Device.withDefaultDevice(dev == "cpu" ? Device.cpu : Device.gpu) {
                             try self.generate(text, speed: speed, steps: steps)
                         }
