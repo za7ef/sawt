@@ -17,8 +17,12 @@ actor LLMService {
     /// جلسة المكالمة: نحتفظ فيها بين الأدوار عشان ما نعيد معالجة التعليمات والمحادثة كل مرة (كاش KV).
     private var callSession: ChatSession?
 
-    func resetCallSession() { callSession = nil }
-    private func keepCallSession(_ s: ChatSession?) { callSession = s }
+    func resetCallSession() { callSession = nil; callTurns = 0 }
+    private func keepCallSession(_ s: ChatSession?) { callSession = s; callTurns += 1 }
+    /// عدد الأدوار في جلسة المكالمة الحالية؛ بعد حد معيّن نبدأ جلسة جديدة بسجل مختصر عشان الكاش ما يكبر بلا حد.
+    private var callTurns = 0
+    /// فيه جلسة مكالمة بتنعاد استخدامها في الدور الجاي
+    var hasCallSession: Bool { callSession != nil && callTurns < 10 }
 
     var isReady: Bool { container != nil }
     /// النموذج محمّل بوضع النظر (يقبل صور)
@@ -85,7 +89,11 @@ actor LLMService {
         guard let container else { throw SawtError.notReady("النموذج اللغوي") }
         var params = GenerateParameters()
         params.maxTokens = ThermalWatch.isHot ? min(200, maxTokens) : maxTokens
-        params.maxKVSize = 4096
+        // كاش مضغوط 8 بت بعد أول 1024 رمز (يوفر تقريبًا نص ذاكرة الكاش). ما نستخدم maxKVSize لأن
+        // الكاش الدوّار ما يقبل الضغط ويحذف التعليمات؛ طول السياق محدود من عندنا (ميزانية السجل وإعادة الجلسة).
+        params.maxKVSize = nil
+        params.kvBits = 8
+        params.quantizedKVStart = 1024
         params.temperature = 0.7
         params.topP = 0.9
         // وضع التفكير موجود بس في عائلة Qwen3 (ومنها Qwen3.5)، مو Qwen2.5
@@ -113,12 +121,17 @@ actor LLMService {
             },
         ]
 
+        if reuse, callTurns >= 10 {
+            slog("llm: call session long (\(callTurns) turns) → fresh session with trimmed history")
+            callSession = nil; callTurns = 0
+        }
         if reuse, let existing = callSession {
             existing.generateParameters = params
             attempts.insert({ (existing, user) }, at: 0)
             slog("llm: reusing call session (kv cache)")
         }
         callSession = nil   // ترجع بس إذا خلص الدور بنجاح
+        if !reuse { callTurns = 0 }
 
         return AsyncThrowingStream { cont in
             let task = Task {
