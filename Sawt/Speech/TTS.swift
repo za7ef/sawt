@@ -26,7 +26,7 @@ final class SpeechSynth {
         sherpa = nil
         loadedVoice = voice.id
         guard let root = Catalog.voicesRoot else { return }
-        let dir = root.appendingPathComponent(voice.folder)
+        let dir = Catalog.voiceDir(voice.folder)
         let espeak = root.appendingPathComponent("espeak-ng-data").path
         // خيطين بس عشان ما يسخن الجوال ويخلي المعالج للنموذج اللغوي
         let threads = ThermalWatch.isHot ? 1 : 2
@@ -137,47 +137,3 @@ final class AppleSynth: NSObject {
     }
 }
 
-enum TextCleaner {
-    static func hasArabic(_ s: String) -> Bool {
-        s.unicodeScalars.contains { (0x0600...0x06FF).contains($0.value) || (0x0750...0x077F).contains($0.value) }
-    }
-
-    /// يشيل التنسيق والرموز اللي ما تنقال.
-    static func forSpeech(_ s: String) -> String {
-        var t = s
-        t = t.replacingOccurrences(of: "<think>[\\s\\S]*?</think>", with: "", options: .regularExpression)
-        t = t.replacingOccurrences(of: "```[\\s\\S]*?```", with: " ", options: .regularExpression)
-        t = t.replacingOccurrences(of: "[*_#`>|~]", with: "", options: .regularExpression)
-        t = t.replacingOccurrences(of: "https?://\\S+", with: "", options: .regularExpression)
-        t = String(t.unicodeScalars.filter { !($0.properties.isEmojiPresentation || ($0.properties.isEmoji && $0.value > 0x238C)) })
-        t = t.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-        return t.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// يفصل النص المتدفق لجمل جاهزة للنطق. يرجع (جمل كاملة، الباقي).
-    static func splitSentences(_ buffer: String, first: Bool) -> ([String], String) {
-        var out: [String] = []
-        var current = ""
-        let enders: Set<Character> = [".", "!", "?", "؟", "؛", "\n", "…"]
-        let soft: Set<Character> = ["،", ",", ":"]
-        let chars = Array(buffer)
-        for (i, ch) in chars.enumerated() {
-            current.append(ch)
-            let words = current.split(separator: " ").count
-            // نقطة عشرية (3.5): لا نقطع، ولو آخر حرف وصلنا ننتظر الباقي
-            if ch == ".", i > 0, chars[i - 1].isNumber {
-                if i + 1 >= chars.count || chars[i + 1].isNumber { continue }
-            }
-            if enders.contains(ch), current.trimmingCharacters(in: .whitespaces).count > 1 {
-                out.append(current); current = ""
-            } else if soft.contains(ch), words >= ((first && out.isEmpty) ? 3 : 8) {
-                // أول جملة نقطعها بدري عشان يبدأ يتكلم بسرعة
-                out.append(current); current = ""
-            } else if ch == " ", first, out.isEmpty, words >= 7 {
-                // ما فيه علامة ترقيم بعد: نبدأ الكلام بأول سبع كلمات بدل ما نستنى
-                out.append(current); current = ""
-            }
-        }
-        return (out.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }, current)
-    }
-}

@@ -27,8 +27,16 @@ actor SpeechRecognizer {
             slog("stt apple ready, onDevice=\(AppleSTT.supportsOnDevice)")
             return
         }
-        let folder = try await WhisperKit.download(variant: variant) { p in
-            progress(min(p.fractionCompleted, 0.99), false)
+        // نازل؟ نستخدم المجلد المحلي مباشرة بدون أي اتصال (WhisperKit.download يكلّم Hugging Face حتى لو الملفات موجودة)
+        let folder: URL
+        if let local = Storage.whisperModelDir(variant),
+           FileManager.default.fileExists(atPath: local.appendingPathComponent("AudioEncoder.mlmodelc").path),
+           FileManager.default.fileExists(atPath: local.appendingPathComponent("TextDecoder.mlmodelc").path) {
+            folder = local
+        } else {
+            folder = try await WhisperKit.download(variant: variant) { p in
+                progress(min(p.fractionCompleted, 0.99), false)
+            }
         }
         progress(1, true)
         // المُرمّز الصوتي على كرت الشاشة: تحميله أسرع بكثير من المعالج العصبي اللي يحتاج تجميع طويل أول مرة.
