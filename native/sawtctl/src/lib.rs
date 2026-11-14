@@ -112,10 +112,11 @@ async fn connect_rp(cfg: &Config, bytes: &[u8], steps: &mut Vec<Json>) -> Res<Se
     if !ports.contains(&49152) { ports.push(49152) }
     for p in 49153..=49200u16 { if !ports.contains(&p) { ports.push(p) } }
     // نجرب 10.7.0.1 أولًا، وبعدين عنوان Bonjour (إن وُجد)
-    let mut hosts: Vec<std::net::IpAddr> = vec![ip];
-    if let Ok(h) = cfg.rp_host.split('%').next().unwrap_or("").parse::<std::net::IpAddr>() {
-        if h != ip { hosts.push(h) }
-    }
+    // عنوان Bonjour أولًا (الخدمة الفعلية)، بعدين 10.7.0.1 (مثل StikDebug)، بعدين loopback
+    let mut hosts: Vec<std::net::IpAddr> = Vec::new();
+    if let Ok(h) = cfg.rp_host.split('%').next().unwrap_or("").parse::<std::net::IpAddr>() { hosts.push(h) }
+    for h in [ip, std::net::IpAddr::from([127, 0, 0, 1])] { if !hosts.contains(&h) { hosts.push(h) } }
+    steps.push(json!({"step": "rp_hosts", "order": hosts.iter().map(|h| h.to_string()).collect::<Vec<_>>()}));
     let mut last_err = String::from("ما فيه عنوان");
     let mut done: Option<(RemotePairingClient<RpPairingSocket<tokio::net::TcpStream>>, std::net::IpAddr)> = None;
     for host in hosts {
@@ -187,39 +188,49 @@ async fn rp_try_host(
 ) -> Res<idevice::remote_pairing::RemotePairingClient<idevice::remote_pairing::RpPairingSocket<tokio::net::TcpStream>>> {
     use idevice::remote_pairing::{RemotePairingClient, RpPairingSocket};
     let t0 = Instant::now();
-    let mut tried = Vec::new();
-    let mut stream = None;
+    let mut closed = Vec::new();
+    let mut last = format!("ما لقيت منفذ RemotePairing يرد على {ip}");
+    let mut handshakes = 0;
     for &p in ports {
         let addr = std::net::SocketAddr::new(ip, p);
-        let r = tokio::time::timeout(Duration::from_millis(400), tokio::net::TcpStream::connect(addr)).await;
-        match r {
-            Ok(Ok(st)) => { tried.push(json!({"port": p, "r": "open"})); stream = Some((st, p)); break }
-            Ok(Err(e)) => { if tried.len() < 12 { tried.push(json!({"port": p, "r": e.kind().to_string()})) } }
-            Err(_) => { if tried.len() < 12 { tried.push(json!({"port": p, "r": "timeout"})) } }
+        let st = match tokio::time::timeout(Duration::from_millis(400), tokio::net::TcpStream::connect(addr)).await {
+            Ok(Ok(st)) => st,
+            Ok(Err(e)) => { if closed.len() < 8 { closed.push(json!({"port": p, "r": e.kind().to_string()})) } continue }
+            Err(_) => { if closed.len() < 8 { closed.push(json!({"port": p, "r": "timeout"})) } continue }
+        };
+        // المنفذ مفتوح: ما نعتمده إلا إذا نجح handshake حق RPPairing
+        handshakes += 1;
+        let mut rpc = RemotePairingClient::new(RpPairingSocket::new(st), hostname);
+        tlog::clear();
+        let hs = tokio::time::timeout(Duration::from_secs(4), rpc.attempt_pair_verify()).await;
+        match hs {
+            Ok(Ok(v)) => {
+                let keys: Vec<String> = v.as_dictionary().map(|d| d.keys().cloned().collect()).unwrap_or_default();
+                steps.push(json!({"step": "rp_handshake_ok", "host": ip.to_string(), "port": p, "response_keys": keys, "trace": tlog::take()}));
+            }
+            Ok(Err(e)) => {
+                last = format!("handshake {ip}:{p}: {e:?}");
+                steps.push(json!({"step": "rp_handshake_failed", "host": ip.to_string(), "port": p, "error": format!("{e:?}"), "trace": tlog::take()}));
+                if handshakes >= 4 { break }
+                continue;
+            }
+            Err(_) => {
+                last = format!("handshake {ip}:{p}: timeout");
+                steps.push(json!({"step": "rp_handshake_timeout", "host": ip.to_string(), "port": p, "trace": tlog::take()}));
+                if handshakes >= 4 { break }
+                continue;
+            }
+        }
+        let v = rpc.validate_pairing(rpf).await;
+        steps.push(json!({"step": "rp_verify", "host": ip.to_string(), "port": p, "ok": v.is_ok(), "error": v.as_ref().err().map(|e| format!("{e:?}")), "trace": tlog::take()}));
+        match v {
+            // ما نسوي اقتران جديد بـPIN هنا
+            Ok(()) => return Ok(rpc),
+            Err(e) => { last = format!("pair-verify {ip}:{p}: {e:?}"); if handshakes >= 4 { break } }
         }
     }
-    let n = tried.len();
-    steps.push(json!({"step": "rp_ports", "host": ip.to_string(), "tried": tried, "ms": t0.elapsed().as_millis()}));
-    let (st, port) = stream.ok_or_else(|| format!("ما لقيت منفذ RemotePairing مفتوح على {ip} (جرّبت {n})"))?;
-    steps.push(json!({"step": "rp_connected", "host": ip.to_string(), "port": port}));
-    let mut rpc = RemotePairingClient::new(RpPairingSocket::new(st), hostname);
-    tlog::clear();
-    let hs = rpc.attempt_pair_verify().await;
-    match &hs {
-        Ok(v) => {
-            let keys: Vec<String> = v.as_dictionary().map(|d| d.keys().cloned().collect()).unwrap_or_default();
-            steps.push(json!({"step": "rp_handshake_ok", "response_keys": keys, "trace": tlog::take()}));
-        }
-        Err(e) => {
-            steps.push(json!({"step": "rp_handshake_failed", "error": format!("{e:?}"), "trace": tlog::take()}));
-        }
-    }
-    hs.map_err(|e| format!("handshake: {e:?}"))?;
-    let v = rpc.validate_pairing(rpf).await;
-    steps.push(json!({"step": "rp_verify", "ok": v.is_ok(), "error": v.as_ref().err().map(|e| format!("{e:?}")), "trace": tlog::take()}));
-    // ما نسوي اقتران جديد بـPIN هنا: لو التحقق فشل نرجع الخطأ
-    v.map_err(|e| format!("pair-verify: {e:?}"))?;
-    Ok(rpc)
+    steps.push(json!({"step": "rp_ports_summary", "host": ip.to_string(), "not_open": closed, "handshakes": handshakes, "ms": t0.elapsed().as_millis()}));
+    Err(last)
 }
 
 #[unsafe(no_mangle)]
