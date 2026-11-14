@@ -4,7 +4,7 @@ import SwiftUI
 
 struct Turn: Identifiable, Equatable {
     enum Role { case user, assistant }
-    let id = UUID()
+    var id = UUID()
     let role: Role
     var text: String
     var interrupted = false
@@ -102,6 +102,11 @@ final class CallController: ObservableObject {
             let granted = await AVAudioApplicationShim.requestRecord()
             guard granted else {
                 self.error = "اسمح للتطبيق يستخدم المايك من الإعدادات."
+                self.state = .idle
+                return
+            }
+            if let why = AppleSTT.blockedReason {
+                self.error = why
                 self.state = .idle
                 return
             }
@@ -472,9 +477,13 @@ final class CallController: ObservableObject {
     // MARK: الرد
 
     private func history() -> [Chat.Message] {
+        // آخر الأدوار بحد ~4000 حرف (ذاكرة وسرعة)
         var msgs: [Chat.Message] = []
-        for t in turns.dropLast().suffix(16) {
-            msgs.append(t.role == .user ? .user(t.text) : .assistant(t.text))
+        var budget = 4000
+        for t in turns.dropLast().suffix(16).reversed() {
+            budget -= t.text.count
+            if budget < 0, !msgs.isEmpty { break }
+            msgs.insert(t.role == .user ? .user(t.text) : .assistant(t.text), at: 0)
         }
         return msgs
     }
@@ -503,9 +512,7 @@ final class CallController: ObservableObject {
         // التعليمات ثابتة (الجلسة تنعاد استخدامها)، والذاكرة المناسبة تنحط مع كل دور
         let system = settings.systemPrompt(chat: false, query: "", memory: false)
         let mem = MemoryStore.promptBlock(for: text, limit: 4)
-        // نضيفها بس إذا تغيّرت عن آخر مرة (عشان ما تتكدس في ذاكرة الجلسة)
-        let userText = (mem.isEmpty || mem == lastMemBlock) ? text : "[\(mem)]\n\n\(text)"
-        if !mem.isEmpty { lastMemBlock = mem }
+
 
         var cont: AsyncStream<String>.Continuation!
         let sentences = AsyncStream<String> { cont = $0 }
@@ -543,6 +550,10 @@ final class CallController: ObservableObject {
             var first = true
             do {
                 try await self.makeRoomForLLM()
+                // نضيف الذاكرة بس إذا تغيّرت، أو إذا الجلسة جديدة (بعد مقاطعة أو خطأ أو جلسة طويلة)
+                if !(await LLMService.shared.hasCallSession) { self.lastMemBlock = "" }
+                let userText = (mem.isEmpty || mem == self.lastMemBlock) ? text : "[\(mem)]\n\n\(text)"
+                if !mem.isEmpty { self.lastMemBlock = mem }
                 slog.stage("call:llm")
                 let stream = try await LLMService.shared.stream(system: system, history: hist, user: userText, maxTokens: 300, reuse: true)
                 for try await chunk in stream {
@@ -627,6 +638,7 @@ final class CallController: ObservableObject {
 
     /// يوقف الرد الحالي. إذا ما بدأ يتكلم، نخلي كلام المستخدم يتجمع مع اللي بعده.
     private func cancelReply(recordPartial: Bool) {
+        lastMemBlock = ""
         guard responseTask != nil || speakTask != nil else { return }
         let wasSpeaking = played > 0 || enqueued > 0
         replyID += 1
