@@ -214,8 +214,10 @@ final class ChatStore: ObservableObject {
         let earlier = (current?.messages ?? []).flatMap { $0.attachments ?? [] }
         // تفكير عميق يطفي إذا الجوال حار (يطول ويسخّن أكثر)
         let mode = thinkMode
-        let auto = mode == .auto && ThinkHeuristic.shouldThink(t, hasAttachment: !attachments.isEmpty)
-        let think = (mode == .on || auto) && !ThermalWatch.isHot
+        let verdict = mode == .auto ? ThinkHeuristic.verdict(t, hasAttachment: !attachments.isEmpty) : .no
+        let autoRule = verdict == .yes
+        let thinkRule = (mode == .on || autoRule) && !ThermalWatch.isHot
+        let askClassifier = verdict == .unsure && !ThermalWatch.isHot
         // آخر الرسائل بحد أقصى ~6000 حرف (عشان سياق النموذج والذاكرة). التفكير ما يدخل السجل.
         var budget = 6000
         var recent: [Message] = []
@@ -253,7 +255,16 @@ final class ChatStore: ObservableObject {
             var answerAt: Date?
             var system = baseSystem
             let thinkAcc = TextAccumulator()
+            var auto = autoRule
+            var think = thinkRule
             do {
+                // القواعد مو متأكدة: مصنّف سريع (رمز أو رمزين) يقرر إذا السؤال يحتاج تفكير
+                if askClassifier {
+                    let c0 = Date()
+                    let need = await LLMService.shared.classifyNeedsThinking(t)
+                    slog("chat: think classifier → \(need) in \(Int(Date().timeIntervalSince(c0) * 1000))ms")
+                    if need { auto = true; think = true }
+                }
                 slog.stage("chat:llm")
                 slog("chat: gen start avail=\(RAM.availableMB)MB think=\(think) web=\(web)")
                 var (prompt, images) = await Self.buildPrompt(t, attachments: attachments, earlier: earlier)
