@@ -91,6 +91,18 @@ jobs:
         run: |
           mkdir -p Payload
           cp -R build/Sawt.xcarchive/Products/Applications/Sawt.app Payload/
+          # توقيع مؤقت يضمّن صلاحية زيادة الذاكرة؛ أدوات التثبيت الجانبي تعيد التوقيع وتحافظ عليها إذا سمح الحساب
+          cat > ent.plist <<'PL'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+          <key>com.apple.developer.kernel.increased-memory-limit</key><true/>
+          <key>com.apple.developer.kernel.extended-virtual-addressing</key><true/>
+          </dict></plist>
+          PL
+          sed -i '' 's/^          //' ent.plist
+          codesign -f -s - --entitlements ent.plist Payload/Sawt.app || echo "codesign skipped"
+          codesign -d --entitlements - Payload/Sawt.app || true
           zip -qry Sawt.ipa Payload
           ls -lh Sawt.ipa
 
