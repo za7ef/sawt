@@ -50,7 +50,9 @@ jobs:
           PY
           curl -fsSL -o $V/silero_vad.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
           # الصوت السعودي (نبرة) محفوظ كملف في إصدار voices بالمستودع
-          if gh release download voices -p 'nabra-saudi.tar.gz' -D /tmp 2>/dev/null; then
+          mkdir -p /tmp/nparts
+          if gh release download voices -R ${{ github.repository }} -p 'nabra-saudi.tar.gz.part-*' -D /tmp/nparts; then
+            cat /tmp/nparts/nabra-saudi.tar.gz.part-* > /tmp/nabra-saudi.tar.gz
             mkdir -p $V/nabra-saudi && tar -xzf /tmp/nabra-saudi.tar.gz -C $V/nabra-saudi
           else
             echo "nabra-saudi not available, skipping"
