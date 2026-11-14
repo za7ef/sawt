@@ -64,6 +64,7 @@ final class NamaaVoice: ObservableObject {
     func download() {
         guard task == nil else { return }
         task = Task {
+            if let why = Storage.spaceProblem(forGB: 1.5) { state = .failed(why); task = nil; return }
             guard await NetworkGate.shared.permit("تنزيل صوت نماء") else { task = nil; return }
             do {
                 try FileManager.default.createDirectory(at: Self.dir, withIntermediateDirectories: true)
