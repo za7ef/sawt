@@ -12,6 +12,7 @@ struct SawtApp: App {
 
     init() {
         CrashCollector.shared.start()
+        PickerFix.install()
         let l = Log.shared
         slog("launch \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "") prevCrashed=\(l.previousRunCrashed) at=\(l.previousStage)")
     }

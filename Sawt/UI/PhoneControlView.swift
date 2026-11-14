@@ -28,23 +28,56 @@ enum PhoneControl {
 
     static var hasPairing: Bool { FileManager.default.fileExists(atPath: pairingURL.path) }
 
-    /// يتأكد إن البيانات plist ويحدد نوعها، وبعدين يحفظها
-    static func save(_ data: Data) -> String {
-        guard let obj = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
-            return "الملف مو plist صالح (\(data.count) بايت)"
+    /// ينظّف البيانات (BOM، مسافات، base64) ويحوّلها لـplist XML موحّد
+    static func normalize(_ raw: Data) -> (data: Data?, info: String) {
+        var d = raw
+        var fmt: [String] = []
+        if d.starts(with: [0xEF, 0xBB, 0xBF]) { d = d.dropFirst(3); fmt.append("bom") }
+        if d.starts(with: Array("bplist".utf8)) { fmt.append("binary") }
+        else if let t = String(data: d, encoding: .utf8) {
+            let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{FEFF}")))
+            if trimmed.hasPrefix("<") { fmt.append("xml"); d = Data(trimmed.utf8) }
+            else if let b = Data(base64Encoded: trimmed, options: .ignoreUnknownCharacters), !b.isEmpty {
+                fmt.append("base64"); d = b
+                if d.starts(with: Array("bplist".utf8)) { fmt.append("binary") } else { fmt.append("xml") }
+            } else { fmt.append("text?") }
+        } else { fmt.append("unknown") }
+        var format = PropertyListSerialization.PropertyListFormat.xml
+        guard let obj = try? PropertyListSerialization.propertyList(from: d, options: [], format: &format) else {
+            return (nil, "format=\(fmt.joined(separator: "+")) size=\(raw.count) parse=failed")
         }
+        guard let dict = obj as? [String: Any] else {
+            return (nil, "format=\(fmt.joined(separator: "+")) top=\(type(of: obj)) (مو قاموس)")
+        }
+        let keys = dict.keys.sorted().joined(separator: ",")
         let kind: String
-        if obj["public_key"] != nil && obj["private_key"] != nil && obj["identifier"] != nil { kind = "RemotePairing" }
-        else if obj["HostID"] != nil || obj["DeviceCertificate"] != nil { kind = "lockdown" }
+        if dict["public_key"] != nil && dict["private_key"] != nil && dict["identifier"] != nil { kind = "RemotePairing" }
+        else if dict["HostID"] != nil || dict["DeviceCertificate"] != nil { kind = "lockdown" }
         else { kind = "غير معروف" }
+        let xml = try? PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0)
+        return (xml, "format=\(fmt.joined(separator: "+")) kind=\(kind) size=\(raw.count) keys=[\(keys)]")
+    }
+
+    static func save(_ data: Data) -> String {
+        let (norm, info) = normalize(data)
+        Log.shared("phonectl pairing: \(info)")
+        guard let norm else { return "الملف مو plist صالح — \(info)" }
         do {
             let dest = pairingURL
             try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: dest, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-            return "تم حفظ ملف الاقتران (\(kind)، \(data.count) بايت)"
+            try norm.write(to: dest, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            return "تم حفظ ملف الاقتران — \(info)"
         } catch {
             return "فشل الحفظ: \(error.localizedDescription)"
         }
+    }
+
+    /// معلومات الملف المحفوظ (بدون أسرار) — ونعيد توحيده لو انحفظ بنسخة قديمة
+    static func storedInfo() -> String {
+        guard let d = try? Data(contentsOf: pairingURL) else { return "لا يوجد ملف" }
+        let (norm, info) = normalize(d)
+        if let norm, norm != d { try? norm.write(to: pairingURL, options: .atomic) }
+        return info
     }
 
     static func importFile(_ url: URL) -> String {
@@ -201,7 +234,10 @@ struct PhoneControlView: View {
                 }
                 countdown = 0
             }
-            let r = await PhoneControl.run(op, host: h)
+            let info = PhoneControl.storedInfo()
+            Log.shared("phonectl pairing: \(info)")
+            var r = await PhoneControl.run(op, host: h)
+            r = "pairing: \(info)\n" + r
             Log.shared("phonectl \(label): \(r.prefix(6000))")
             UIPasteboard.general.string = r
             output = String(r.prefix(4000))
