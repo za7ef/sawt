@@ -55,3 +55,79 @@ enum AppleSTT {
         return (text, language ?? "ar")
     }
 }
+
+/// تمييز آبل بالبث: نعطيه الصوت أول بأول وهو يتكلم، فلما يسكت يكون النص شبه جاهز.
+final class AppleStream: @unchecked Sendable {
+    private let lock = NSLock()
+    private var req: SFSpeechAudioBufferRecognitionRequest?
+    private var task: SFSpeechRecognitionTask?
+    private var latest = ""
+    private var resolved = false
+    private var waiter: CheckedContinuation<String, Never>?
+    private let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)
+    var onPartial: ((String) -> Void)?
+
+    var partial: String { lock.lock(); defer { lock.unlock() }; return latest }
+
+    func start(language: String?) -> Bool {
+        guard let rec = AppleSTT.recognizer(language), rec.isAvailable else { return false }
+        let r = SFSpeechAudioBufferRecognitionRequest()
+        r.shouldReportPartialResults = true
+        r.requiresOnDeviceRecognition = rec.supportsOnDeviceRecognition
+        r.taskHint = .dictation
+        r.addsPunctuation = true
+        req = r
+        task = rec.recognitionTask(with: r) { [weak self] result, error in
+            guard let self else { return }
+            if let result {
+                let text = result.bestTranscription.formattedString
+                self.lock.lock(); self.latest = text; self.lock.unlock()
+                self.onPartial?(text)
+                if result.isFinal { self.resolve() }
+            } else if error != nil {
+                self.resolve()
+            }
+        }
+        return true
+    }
+
+    func append(_ samples: [Float]) {
+        guard !samples.isEmpty, let fmt,
+              let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(samples.count)),
+              let ch = buf.floatChannelData else { return }
+        buf.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { p in
+            if let base = p.baseAddress { ch[0].update(from: base, count: samples.count) }
+        }
+        req?.append(buf)
+    }
+
+    /// ينهي الصوت ويرجع النص النهائي (أو آخر نص جزئي إذا تأخر).
+    func finish(timeout: Double = 1.2) async -> String {
+        req?.endAudio()
+        return await withCheckedContinuation { (c: CheckedContinuation<String, Never>) in
+            lock.lock()
+            if resolved { let t = latest; lock.unlock(); c.resume(returning: t); return }
+            waiter = c
+            lock.unlock()
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { [weak self] in
+                self?.resolve()
+            }
+        }
+    }
+
+    func cancel() {
+        task?.cancel()
+        resolve()
+    }
+
+    private func resolve() {
+        lock.lock()
+        resolved = true
+        let w = waiter
+        waiter = nil
+        let t = latest
+        lock.unlock()
+        w?.resume(returning: t)
+    }
+}
