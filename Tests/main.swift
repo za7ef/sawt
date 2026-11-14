@@ -59,6 +59,13 @@ for _ in 0 ..< 20 { check(FillerPicker.pick(for: "هلا", last: "طيب") != "�
 check(FillerPicker.pick(for: "اشرح لي", last: nil, available: ["دقيقة أفكر"]) == "دقيقة أفكر", "Filler: من الجاهز بس")
 check(FillerPicker.pick(for: "اشرح لي", last: nil, available: []) == nil, "Filler: ما فيه جاهز")
 
+// ThinkHeuristic
+check(!ThinkHeuristic.shouldThink("هلا والله"), "Think: تحية")
+check(ThinkHeuristic.shouldThink("ليش السماء زرقاء بالنهار؟"), "Think: ليش")
+check(ThinkHeuristic.shouldThink("كم يطلع 245 * 17 لو سمحت"), "Think: حساب")
+check(!ThinkHeuristic.shouldThink("وش أخبار الجو اليوم في المدينة"), "Think: سؤال عادي")
+check(ThinkHeuristic.shouldThink("وش تشوف في هالصورة وايش المشكلة فيها؟", hasAttachment: true), "Think: مرفق + سؤال")
+
 // MemoryLine
 let now0 = Date(timeIntervalSince1970: 1_800_000_000)
 if case .add(let t, let imp, let cat, let exp)? = MemoryLine.parse("+ 4 | ناس | دائم | أخته اسمها سميرة", now: now0) {
