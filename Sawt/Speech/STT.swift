@@ -1,3 +1,4 @@
+import CoreML
 import Foundation
 import WhisperKit
 
@@ -10,17 +11,20 @@ actor SpeechRecognizer {
 
     var isReady: Bool { pipe != nil }
 
-    func load(variant: String, progress: @escaping @Sendable (Double) -> Void) async throws {
+    /// progress(نسبة التنزيل، هل بدأ التجهيز)
+    func load(variant: String, progress: @escaping @Sendable (Double, Bool) -> Void) async throws {
         if loadedID == variant, pipe != nil { return }
         pipe = nil
         let folder = try await WhisperKit.download(variant: variant) { p in
-            progress(p.fractionCompleted * 0.9)
+            progress(min(p.fractionCompleted, 0.99), false)
         }
-        let cfg = WhisperKitConfig(model: variant, modelFolder: folder.path, verbose: false,
-                                   prewarm: true, load: true, download: false)
+        progress(1, true)
+        // المُرمّز الصوتي على كرت الشاشة: تحميله أسرع بكثير من المعالج العصبي اللي يحتاج تجميع طويل أول مرة.
+        let compute = ModelComputeOptions(audioEncoderCompute: .cpuAndGPU, textDecoderCompute: .cpuAndNeuralEngine)
+        let cfg = WhisperKitConfig(model: variant, modelFolder: folder.path, computeOptions: compute, verbose: false,
+                                   prewarm: false, load: true, download: false)
         pipe = try await WhisperKit(cfg)
         loadedID = variant
-        progress(1)
     }
 
     /// يرجع النص واللغة المكتشفة.
@@ -56,10 +60,26 @@ actor SpeechRecognizer {
 enum SawtError: LocalizedError {
     case notReady(String)
     case failed(String)
+    case timeout(String)
     var errorDescription: String? {
         switch self {
-        case .notReady(let w): return "\(w) مو جاهز. نزّله من الإعدادات."
+        case .notReady(let w): return "\(w) مو جاهز. نزّله من شاشة النماذج."
         case .failed(let m): return m
+        case .timeout(let w): return "\(w) طوّل بزيادة وما اشتغل. جرّب مرة ثانية أو اختر نموذج أصغر."
         }
+    }
+
+    /// يحوّل أخطاء المكتبات لرسالة مفهومة.
+    static func friendly(_ error: Error?) -> SawtError {
+        guard let error else { return .failed("صار خطأ غير معروف.") }
+        if let e = error as? SawtError { return e }
+        let d = String(describing: error)
+        if d.contains("Template") || d.contains("Jinja") {
+            return .failed("هذا النموذج ما يتوافق مع طريقة المحادثة في التطبيق. جرّب Qwen3 4B.")
+        }
+        if d.lowercased().contains("memory") {
+            return .failed("الذاكرة ما تكفي لهذا النموذج. اختر نموذج أصغر.")
+        }
+        return .failed("ما قدر النموذج يرد. (\(error.localizedDescription))")
     }
 }
