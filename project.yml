@@ -38,8 +38,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.za7ef.sawt
         PRODUCT_NAME: Sawt
-        MARKETING_VERSION: "0.4.1"
-        CURRENT_PROJECT_VERSION: "9"
+        MARKETING_VERSION: "0.5.0"
+        CURRENT_PROJECT_VERSION: "10"
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_FILE: Sawt/Info.plist
@@ -60,6 +60,8 @@ targets:
         product: MLXRandom
       - package: MLXSwiftLM
         product: MLXLLM
+      - package: MLXSwiftLM
+        product: MLXVLM
       - package: MLXSwiftLM
         product: MLXLMCommon
       - package: MLXSwiftLM
