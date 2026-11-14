@@ -31,7 +31,7 @@ final class SpeechSynth {
         let threads = ThermalWatch.isHot ? 1 : 2
         slog("tts load \(voice.id) threads=\(threads)")
         switch voice.kind {
-        case .apple:
+        case .apple, .namaa:
             return
         case .piper(let onnx):
             let vits = sherpaOnnxOfflineTtsVitsModelConfig(
@@ -62,6 +62,11 @@ final class SpeechSynth {
         // الأصوات العربية ما تقرأ الإنجليزي زين، فالجمل الإنجليزية تروح لصوت آبل.
         if voice.kind == .apple || !arabic {
             return await apple.synthesize(clean, language: arabic ? "ar-SA" : "en-US", rate: rate)
+        }
+        if voice.kind == .namaa {
+            let s = await NamaaEngine.shared.synthesize(clean, speed: rate)
+            if s.isEmpty { return await apple.synthesize(clean, language: "ar-SA", rate: rate) }
+            return (s, 24_000)
         }
         return await withCheckedContinuation { cont in
             queue.async {
