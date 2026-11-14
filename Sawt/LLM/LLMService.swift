@@ -33,6 +33,7 @@ actor LLMService {
         loadedID = nil
         warmedID = nil
         callSession = nil
+        callTurns = 0
         MLX.Memory.clearCache()
     }
 
@@ -85,7 +86,8 @@ actor LLMService {
     /// يرجع تدفق نص الرد. السجل يحتوي الرسائل السابقة بدون الرسالة الحالية.
     /// إذا رفض قالب المحادثة (بعض النماذج ما تقبل رسالة النظام)، نعيد المحاولة بدمج التعليمات في رسالة المستخدم.
     func stream(system: String, history: [Chat.Message], user: String, maxTokens: Int = 400, reuse: Bool = false,
-                images: [URL] = []) throws -> AsyncThrowingStream<String, Error> {
+                images: [URL] = [], think: Bool = false,
+                onThink: (@Sendable (String) -> Void)? = nil) throws -> AsyncThrowingStream<String, Error> {
         guard let container else { throw SawtError.notReady("النموذج اللغوي") }
         var params = GenerateParameters()
         params.maxTokens = ThermalWatch.isHot ? min(200, maxTokens) : maxTokens
@@ -98,8 +100,10 @@ actor LLMService {
         params.topP = 0.9
         // وضع التفكير موجود بس في عائلة Qwen3 (ومنها Qwen3.5)، مو Qwen2.5
         let isQwen3 = (loadedID ?? "").lowercased().contains("qwen3")
-        let sys = isQwen3 ? system + "\n/no_think" : system
-        let ctx: [String: any Sendable]? = isQwen3 ? ["enable_thinking": false] : nil
+        // تفكير عميق: Qwen3 يفكر بنفسه؛ الباقي نطلب منه يفكر داخل <think>. بدونه نقفل تفكير Qwen عشان السرعة.
+        let reasoning = "\n\nقبل الجواب فكّر خطوة بخطوة بينك وبين نفسك داخل <think> و</think>، بعدين اكتب الجواب النهائي بعدها مباشرة."
+        let sys = isQwen3 ? (think ? system : system + "\n/no_think") : (think ? system + reasoning : system)
+        let ctx: [String: any Sendable]? = isQwen3 ? ["enable_thinking": think] : nil
 
         // المحاولة الأولى: رسالة نظام عادية. الثانية: بدون رسالة نظام وبتناوب صارم.
         var attempts: [() -> (ChatSession, String)] = [
@@ -130,8 +134,10 @@ actor LLMService {
             attempts.insert({ (existing, user) }, at: 0)
             slog("llm: reusing call session (kv cache)")
         }
+        let hadSession = callSession != nil
         callSession = nil   // ترجع بس إذا خلص الدور بنجاح
-        if !reuse { callTurns = 0 }
+        // جلسة جديدة (أو انفقدت بعد خطأ/مقاطعة) = العداد يبدأ من الصفر
+        if !reuse || !hadSession { callTurns = 0 }
 
         return AsyncThrowingStream { cont in
             let task = Task {
@@ -151,8 +157,11 @@ actor LLMService {
                             while !text.isEmpty {
                                 if inThink {
                                     if let r = text.range(of: "</think>") {
+                                        onThink?(String(text[..<r.lowerBound]))
                                         text = String(text[r.upperBound...]); inThink = false
-                                    } else { text = ""; break }
+                                    } else if let lt = text.lastIndex(of: "<"), text[lt...].count < 9 {
+                                        onThink?(String(text[..<lt])); pendingTag = String(text[lt...]); text = ""; break
+                                    } else { onThink?(text); text = ""; break }
                                 } else if let r = text.range(of: "<think>") {
                                     visible += text[..<r.lowerBound]
                                     text = String(text[r.upperBound...]); inThink = true
