@@ -8,14 +8,25 @@ final class VoiceDownloads: ObservableObject {
     struct Item: Identifiable {
         let id: String          // نفس معرّف VoiceOption
         let folder: String
-        let repo: String        // مستودع Hugging Face
-        let files: [String]
+        let base: String        // بداية رابط التنزيل
+        let files: [(remote: [String], local: String)]   // أكثر من جزء = تنضم بالترتيب
         let approx: String
+        let gb: Double
     }
 
     static let items: [Item] = [
-        Item(id: "piper-miro", folder: "piper-miro", repo: "csukuangfj/vits-piper-ar_JO-SA_miro_V2-high-int8",
-             files: ["ar_JO-SA_miro_V2-high.onnx", "tokens.txt"], approx: "~19 MB"),
+        // نبرة السعودية (Apache-2.0، من oddadmix/Nabra-Saudi-82M): المصدر الأصلي PyTorch بس،
+        // فننزّل نسختنا المحوّلة لـONNX من إصدار الأصوات العام
+        Item(id: "nabra-saudi", folder: "nabra-saudi",
+             base: "https://github.com/za7ef/sawt/releases/download/voices/",
+             files: [((0..<9).map { String(format: "nabra-saudi-model.int8.onnx.part%02d", $0) }, "model.int8.onnx"),
+                     (["nabra-saudi-tokens.txt"], "tokens.txt"),
+                     (["nabra-saudi-voices.bin"], "voices.bin")],
+             approx: "~84 MB", gb: 0.1),
+        Item(id: "piper-miro", folder: "piper-miro",
+             base: "https://huggingface.co/csukuangfj/vits-piper-ar_JO-SA_miro_V2-high-int8/resolve/main/",
+             files: [(["ar_JO-SA_miro_V2-high.onnx"], "ar_JO-SA_miro_V2-high.onnx"), (["tokens.txt"], "tokens.txt")],
+             approx: "~19 MB", gb: 0.05),
     ]
 
     enum State: Equatable { case idle, downloading(Double), failed(String) }
@@ -31,31 +42,43 @@ final class VoiceDownloads: ObservableObject {
     }
 
     func installed(_ item: Item) -> Bool {
-        item.files.allSatisfy { FileManager.default.fileExists(atPath: Self.root.appendingPathComponent("\(item.folder)/\($0)").path) }
+        item.files.allSatisfy { FileManager.default.fileExists(atPath: Self.root.appendingPathComponent("\(item.folder)/\($0.local)").path) }
     }
 
     func download(_ item: Item) {
         if case .downloading = state[item.id] { return }
         state[item.id] = .downloading(0)
         Task {
-            if let why = Storage.spaceProblem(forGB: 0.05) { state[item.id] = .failed(why); return }
-            guard await NetworkGate.shared.permit("تنزيل صوت \(item.id == "piper-miro" ? "ميرو" : item.id)") else {
+            if let why = Storage.spaceProblem(forGB: item.gb) { state[item.id] = .failed(why); return }
+            guard await NetworkGate.shared.permit("تنزيل صوت \(Catalog.allVoices.first { $0.id == item.id }?.title ?? item.id)") else {
                 state[item.id] = .idle; return
             }
             let dir = Self.root.appendingPathComponent(item.folder, isDirectory: true)
             do {
                 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
                 for (i, f) in item.files.enumerated() {
-                    let url = URL(string: "https://huggingface.co/\(item.repo)/resolve/main/\(f)")!
-                    let (tmp, resp) = try await URLSession.shared.download(from: url)
-                    guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-                    let dest = dir.appendingPathComponent(f)
+                    let dest = dir.appendingPathComponent(f.local)
+                    let partial = dir.appendingPathComponent(f.local + ".download")
                     try? FileManager.default.removeItem(at: dest)
-                    try FileManager.default.moveItem(at: tmp, to: dest)
+                    try? FileManager.default.removeItem(at: partial)
+                    FileManager.default.createFile(atPath: partial.path, contents: nil)
+                    let out = try FileHandle(forWritingTo: partial)
+                    defer { try? out.close() }
+                    for r in f.remote {
+                        guard let url = URL(string: item.base + r) else { throw URLError(.badURL) }
+                        let (tmp, resp) = try await URLSession.shared.download(from: url)
+                        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+                        try out.write(contentsOf: try Data(contentsOf: tmp, options: .mappedIfSafe))
+                        try? FileManager.default.removeItem(at: tmp)
+                    }
+                    try out.close()
+                    try FileManager.default.moveItem(at: partial, to: dest)
                     state[item.id] = .downloading(Double(i + 1) / Double(item.files.count))
                 }
                 state[item.id] = .idle
                 slog("voice: downloaded \(item.id)")
+                // نبرة السعودية هي المقترحة للمكالمات: نختارها أول ما تنزل
+                if item.id == "nabra-saudi" { AppSettings.shared.voiceID = item.id; ModelManager.shared.voiceChanged() }
                 objectWillChange.send()
             } catch {
                 try? FileManager.default.removeItem(at: dir)
