@@ -11,6 +11,8 @@ struct MemoryItem: Identifiable, Codable, Equatable {
     /// مثبّتة: تنضاف للتعليمات دايمًا وما تنحذف تلقائيًا
     var pinned: Bool?
     var isPinned: Bool { pinned ?? false }
+    /// متى انحذفت تلقائيًا (سلة المحذوفات، تنمسح بعد 7 أيام)
+    var deletedAt: Date?
 }
 
 @MainActor
@@ -27,6 +29,8 @@ final class MemoryStore: ObservableObject {
         didSet { UserDefaults.standard.set(enabled, forKey: "memoryOn"); if !enabled { cancel() } }
     }
     @Published var isExtracting = false
+    /// اللي حذفه النموذج تلقائيًا: يقدر المستخدم يرجّعها خلال 7 أيام.
+    @Published private(set) var trash: [MemoryItem] = []
 
     static let maxItems = 150
     private var task: Task<Void, Never>?
@@ -37,15 +41,39 @@ final class MemoryStore: ObservableObject {
         return dir.appendingPathComponent("memory.json")
     }()
 
+    private var trashURL: URL { fileURL.deletingLastPathComponent().appendingPathComponent("memory-trash.json") }
+
     private init() {
         if let list = SafeFile.load([MemoryItem].self, from: fileURL) {
             items = list
             MemoryStore.snapshot = list
         }
+        let week = Date().addingTimeInterval(-7 * 86_400)
+        trash = (SafeFile.load([MemoryItem].self, from: trashURL) ?? []).filter { ($0.deletedAt ?? .distantPast) > week }
     }
 
     private func save() {
         SafeFile.write(items, to: fileURL)
+        SafeFile.write(trash, to: trashURL)
+    }
+
+    func restore(_ id: UUID) {
+        guard let i = trash.firstIndex(where: { $0.id == id }) else { return }
+        var m = trash.remove(at: i)
+        m.deletedAt = nil
+        items.insert(m, at: 0)
+        save()
+    }
+
+    func emptyTrash() { trash = []; save() }
+
+    /// الحذف التلقائي ما يصير إلا إذا المستخدم قال صراحة إن المعلومة غلط أو طلب ينساها.
+    static let forgetCues = ["انس", "انسى", "انسَ", "غلط", "خطأ", "مو صحيح", "مب صحيح", "مش صحيح", "غير صحيح",
+                             "لا تتذكر", "لا تحفظ", "امسح", "احذف", "ما عاد", "ماعاد", "مو صح", "مب صح",
+                             "forget", "wrong", "not true", "no longer", "delete", "remove", "incorrect"]
+    static func hasForgetCue(_ s: String) -> Bool {
+        let l = s.lowercased()
+        return forgetCues.contains { l.contains($0) }
     }
 
     // MARK: تعديل يدوي
@@ -78,6 +106,7 @@ final class MemoryStore: ObservableObject {
     func deleteAll() {
         cancel()
         items = []
+        trash = []
         save()
     }
 
@@ -246,6 +275,7 @@ final class MemoryStore: ObservableObject {
             if ops.count == 6 { break }
         }
         var added = 0
+        let mayForget = exchanges.contains { Self.hasForgetCue($0.user) }
         for op in ops {
             switch op {
             case .add(let l):
@@ -262,10 +292,15 @@ final class MemoryStore: ObservableObject {
             case .delete(let n):
                 guard n >= 1, n <= relevant.count,
                       let i = items.firstIndex(where: { $0.id == relevant[n - 1].id }), !items[i].isPinned else { continue }
-                items.remove(at: i); added += 1
+                guard mayForget else { slog("memory: delete ignored (no cue)"); continue }
+                var m = items.remove(at: i)
+                m.deletedAt = Date()
+                trash.insert(m, at: 0)
+                if trash.count > 50 { trash.removeLast(trash.count - 50) }
+                added += 1
             }
         }
-        let lines = ops
+        let lines = ops   // للسجل تحت
         if items.count > Self.maxItems {
             // المثبّتة ما تنحذف؛ نشيل الأقدم من الباقي
             let pins = items.filter { $0.isPinned }
@@ -322,6 +357,22 @@ struct MemoryView: View {
                 Text("المحفوظ (\(store.items.count))")
             } footer: {
                 Text("اسحب يمين على أي معلومة عشان تثبّتها: المثبّتة تنضاف للتعليمات دايمًا وما تتغير تلقائيًا.")
+            }
+            if !store.trash.isEmpty {
+                Section {
+                    ForEach(store.trash) { item in
+                        HStack {
+                            Text(item.text).foregroundStyle(.secondary)
+                            Spacer()
+                            Button("رجّع") { store.restore(item.id) }.buttonStyle(.borderless)
+                        }
+                    }
+                    Button("فضّي السلة", role: .destructive) { store.emptyTrash() }
+                } header: {
+                    Text("انحذفت تلقائيًا")
+                } footer: {
+                    Text("لما تقول إن معلومة غلط أو تطلب أنساها، تنحذف هنا وتقدر ترجّعها خلال ٧ أيام.")
+                }
             }
             if !store.items.isEmpty {
                 Section {

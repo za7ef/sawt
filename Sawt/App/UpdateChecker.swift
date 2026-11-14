@@ -26,6 +26,10 @@ final class UpdateChecker: ObservableObject {
             if now - d.double(forKey: "updLastCheck") < 86_400 { return }
             if now < d.double(forKey: "updSnoozeUntil") { return }
         }
+        // بدون إنترنت مفتوح: التحقق التلقائي يتخطى بصمت، واليدوي يطلب سماح
+        if force {
+            guard await NetworkGate.shared.permit("التحقق من التحديثات") else { return }
+        } else if !NetworkGate.shared.on { return }
         d.set(now, forKey: "updLastCheck")
         var req = URLRequest(url: Self.feed, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
         req.setValue("no-cache", forHTTPHeaderField: "Cache-Control")

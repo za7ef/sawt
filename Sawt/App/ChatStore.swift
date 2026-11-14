@@ -12,6 +12,11 @@ struct Message: Identifiable, Codable, Equatable {
     /// انحفظ شي في الذاكرة بعد هذا الرد
     var memorySaved: Bool?
     var attachments: [Attachment]?
+    /// تفكير النموذج (تفكير عميق) — للعرض بس، ما يرجع للسجل أبدًا
+    var thinking: String?
+    var thinkSeconds: Double?
+    /// مصادر بحث الويب
+    var sources: [WebSource]?
 }
 
 struct Conversation: Identifiable, Codable, Equatable {
@@ -19,6 +24,18 @@ struct Conversation: Identifiable, Codable, Equatable {
     var title: String = "محادثة جديدة"
     var messages: [Message] = []
     var updated = Date()
+    /// تفكير عميق مفعّل لهالمحادثة
+    var deepThink: Bool?
+}
+
+/// النص اللي ينكتب الحين: كائن صغير منفصل عشان تحديثاته ما تعيد رسم قائمة الرسائل كلها.
+@MainActor
+final class StreamBuffer: ObservableObject {
+    @Published var text = ""
+    @Published var thinking = ""
+    @Published var status: String?
+    var thinkStart: Date?
+    func reset() { text = ""; thinking = ""; status = nil; thinkStart = nil }
 }
 
 /// يحفظ المحادثات على الجهاز، ويدير الدردشة الكتابية.
@@ -28,7 +45,7 @@ final class ChatStore: ObservableObject {
 
     @Published var conversations: [Conversation] = []
     @Published var currentID: UUID?
-    @Published var streamingText = ""
+    let live = StreamBuffer()
     @Published var isGenerating = false
     @Published var error: String?
 
@@ -143,12 +160,29 @@ final class ChatStore: ObservableObject {
 
     // MARK: الدردشة الكتابية
 
-    func send(_ text: String, attachments: [Attachment] = [], onFail: @escaping (String) -> Void = { _ in }) {
+    var deepThink: Bool { current?.deepThink ?? false }
+
+    func setDeepThink(_ on: Bool) {
+        let i = ensureCurrent()
+        conversations[i].deepThink = on
+        save()
+    }
+
+    /// يفصل التفكير عن الجواب إذا النموذج كتب </think> بدون بداية (بعض قوالب Qwen تبدأ التفكير بنفسها).
+    static func splitThinking(_ s: String) -> (thinking: String, answer: String) {
+        guard let r = s.range(of: "</think>") else { return ("", s) }
+        let think = s[..<r.lowerBound].replacingOccurrences(of: "<think>", with: "")
+        return (think.trimmingCharacters(in: .whitespacesAndNewlines), String(s[r.upperBound...]))
+    }
+
+    func send(_ text: String, attachments: [Attachment] = [], web: Bool = false,
+              onFail: @escaping (String) -> Void = { _ in }) {
         var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty || !attachments.isEmpty, !isGenerating else { return }
         if t.isEmpty { t = attachments.contains { $0.kind == .image } ? "وش تشوف في الصورة؟" : "لخّص لي الملف باختصار." }
         let earlier = (current?.messages ?? []).flatMap { $0.attachments ?? [] }
-        // آخر الرسائل بحد أقصى ~6000 حرف (عشان سياق النموذج والذاكرة)
+        let think = deepThink
+        // آخر الرسائل بحد أقصى ~6000 حرف (عشان سياق النموذج والذاكرة). التفكير ما يدخل السجل.
         var budget = 6000
         var recent: [Message] = []
         for m in (current?.messages ?? []).suffix(20).reversed() {
@@ -168,31 +202,69 @@ final class ChatStore: ObservableObject {
         genConv = convID
         latestPartial = ""
         isGenerating = true
-        streamingText = ""
+        live.reset()
         MemoryStore.shared.cancel()
-        let system = AppSettings.shared.systemPrompt(chat: true, query: t)
+        let baseSystem = AppSettings.shared.systemPrompt(chat: true, query: t)
         genID += 1
         let myGen = genID
+        let live = self.live
         genTask = Task {
-            var full = ""
+            var raw = ""
+            var thinking = ""
+            var sources: [WebSource] = []
+            let genStart = Date()
+            var answerAt: Date?
+            var system = baseSystem
             do {
                 slog.stage("chat:llm")
-                slog("chat: gen start avail=\(RAM.availableMB)MB")
-                let (prompt, images) = await Self.buildPrompt(t, attachments: attachments, earlier: earlier)
-                let stream = try await LLMService.shared.stream(system: system, history: Array(history), user: prompt,
-                                                                maxTokens: 1500, images: images)
+                slog("chat: gen start avail=\(RAM.availableMB)MB think=\(think) web=\(web)")
+                var (prompt, images) = await Self.buildPrompt(t, attachments: attachments, earlier: earlier)
+                if web {
+                    live.status = "يبحث…"
+                    let q = WebSearch.query(from: t)
+                    let pages = try await WebSearch.search(q)
+                    if Task.isCancelled { throw CancellationError() }
+                    let (ctx, srcs) = WebSearch.context(pages, query: t)
+                    sources = srcs
+                    live.status = srcs.isEmpty ? nil : "يقرأ \(srcs.count) مصادر…"
+                    if !ctx.isEmpty {
+                        prompt = "[نتائج بحث في الويب عن: \(q)]\n\(ctx)\n[نهاية النتائج]\n\n" + prompt
+                        system += "\n\nعندك نتائج بحث مرقّمة. اعتمد عليها في الجواب واذكر رقم المصدر بين قوسين مربعين مثل [1] بعد المعلومة. إذا النتائج ما تكفي قل كذا بصراحة."
+                    } else {
+                        system += "\n\nالبحث ما رجع نتائج مفيدة؛ قل كذا وجاوب من معرفتك بحذر."
+                    }
+                }
+                let stream = try await LLMService.shared.stream(
+                    system: system, history: Array(history), user: prompt,
+                    maxTokens: think ? 3000 : 1500, images: images, think: think,
+                    onThink: { piece in
+                        Task { @MainActor in
+                            if live.thinkStart == nil { live.thinkStart = Date() }
+                            live.thinking += piece
+                        }
+                    })
                 // تحديث الواجهة بحد أقصى ~30 مرة بالثانية بدل كل كلمة
                 var lastUI = Date.distantPast
                 for try await chunk in stream {
                     if Task.isCancelled { break }
-                    full += chunk
-                    latestPartial = full
-                    if Date().timeIntervalSince(lastUI) > 0.033 { streamingText = full; lastUI = Date() }
+                    raw += chunk
+                    let (th, ans) = Self.splitThinking(raw)
+                    latestPartial = ans
+                    if answerAt == nil, !ans.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { answerAt = Date() }
+                    if Date().timeIntervalSince(lastUI) > 0.033 {
+                        live.status = nil
+                        if !th.isEmpty { live.thinking = th }
+                        live.text = ans
+                        lastUI = Date()
+                    }
                 }
-                streamingText = full
+                let (th, ans) = Self.splitThinking(raw)
+                thinking = th.isEmpty ? live.thinking : th
+                raw = ans
+                live.text = ans
             } catch {
-                self.error = SawtError.friendly(error).localizedDescription
-                if full.isEmpty {
+                if !(error is CancellationError) { self.error = SawtError.friendly(error).localizedDescription }
+                if raw.isEmpty {
                     // ما فيه رد: نشيل رسالتك ونرجعها لخانة الكتابة عشان ما تتكرر
                     if let i = conversations.firstIndex(where: { $0.id == convID }) {
                         conversations[i].messages.removeAll { $0.id == userMsg.id }
@@ -201,22 +273,28 @@ final class ChatStore: ObservableObject {
                     onFail(t)
                 }
             }
-            let answer = full.trimmingCharacters(in: .whitespacesAndNewlines)
+            let answer = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             // لو انضغط إيقاف، stop() حفظ الجزء بنفسه بالترتيب الصح
             if !answer.isEmpty, genID == myGen {
                 // الرد يروح لنفس المحادثة حتى لو تنقّلت لغيرها، ومرة وحدة بس (حتى مع الإيقاف)
-                let reply = Message(role: .assistant, text: answer)
+                var reply = Message(role: .assistant, text: answer)
+                let th = thinking.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !th.isEmpty {
+                    reply.thinking = th
+                    reply.thinkSeconds = (answerAt ?? Date()).timeIntervalSince(genStart)
+                }
+                if !sources.isEmpty { reply.sources = sources }
                 append(reply, to: convID)
                 MemoryStore.shared.extractLater(exchanges: [(t, answer)]) { [weak self] in
                     self?.markMemorySaved(reply.id, in: convID)
                 }
             }
             if genID == myGen {
-                streamingText = ""
+                live.reset()
                 isGenerating = false
             }
             slog.stage("idle")
-            slog("chat: gen done \(full.count) chars")
+            slog("chat: gen done \(raw.count) chars")
         }
     }
 
@@ -286,8 +364,8 @@ final class ChatStore: ObservableObject {
             if !partial.isEmpty { append(Message(role: .assistant, text: partial), to: genConv) }
         }
         latestPartial = ""
+        live.reset()
         genID += 1
-        streamingText = ""
         isGenerating = false
     }
 

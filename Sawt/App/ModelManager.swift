@@ -88,7 +88,14 @@ final class ModelManager: ObservableObject {
         let token = llmToken
         llm = downloaded.contains(option.id) ? .preparing : .loading(0)
         downloadingID = downloaded.contains(option.id) ? nil : option.id
+        let needsNet = !downloaded.contains(option.id)
         llmTask = Task {
+            if needsNet, !(await NetworkGate.shared.permit("تنزيل النموذج")) {
+                guard llmToken == token else { return }
+                downloadingID = nil
+                llm = .failed("الإنترنت مقفول، فما نزّلت النموذج.")
+                return
+            }
             do {
                 try await withTimeout(seconds: 1_800, what: "تنزيل النموذج") {
                     try await LLMService.shared.load(option) { p in
@@ -131,7 +138,23 @@ final class ModelManager: ObservableObject {
     }
 
     /// يعيد تحميل النموذج الحالي بوضع النظر (مرة وحدة) إذا يدعم الصور.
+    /// يُستدعى أول ما تنضاف صورة (قبل الإرسال) عشان التحميل يبدأ بدري؛ الطلبات المتزامنة تشترك بنفس المهمة.
+    private var visionTask: Task<Bool, Never>?
     func ensureVision() async -> Bool {
+        if let t = visionTask { return await t.value }
+        let t = Task { await self.loadVision() }
+        visionTask = t
+        let ok = await t.value
+        visionTask = nil
+        return ok
+    }
+
+    func preloadVisionIfUseful() {
+        guard AppSettings.shared.llm.vision, !ChatStore.shared.isGenerating, llm.isReady else { return }
+        Task { _ = await ensureVision() }
+    }
+
+    private func loadVision() async -> Bool {
         let option = AppSettings.shared.llm
         guard option.vision else { return false }
         if await LLMService.shared.visionLoaded { return true }
@@ -225,8 +248,13 @@ final class ModelManager: ObservableObject {
         let token = sttToken
         stt = downloadedSTT.contains(variant) ? .preparing : .loading(0)
         sttDownloading = !downloadedSTT.contains(variant)
+        let sttNeedsNet = variant != "apple" && !downloadedSTT.contains(variant)
         sttTask = Task {
             defer { if sttToken == token { sttDownloading = false } }
+            if sttNeedsNet, !(await NetworkGate.shared.permit("تنزيل نموذج السمع")) {
+                if sttToken == token { stt = .failed("الإنترنت مقفول، فما نزّلت نموذج السمع.") }
+                return
+            }
             do {
                 try await withTimeout(seconds: 1_800, what: "نموذج السمع") {
                     try await SpeechRecognizer.shared.load(variant: variant) { p, preparing in
