@@ -6,6 +6,7 @@ struct SawtApp: App {
     @StateObject private var settings = AppSettings.shared
     @StateObject private var store = ChatStore.shared
     @StateObject private var call = CallController()
+    @StateObject private var updater = UpdateChecker.shared
     @Environment(\.scenePhase) private var phase
     @State private var bgTask: Task<Void, Never>?
 
@@ -30,7 +31,13 @@ struct SawtApp: App {
                     // نخلي أول إطار يطلع قبل تحميل النموذج الثقيل
                     try? await Task.sleep(for: .milliseconds(400))
                     models.loadAll()
+                    await updater.check()
                 }
+                .sheet(item: $updater.available) { UpdateSheet(info: $0).environment(\.layoutDirection, .rightToLeft) }
+                .alert("التحديثات", isPresented: Binding(get: { updater.lastMessage != nil },
+                                                        set: { if !$0 { updater.lastMessage = nil } })) {
+                    Button("تمام", role: .cancel) {}
+                } message: { Text(updater.lastMessage ?? "") }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
                     slog("⚠️ memory warning: footprint=\(RAM.footprintMB)MB avail=\(RAM.availableMB)MB llm=\(AppSettings.shared.llmID) stt=\(AppSettings.shared.sttID) voice=\(AppSettings.shared.voiceID)")
                     Task { await LLMService.shared.trim() }

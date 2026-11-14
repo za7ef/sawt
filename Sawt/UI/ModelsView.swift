@@ -145,6 +145,10 @@ struct ModelsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text(m.title).font(.headline)
+                if m.vision {
+                    Image(systemName: "eye").font(.caption).foregroundStyle(.secondary)
+                        .accessibilityLabel("يشوف الصور")
+                }
                 if let tag = m.tag {
                     Text(tag).font(.caption2.weight(.semibold))
                         .padding(.horizontal, 8).padding(.vertical, 3)

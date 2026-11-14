@@ -149,10 +149,7 @@ struct SettingsView: View {
                     LabeledContent("حرارة الجوال", value: ThermalWatch.label)
                 }
 
-                Section {
-                    LabeledContent("الإصدار", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")
-                    LabeledContent("كل شي على الجهاز", value: "بدون سيرفر")
-                }
+                AboutSection()
             }
             .task { await refreshUsage() }
             .confirmationDialog("تحذف كل النماذج من الجوال؟", isPresented: $confirmAll, titleVisibility: .visible) {
