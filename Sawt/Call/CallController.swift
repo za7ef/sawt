@@ -78,6 +78,7 @@ final class CallController: ObservableObject {
     private var llmDone = false
     /// كل الجمل اتحولت صوت (عشان ما نرجع نسمع والصوت لسا يتجهز)
     private var ttsDone = true
+    private var lastMemBlock = ""
     private var spokenSoFar = ""
     private var carryUserText = ""
     private var replyID = 0
@@ -107,6 +108,8 @@ final class CallController: ObservableObject {
             // نجهز الصوت هنا (مو وقت فتح التطبيق) عشان الذاكرة
             self.debug.stage = "يجهّز الصوت"
             slog("call: preparing voice")
+            self.lastMemBlock = ""
+            await ModelManager.shared.ensureTextMode()
             await LLMService.shared.resetCallSession()
             slog.stage("call:tts-load")
             await ModelManager.shared.prepareVoice()
@@ -500,7 +503,9 @@ final class CallController: ObservableObject {
         // التعليمات ثابتة (الجلسة تنعاد استخدامها)، والذاكرة المناسبة تنحط مع كل دور
         let system = settings.systemPrompt(chat: false, query: "", memory: false)
         let mem = MemoryStore.promptBlock(for: text, limit: 4)
-        let userText = mem.isEmpty ? text : "[\(mem)]\n\n\(text)"
+        // نضيفها بس إذا تغيّرت عن آخر مرة (عشان ما تتكدس في ذاكرة الجلسة)
+        let userText = (mem.isEmpty || mem == lastMemBlock) ? text : "[\(mem)]\n\n\(text)"
+        if !mem.isEmpty { lastMemBlock = mem }
 
         var cont: AsyncStream<String>.Continuation!
         let sentences = AsyncStream<String> { cont = $0 }

@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import SwiftUI
 
@@ -12,6 +13,7 @@ final class Dictation: ObservableObject {
 
     func start() {
         guard !isRecording else { return }
+        Speaker.shared.stop()
         if AudioIO.shared.isRunning {
             if AudioIO.shared.ownedByCall { error = "المايك مشغول بالمكالمة."; return }
             Speaker.shared.stop()
@@ -24,7 +26,10 @@ final class Dictation: ObservableObject {
             lock.lock(); buffer.removeAll(); lock.unlock()
             AudioIO.shared.onMic = { [weak self] s in
                 guard let self else { return }
-                self.lock.lock(); self.buffer.append(contentsOf: s); self.lock.unlock()
+                // حد أقصى دقيقتين (16 ألف عينة بالثانية) عشان الذاكرة ووقت التحويل
+                self.lock.lock()
+                if self.buffer.count < 16_000 * 120 { self.buffer.append(contentsOf: s) }
+                self.lock.unlock()
             }
             do {
                 try AudioIO.shared.start()
@@ -53,29 +58,62 @@ final class Dictation: ObservableObject {
     }
 }
 
+/// مشغّل صوت بس (بدون مايك): وضع .playback عشان القراءة ما تفتح المايك ولا تقطع الصوت بإلغاء الصدى.
+final class PlaybackOnly {
+    private let engine = AVAudioEngine()
+    private let player = AVAudioPlayerNode()
+    private var format: AVAudioFormat?
+
+    init() { engine.attach(player) }
+
+    func prepare(rate: Double) throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        try session.setActive(true)
+        if format?.sampleRate != rate || !engine.isRunning {
+            engine.stop()
+            let f = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)!
+            engine.disconnectNodeOutput(player)
+            engine.connect(player, to: engine.mainMixerNode, format: f)
+            format = f
+            engine.prepare()
+            try engine.start()
+        }
+        player.play()
+    }
+
+    /// يشغّل ويرجع لما يخلص.
+    func play(_ samples: [Float], rate: Double) async {
+        guard !samples.isEmpty else { return }
+        do { try prepare(rate: rate) } catch { slog("playback: \(error)"); return }
+        guard let f = format, let buf = AVAudioPCMBuffer(pcmFormat: f, frameCapacity: AVAudioFrameCount(samples.count)) else { return }
+        buf.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { buf.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            player.scheduleBuffer(buf, completionCallbackType: .dataPlayedBack) { _ in c.resume() }
+        }
+    }
+
+    func stop() {
+        player.stop()
+        engine.stop()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+}
+
 /// قراءة رسالة بصوت (زر السماعة تحت الرد).
 @MainActor
 final class Speaker {
     static let shared = Speaker()
     private var task: Task<Void, Never>?
-    private var startedEngine = false
+    private let out = PlaybackOnly()
 
     /// يشغّل عينات جاهزة (مثل تجربة صوت نماء).
     func play(samples: [Float], sampleRate: Double) {
         stop()
         guard !AudioIO.shared.ownedByCall, !samples.isEmpty else { return }
-        task = Task {
-            if !AudioIO.shared.isRunning {
-                guard (try? AudioIO.shared.start()) != nil else { return }
-                startedEngine = true
-            }
-            AudioIO.shared.enqueue(samples: samples, sampleRate: sampleRate)
-            while AudioIO.shared.isPlaying {
-                try? await Task.sleep(for: .milliseconds(200))
-                if Task.isCancelled { return }
-            }
-            if startedEngine { AudioIO.shared.stop(); startedEngine = false }
-        }
+        let out = self.out
+        task = Task { await out.play(samples, rate: sampleRate) }
     }
 
     func speak(_ text: String, voice override: VoiceOption? = nil) {
@@ -85,32 +123,26 @@ final class Speaker {
         let voice = override ?? AppSettings.shared.voice
         let rate = AppSettings.shared.speechRate
         guard !AudioIO.shared.ownedByCall else { return }
+        let out = self.out
         task = Task {
-            if !AudioIO.shared.isRunning {
-                guard (try? AudioIO.shared.start()) != nil else { return }
-                startedEngine = true
+            // نجهز الجملة الجاية وهذي تشتغل
+            var next: Task<(samples: [Float], rate: Double), Never>? = sentences.first.map { s in
+                Task { await SpeechSynth.shared.synthesize(s, voice: voice, rate: rate) }
             }
-            for s in sentences {
+            for i in sentences.indices {
+                guard let cur = next else { break }
+                let a = await cur.value
                 if Task.isCancelled { return }
-                let a = await SpeechSynth.shared.synthesize(s, voice: voice, rate: rate)
-                if Task.isCancelled { return }
-                AudioIO.shared.enqueue(samples: a.samples, sampleRate: a.rate)
-            }
-            while AudioIO.shared.isPlaying {
-                try? await Task.sleep(for: .milliseconds(200))
+                next = i + 1 < sentences.count ? Task { await SpeechSynth.shared.synthesize(sentences[i + 1], voice: voice, rate: rate) } : nil
+                await out.play(a.samples, rate: a.rate)
                 if Task.isCancelled { return }
             }
-            if startedEngine { AudioIO.shared.stop(); startedEngine = false }
         }
     }
 
     func stop() {
-        let wasActive = task != nil || startedEngine
         task?.cancel()
         task = nil
-        // ما نلمس المحرك إذا المكالمة هي اللي شغلته
-        if wasActive, !AudioIO.shared.ownedByCall { AudioIO.shared.stopPlayback() }
-        if startedEngine, !AudioIO.shared.ownedByCall { AudioIO.shared.stop() }
-        startedEngine = false
+        if !AudioIO.shared.ownedByCall { out.stop() }
     }
 }
