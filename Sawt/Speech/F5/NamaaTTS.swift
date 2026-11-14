@@ -245,6 +245,12 @@ final class NamaaEngine: @unchecked Sendable {
         return secPerChar * Double(text.count)
     }
     static let steps = 16
+    static let stepChoices = [6, 7, 8, 16]
+    /// عدد خطوات التوليد المختار (الافتراضي 7)
+    static var chosenSteps: Int {
+        let v = UserDefaults.standard.integer(forKey: "namaaSteps")
+        return stepChoices.contains(v) ? v : 7
+    }
     static let cfg: Float = 2.0
     static let sway: Float = -1.0
 
@@ -468,11 +474,18 @@ final class NamaaEngine: @unchecked Sendable {
         eval(textCond, textUncond)
         let rope = dit.rope(total)
 
-        // المكالمة: خطوات أقل (8، و6 إذا الجوال حار) عشان الرد يطلع أسرع؛ التجربة بالإعدادات تبقى 16
-        let steps = CallController.isActive ? (ThermalWatch.isHot ? 6 : 8) : Self.steps
-        // جدول الخطوات EPSS لـ 16 خطوة ثم sway
-        let epss: [Float] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32]
-        var ts = steps == 16 ? epss.map { $0 / 32 } : (0 ... steps).map { Float($0) / Float(steps) }
+        // عدد الخطوات من الإعدادات (الافتراضي 7 بجدول EPSS)، والتجربة بالإعدادات تستخدم نفس العدد
+        // عشان يسمع نفس جودة المكالمة. إذا الجوال حار في مكالمة: 6 كحد أقصى.
+        var steps = Self.chosenSteps
+        if CallController.isActive, ThermalWatch.isHot { steps = min(steps, 6) }
+        // جداول EPSS من F5-TTS v1 (من 32)، ثم sway
+        let epssTable: [Int: [Float]] = [
+            6: [0, 2, 4, 6, 8, 16, 32],
+            7: [0, 2, 4, 6, 8, 16, 24, 32],
+            8: [0, 2, 4, 6, 8, 12, 16, 24, 32],
+            16: [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32],
+        ]
+        var ts = epssTable[steps].map { $0.map { $0 / 32 } } ?? (0 ... steps).map { Float($0) / Float(steps) }
         ts = ts.map { t in t + Self.sway * (cos(Float.pi / 2 * t) - 1 + t) }
 
         var x = MLXRandom.normal([1, total, 100])   // fp32
