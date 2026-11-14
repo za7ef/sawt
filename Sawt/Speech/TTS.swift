@@ -14,10 +14,52 @@ final class SpeechSynth {
     /// يجهّز الصوت المختار (يحمّل النموذج في الذاكرة).
     func prepare(_ voice: VoiceOption) {
         queue.sync { self.load(voice) }
+        // أول استخدام لصوت آبل داخل جلسة المكالمة أحيانًا يعلّق (timeout 10ث) فيضيع أول رد:
+        // نسخّنه بجملة قصيرة ما تنسمع، لأنه يُستخدم للإنجليزي وكاحتياط لكل الأصوات
+        Task.detached(priority: .utility) {
+            let t0 = Date()
+            let r = await self.apple.synthesize("هلا", language: "ar-SA", rate: 1.0)
+            slog("tts: apple warmup \(Int(Date().timeIntervalSince(t0) * 1000))ms samples=\(r.samples.count)")
+        }
+    }
+
+    /// احتياط عربي لما يفشل نماء: نبرة (سعودية ثم فصحى) إذا موجودة، وإلا آبل.
+    private func arabicFallback(_ clean: String, rate: Double) async -> (samples: [Float], rate: Double) {
+        if let v = Catalog.voices.first(where: { $0.id == "nabra-saudi" }) ?? Catalog.voices.first(where: { $0.id == "nabra-msa" }) {
+            let r: (samples: [Float], rate: Double) = await withCheckedContinuation { cont in
+                queue.async {
+                    guard let tts = self.fallbackSherpa(v) else { cont.resume(returning: ([], 24_000)); return }
+                    let a = tts.generate(text: clean, sid: 0, speed: Float(rate))
+                    cont.resume(returning: (a.samples, Double(a.sampleRate)))
+                }
+            }
+            if !r.samples.isEmpty { return r }
+        }
+        return await apple.synthesize(clean, language: "ar-SA", rate: rate)
+    }
+
+    private var fallback: SherpaOnnxOfflineTtsWrapper?
+    private var fallbackID: String?
+    /// صوت نبرة احتياطي (على خيط الصوت)، منفصل عن الصوت المختار.
+    private func fallbackSherpa(_ v: VoiceOption) -> SherpaOnnxOfflineTtsWrapper? {
+        if fallbackID == v.id, let f = fallback { return f }
+        guard let root = Catalog.voicesRoot, case .kokoro(let model) = v.kind else { return nil }
+        let dir = Catalog.voiceDir(v.folder)
+        let kokoro = sherpaOnnxOfflineTtsKokoroModelConfig(
+            model: dir.appendingPathComponent(model).path,
+            voices: dir.appendingPathComponent("voices.bin").path,
+            tokens: dir.appendingPathComponent("tokens.txt").path,
+            dataDir: root.appendingPathComponent("espeak-ng-data").path)
+        var cfg = sherpaOnnxOfflineTtsConfig(model: sherpaOnnxOfflineTtsModelConfig(kokoro: kokoro, numThreads: 2),
+                                             maxNumSentences: 1, silenceScale: 0.2)
+        fallback = SherpaOnnxOfflineTtsWrapper(config: &cfg)
+        fallbackID = v.id
+        slog("tts: fallback voice loaded \(v.id)")
+        return fallback
     }
 
     func unload() {
-        queue.async { self.sherpa = nil; self.loadedVoice = nil }
+        queue.async { self.sherpa = nil; self.loadedVoice = nil; self.fallback = nil; self.fallbackID = nil }
         NamaaEngine.shared.unload()
     }
 
@@ -70,7 +112,10 @@ final class SpeechSynth {
         }
         if voice.kind == .namaa {
             let s = await NamaaEngine.shared.synthesize(clean, speed: rate)
-            if s.isEmpty { return await apple.synthesize(clean, language: "ar-SA", rate: rate) }
+            if s.isEmpty {
+                slog("tts: namaa gave nothing → fallback voice")
+                return await arabicFallback(clean, rate: rate)
+            }
             return (s, 24_000)
         }
         return await withCheckedContinuation { cont in
