@@ -20,7 +20,7 @@ enum TextCleaner {
     }
 
     /// يفصل النص المتدفق لجمل جاهزة للنطق. يرجع (جمل كاملة، الباقي).
-    static func splitSentences(_ buffer: String, first: Bool) -> ([String], String) {
+    static func splitSentences(_ buffer: String, first: Bool, firstWords: Int = 7) -> ([String], String) {
         var out: [String] = []
         var current = ""
         let enders: Set<Character> = [".", "!", "?", "؟", "؛", "\n", "…"]
@@ -35,10 +35,10 @@ enum TextCleaner {
             }
             if enders.contains(ch), current.trimmingCharacters(in: .whitespaces).count > 1 {
                 out.append(current); current = ""
-            } else if soft.contains(ch), words >= ((first && out.isEmpty) ? 3 : 8) {
+            } else if soft.contains(ch), words >= ((first && out.isEmpty) ? min(3, firstWords) : 8) {
                 // أول جملة نقطعها بدري عشان يبدأ يتكلم بسرعة
                 out.append(current); current = ""
-            } else if ch == " ", first, out.isEmpty, words >= 7 {
+            } else if ch == " ", first, out.isEmpty, words >= firstWords {
                 // ما فيه علامة ترقيم بعد: نبدأ الكلام بأول سبع كلمات بدل ما نستنى
                 out.append(current); current = ""
             } else if ch == " ", current.count >= 150 {
