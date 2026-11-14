@@ -39,15 +39,11 @@
 	</array>
 	<key>UILaunchScreen</key>
 	<dict>
-	<key>CADisableMinimumFrameDurationOnPhone</key>
-	<true/>
 		<key>UIColorName</key>
 		<string></string>
 	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
-	<key>CADisableMinimumFrameDurationOnPhone</key>
-	<true/>
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
 	</dict>
