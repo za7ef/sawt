@@ -362,7 +362,7 @@ struct EmptyState: View {
                 .scaleEffect(appear ? 1 : 0.6)
                 .opacity(appear ? 1 : 0)
             Text("وش في بالك؟").font(.title2.weight(.semibold))
-            Text("كل شي يشتغل على جوالك بدون إنترنت")
+            Text("النموذج يشتغل على جوالك، والإنترنت مقفول إلا إذا شغّلته")
                 .font(.subheadline).foregroundStyle(.secondary)
             Button(action: startVoice) {
                 Label("ابدأ مكالمة صوتية", systemImage: "waveform")
@@ -408,13 +408,17 @@ struct MessageRow: View, Equatable {
                         }
                         .buttonStyle(.plain)
                     }
+                    if let n = message.notice {
+                        Label(n, systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.gray)
+                    }
                     if let th = message.thinking, !th.isEmpty {
                         ThinkingSection(text: th, seconds: message.thinkSeconds, live: false)
                     }
                     if streaming && message.text.isEmpty {
                         TypingDots()
                     } else {
-                        Text(LocalizedStringKey(message.text))
+                        Text(SafeMarkdown.key(message.text))
                             .textSelection(.enabled)
                             .lineSpacing(4)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -484,7 +488,7 @@ struct StreamingRow: View {
             if live.text.isEmpty {
                 if live.status == nil && live.thinking.isEmpty { TypingDots() }
             } else {
-                Text(LocalizedStringKey(live.text))
+                Text(SafeMarkdown.key(live.text))
                     .lineSpacing(4)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -556,5 +560,35 @@ struct SourcesList: View {
         }
         .padding(10)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+/// تنسيق Markdown بدون روابط قابلة للضغط في نص النموذج (حماية من روابط مدسوسة من صفحات الويب).
+/// الروابط الوحيدة القابلة للضغط هي قائمة المصادر.
+enum SafeMarkdown {
+    private static let linkRE = try! NSRegularExpression(pattern: #"!?\[([^\]]*)\]\(([^)\s]+)[^)]*\)"#)
+    private static let autoRE = try! NSRegularExpression(pattern: #"<((?:https?|mailto|tel|sms):[^>\s]+)>"#, options: [.caseInsensitive])
+
+    static func clean(_ s: String) -> String {
+        var t = s
+        // [نص](رابط) → نص (الدومين)
+        let ns = t as NSString
+        var out = ""
+        var last = 0
+        for m in linkRE.matches(in: t, range: NSRange(location: 0, length: ns.length)) {
+            out += ns.substring(with: NSRange(location: last, length: m.range.location - last))
+            let label = ns.substring(with: m.range(at: 1))
+            let host = URL(string: ns.substring(with: m.range(at: 2)))?.host
+            out += label + (host.map { " (\($0))" } ?? "")
+            last = m.range.location + m.range.length
+        }
+        out += ns.substring(from: last)
+        t = out
+        t = autoRE.stringByReplacingMatches(in: t, range: NSRange(location: 0, length: (t as NSString).length), withTemplate: "`$1`")
+        return t
+    }
+
+    static func key(_ s: String) -> LocalizedStringKey {
+        LocalizedStringKey(clean(s))
     }
 }

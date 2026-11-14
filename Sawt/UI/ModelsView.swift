@@ -21,7 +21,7 @@ struct ModelsView: View {
                 } header: {
                     Text("النماذج اللغوية")
                 } footer: {
-                    Text("ذاكرة جهازك تقريبًا \(String(format: "%.0f", ramGB)) GB. النماذج تنزل من Hugging Face وتشتغل على الجهاز بدون إنترنت بعد التنزيل.")
+                    Text("ذاكرة جهازك تقريبًا \(String(format: "%.0f", ramGB)) GB. النماذج تنزل من Hugging Face مرة وحدة، وبعدها تشتغل على الجهاز بدون إنترنت.")
                 }
 
                 Section("نموذج مخصص") {

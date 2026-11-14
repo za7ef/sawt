@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var shareURL: URL?
     @ObservedObject private var namaa = NamaaVoice.shared
     @ObservedObject private var memory = MemoryStore.shared
+    @ObservedObject private var voiceDL = VoiceDownloads.shared
     @State private var namaaWarn = false
     @State private var confirmNamaaDelete = false
 
@@ -45,7 +46,17 @@ struct SettingsView: View {
                 } header: {
                     Text("الصوت")
                 } footer: {
-                    Text("الأصوات العربية مدمجة في التطبيق. الجمل الإنجليزية تُقرأ بصوت آبل.")
+                    Text("نبرة مدمجة في التطبيق. الجمل الإنجليزية تُقرأ بصوت آبل.")
+                }
+
+                Section {
+                    ForEach(VoiceDownloads.items) { item in
+                        downloadRow(item)
+                    }
+                } header: {
+                    Text("أصوات تنزل لجوالك")
+                } footer: {
+                    Text("رخصة ميرو (CC BY-NC-ND 4.0) ما تسمح بنشره داخل التطبيق، فينزل مباشرة من Hugging Face لجوالك.")
                 }
 
                 Section {
@@ -182,6 +193,35 @@ struct SettingsView: View {
             .navigationTitle("الإعدادات")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("تم") { dismiss() } } }
+        }
+    }
+
+    @ViewBuilder private func downloadRow(_ item: VoiceDownloads.Item) -> some View {
+        let title = Catalog.allVoices.first { $0.id == item.id }?.title ?? item.id
+        HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                switch voiceDL.state[item.id] ?? .idle {
+                case .downloading(let p):
+                    ProgressView(value: p).frame(maxWidth: 160)
+                case .failed(let m):
+                    Text("ما كمل: \(m)").font(.caption).foregroundStyle(.red)
+                case .idle:
+                    Text(voiceDL.installed(item) ? "نازل على جوالك" : item.approx).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if voiceDL.installed(item) {
+                Button(role: .destructive) {
+                    if settings.voiceID == item.id { settings.voiceID = "apple" }
+                    voiceDL.delete(item); models.voiceChanged()
+                } label: { Image(systemName: "trash") }
+                .buttonStyle(.borderless)
+            } else if case .downloading = voiceDL.state[item.id] ?? .idle {
+                EmptyView()
+            } else {
+                Button("تنزيل") { voiceDL.download(item) }.buttonStyle(.borderless)
+            }
         }
     }
 

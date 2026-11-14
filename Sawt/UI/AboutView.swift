@@ -70,7 +70,7 @@ struct AboutSection: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("صوت").font(.headline)
                     Text(AppVersion.label).font(.caption).foregroundStyle(.secondary)
-                    Text("مساعد ذكي يشتغل كامل على جوالك").font(.caption).foregroundStyle(.secondary)
+                    Text("مساعد ذكي يشتغل على جوالك").font(.caption).foregroundStyle(.secondary)
                 }
             }
             .padding(.vertical, 4)
