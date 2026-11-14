@@ -110,7 +110,8 @@ final class CallController: ObservableObject {
             await ModelManager.shared.prepareVoice()
             slog.stage("call:listening")
             let avail = RAM.availableMB
-            let persona = AppSettings.shared.persona
+            CallController.isActive = true
+            let persona = AppSettings.shared.systemPrompt(chat: false, query: "")
             Task { await LLMService.shared.warmup(system: persona) }
             slog("call: after voice load footprint=\(RAM.footprintMB)MB avail=\(avail)MB")
             if avail < 1500, !AppSettings.shared.llmID.lowercased().contains("2b") {
@@ -171,8 +172,22 @@ final class CallController: ObservableObject {
         }
     }
 
+    /// هل فيه مكالمة شغالة (عشان استخراج الذاكرة ما يزاحمها).
+    static var isActive = false
+
     func end() {
         cancelReply(recordPartial: true)
+        CallController.isActive = false
+        // استخراج الذاكرة بعد المكالمة
+        var pairs: [(user: String, assistant: String)] = []
+        var lastUser: String?
+        for t in turns {
+            if t.role == .user { lastUser = (lastUser.map { $0 + " " } ?? "") + t.text }
+            else if let u = lastUser { pairs.append((u, t.text)); lastUser = nil }
+        }
+        if let u = lastUser { pairs.append((u, "")) }
+        let recent = Array(pairs.suffix(6))
+        Task { @MainActor in MemoryStore.shared.extractLater(exchanges: recent) }
         Task { await LLMService.shared.resetCallSession() }
         audio.onMic = nil
         audio.onStateChange = nil
@@ -473,7 +488,7 @@ final class CallController: ObservableObject {
         let voice = settings.voice
         let rate = settings.speechRate
         let hist = history()
-        let system = settings.persona
+        let system = settings.systemPrompt(chat: false, query: text)
 
         var cont: AsyncStream<String>.Continuation!
         let sentences = AsyncStream<String> { cont = $0 }
