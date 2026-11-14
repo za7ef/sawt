@@ -9,6 +9,9 @@ struct VoiceModeView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showCaptions = true
     @AppStorage("showCallDebug") private var showDebug = false
+    @AppStorage("callCameraWarned") private var cameraWarned = false
+    @State private var cameraWarn = false
+    @ObservedObject private var camera = CallCamera.shared
 
     var body: some View {
         ZStack {
@@ -16,6 +19,7 @@ struct VoiceModeView: View {
             VStack(spacing: 0) {
                 header
                 if showDebug { DebugOverlay(debug: call.debug).padding(.horizontal, 16).padding(.top, 8) }
+                if call.cameraOn && camera.running { cameraPreview.padding(.top, 10) }
                 Spacer()
                 OrbView(mic: call.micLevel, out: call.outLevel, state: call.state)
                     .frame(width: 260, height: 260)
@@ -46,7 +50,29 @@ struct VoiceModeView: View {
         .alert("تنبيه", isPresented: Binding(get: { call.error != nil }, set: { if !$0 { call.error = nil } })) {
             Button("تمام", role: .cancel) { if call.state == .idle { dismiss() } }
         } message: { Text(call.error ?? "") }
+        .alert("الكاميرا في المكالمة", isPresented: $cameraWarn) {
+            Button("شغّل") { cameraWarned = true; Task { await call.toggleCamera() } }
+            Button("إلغاء", role: .cancel) {}
+        } message: {
+            Text("مع كل كلام تقوله ينأخذ إطار واحد من الكاميرا ويشوفه النموذج على جوالك. هذا يبدّل النموذج لوضع النظر (ياخذ ثواني)، والرد يتأخر شوي، والجوال يسخن أكثر.")
+        }
         .statusBarHidden(false)
+    }
+
+    private var cameraPreview: some View {
+        CameraPreview(session: camera.session)
+            .frame(width: 120, height: 160)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(alignment: .bottomTrailing) {
+                Button { camera.flip() } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath.camera")
+                        .font(.footnote).padding(7)
+                        .background(.ultraThinMaterial, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .padding(6)
+                .accessibilityLabel("بدّل الكاميرا")
+            }
     }
 
     private var background: some View {
@@ -114,7 +140,7 @@ struct VoiceModeView: View {
 
     private var controls: some View {
         GlassEffectContainer(spacing: 24) {
-            HStack(spacing: 28) {
+            HStack(spacing: 18) {
                 Button { call.toggleMute() } label: {
                     Image(systemName: call.muted ? "mic.slash.fill" : "mic.fill")
                         .font(.title2).frame(width: 68, height: 68)
@@ -122,6 +148,20 @@ struct VoiceModeView: View {
                 }
                 .buttonStyle(.glass).buttonBorderShape(.circle)
                 .tint(call.muted ? .red : nil)
+
+                Button {
+                    if call.cameraOn || cameraWarned { Task { await call.toggleCamera() } } else { cameraWarn = true }
+                } label: {
+                    Group {
+                        if call.cameraBusy { ProgressView() }
+                        else { Image(systemName: call.cameraOn ? "video.fill" : "video.slash") }
+                    }
+                    .font(.title2).frame(width: 68, height: 68)
+                }
+                .buttonStyle(.glass).buttonBorderShape(.circle)
+                .tint(call.cameraOn ? Theme.accent : nil)
+                .disabled(call.cameraBusy || call.state == .idle || call.state == .starting)
+                .accessibilityLabel(call.cameraOn ? "اطفِ الكاميرا" : "شغّل الكاميرا")
 
                 Button { call.interrupt() } label: {
                     Image(systemName: "hand.raised.fill").font(.title2).frame(width: 68, height: 68)
