@@ -346,7 +346,8 @@ struct ChatView: View {
             if !models.llm.isBusy { showModels = true }
             return
         }
-        let t = draft
+        // النص الفعلي في الخانة (إملاء لوحة المفاتيح ممكن ما حدّث draft)
+        let t = ComposerField.currentText().flatMap { $0.isEmpty ? nil : $0 } ?? draft
         let atts = pending
         sendGen += 1
         if dictation.isRecording { dictation.stop { _ in } }

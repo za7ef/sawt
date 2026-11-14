@@ -14,6 +14,15 @@ struct ComposerField: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
+    /// خانة الكتابة الحالية: الإملاء أحيانًا يكتب في UIKit بدون ما يوصل للـBinding،
+    /// فوقت الإرسال ناخذ النص من الخانة نفسها
+    @MainActor static weak var active: UITextView?
+    @MainActor static func currentText() -> String? {
+        guard let tv = active else { return nil }
+        if tv.markedTextRange != nil { tv.unmarkText() }
+        return tv.text
+    }
+
     func makeUIView(context: Context) -> UITextView {
         let tv = UITextView()
         tv.delegate = context.coordinator
@@ -38,6 +47,7 @@ struct ComposerField: UIViewRepresentable {
         ])
         context.coordinator.placeholder = ph
         tv.text = text
+        ComposerField.active = tv
         context.coordinator.lastToken = clearToken
         return tv
     }
