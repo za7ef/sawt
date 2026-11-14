@@ -94,13 +94,15 @@ enum PhoneControl {
         return out
     }
 
-    static func config(host: String, rpPort: UInt16) -> String {
-        let d: [String: Any] = ["pairing_file": pairingURL.path, "host": host, "rp_port": Int(rpPort)]
+    static func config(host: String, rpPort: UInt16, rpHost: String) -> String {
+        let d: [String: Any] = ["pairing_file": pairingURL.path, "host": host, "rp_port": Int(rpPort), "rp_host": rpHost]
         let data = (try? JSONSerialization.data(withJSONObject: d)) ?? Data("{}".utf8)
         return String(decoding: data, as: UTF8.self)
     }
 
     enum Op: Sendable { case probe, ax(UInt32), tap(UInt16, UInt16), keys(String) }
+
+    nonisolated(unsafe) static var lastRPHost = ""
 
     /// يكتشف منفذ _remotepairing._tcp عبر Bonjour (يفضّل واجهة loopback/الـVPN)
     @MainActor
@@ -110,13 +112,14 @@ enum PhoneControl {
             let params = NWParameters.tcp
             params.includePeerToPeer = true
             let browser = NWBrowser(for: .bonjour(type: "_remotepairing._tcp", domain: "local."), using: params)
-            final class Box: @unchecked Sendable { var done = false; var conn: NWConnection?; var seen: [String] = [] }
+            final class Box: @unchecked Sendable { var host = ""; var done = false; var conn: NWConnection?; var seen: [String] = [] }
             let box = Box()
             let finish: @Sendable (UInt16, String) -> Void = { p, i in
                 q.async {
                     guard !box.done else { return }
                     box.done = true
                     browser.cancel(); box.conn?.cancel()
+                    PhoneControl.lastRPHost = box.host
                     cont.resume(returning: (p, i))
                 }
             }
@@ -134,6 +137,7 @@ enum PhoneControl {
                     switch st {
                     case .ready, .waiting:
                         if case .hostPort(let h, let p) = c.currentPath?.remoteEndpoint, p.rawValue != 0 {
+                            box.host = "\(h)"
                             finish(p.rawValue, "bonjour \(h):\(p.rawValue) seen=\(box.seen)")
                         }
                     case .failed(let e): finish(0, "resolve failed: \(e) seen=\(box.seen)")
@@ -148,8 +152,8 @@ enum PhoneControl {
     }
 
     /// يشغّل العملية في خيط خلفي (الدوال متزامنة وتحجز الخيط)
-    static func run(_ op: Op, host: String, rpPort: UInt16 = 0) async -> String {
-        let cfg = config(host: host, rpPort: rpPort)
+    static func run(_ op: Op, host: String, rpPort: UInt16 = 0, rpHost: String = "") async -> String {
+        let cfg = config(host: host, rpPort: rpPort, rpHost: rpHost)
         return await Task.detached(priority: .userInitiated) { () -> String in
             #if SAWTCTL
             let p: UnsafeMutablePointer<CChar>? = cfg.withCString { c in
@@ -285,7 +289,7 @@ struct PhoneControlView: View {
             var rp: (port: UInt16, info: String) = (0, "lockdown")
             if info.contains("kind=RemotePairing") { rp = await PhoneControl.discoverRPPort() }
             Log.shared("phonectl rp port: \(rp.port) \(rp.info)")
-            var r = await PhoneControl.run(op, host: h, rpPort: rp.port)
+            var r = await PhoneControl.run(op, host: h, rpPort: rp.port, rpHost: PhoneControl.lastRPHost)
             r = "pairing: \(info)\nrp: \(rp.port) \(rp.info)\n" + r
             Log.shared("phonectl \(label): \(r.prefix(6000))")
             UIPasteboard.general.string = r
