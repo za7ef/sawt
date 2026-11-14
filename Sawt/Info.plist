@@ -84,6 +84,8 @@
 	<string>يحوّل كلامك لنص على الجهاز عشان يفهمك.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>يحتاج صوت المايك عشان تكلّمه مباشرة. صوتك يتعالج على جوالك وما ينحفظ.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
