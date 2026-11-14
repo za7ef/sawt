@@ -100,8 +100,22 @@ final class AudioIO {
             slog("audio: route change reason=\(reason) → \(AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portName))")
         })
         observers.append(nc.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-            slog("audio: engine configuration change")
-            self?.restart()
+            guard let self else { return }
+            // تشغيل إلغاء الصدى يطلق هالتنبيه مرة أول ما يشتغل المحرك. إذا المحرك ما وقف، ما نسوي شي.
+            if self.engine.isRunning {
+                slog("audio: config change ignored (engine still running)")
+                return
+            }
+            slog("audio: engine configuration change → quick restart")
+            do {
+                self.engine.prepare()
+                try self.engine.start()
+                self.player.play()
+                slog("audio: resumed")
+            } catch {
+                slog("audio: quick restart failed \(error) → full restart")
+                self.restart()
+            }
         })
     }
 
