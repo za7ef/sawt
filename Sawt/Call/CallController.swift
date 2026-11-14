@@ -448,6 +448,10 @@ final class CallController: ObservableObject {
 
     /// مقاطعة مؤجلة: ما نوقف الرد لين يطلع كلام فعلي (عشان صدى صوت الرد ما يقطعه)
     private var bargePending = false
+    /// جمل جاهزة تنتظر الصوت (نماء يجمعها)، ومتى يخلص الصوت المجدول
+    private var sentenceQueue: [String] = []
+    private var playUntil = Date.distantPast
+    private var lastFiller: String?
 
     private func userStarted(bargeIn: Bool) {
         slog("vad: user started speaking\(bargeIn ? " (barge-in)" : "")")
@@ -572,6 +576,8 @@ final class CallController: ObservableObject {
         llmDone = false
         ttsDone = false
         spokenSoFar = ""
+        sentenceQueue = []
+        playUntil = .distantPast
         proc.async { self.aiActive = true }
 
         let settings = AppSettings.shared
@@ -598,24 +604,52 @@ final class CallController: ObservableObject {
         let sentences = AsyncStream<String> { cont = $0 }
         sentenceCont = cont
 
-        // نماء أبطأ من الوقت الحقيقي: إذا أول جملة تأخرت 1.5 ثانية نقول "ممم، طيب" الجاهزة عشان ما يحس بسكتة
-        if voice.kind == .namaa {
+        // كلمة انتظار إذا الرد تأخر 1.3 ثانية: نماء دايمًا (أبطأ من الوقت الحقيقي)،
+        // والأصوات السريعة بس للأسئلة اللي تحتاج تفكير. ما نكرر نفس الكلمة مرتين ورا بعض.
+        let wantsFiller = voice.kind == .namaa || FillerPicker.needsThought(text)
+        if wantsFiller {
             Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                try? await Task.sleep(nanoseconds: 1_300_000_000)
                 guard let self, myID == self.replyID, self.state == .thinking, !self.bargePending else { return }
-                let f = NamaaEngine.shared.fillerSamples
-                guard !f.isEmpty else { return }
-                slog("call: filler while namaa thinks")
-                self.audio.enqueue(samples: f, sampleRate: 24_000)
+                var samples: [Float] = []
+                var sr = 24_000.0
+                var said: String?
+                if voice.kind == .namaa {
+                    said = FillerPicker.pick(for: text, last: self.lastFiller, available: NamaaEngine.shared.readyFillers)
+                    if let said { samples = NamaaEngine.shared.filler(said) ?? [] }
+                } else if let f = FillerPicker.pick(for: text, last: self.lastFiller) {
+                    said = f
+                    let o = await SpeechSynth.shared.synthesize(f, voice: voice, rate: rate)
+                    samples = o.samples; sr = o.rate
+                }
+                guard let said, !samples.isEmpty, myID == self.replyID, self.state == .thinking else { return }
+                self.lastFiller = said
+                slog("call: filler \"\(said)\"")
+                self.playUntil = max(self.playUntil, Date()).addingTimeInterval(Double(samples.count) / sr)
+                self.audio.enqueue(samples: samples, sampleRate: sr)
             }
         }
 
         // مستهلك الجمل: يحوّل كل جملة لصوت بالترتيب ويجدولها
         speakTask = Task { @MainActor in
-            for await sentence in sentences {
+            var spoke = 0
+            for await _ in sentences {
+              // كل جملة تنضاف للطابور قبل الإشارة. نماء: كل توليد يعيد معالجة المرجع،
+              // فنجمع الجمل اللي تراكمت وقت التوليد السابق في قطعة وحدة (أول قطعة تبقى لحالها عشان تبدأ بسرعة)
+              while !self.sentenceQueue.isEmpty {
                 if Task.isCancelled || myID != self.replyID { break }
+                var batch: [String] = [self.sentenceQueue.removeFirst()]
+                if voice.kind == .namaa, spoke > 0 {
+                    while let n = self.sentenceQueue.first, batch.joined(separator: " ").count + n.count < 140 {
+                        batch.append(self.sentenceQueue.removeFirst())
+                    }
+                }
+                let sentence = batch.joined(separator: " ")
                 slog.stage("call:tts")
-                let audioOut = await SpeechSynth.shared.synthesize(sentence, voice: voice, rate: rate)
+                let left = max(0, self.playUntil.timeIntervalSinceNow)
+                let audioOut = await SpeechSynth.shared.synthesize(sentence, voice: voice, rate: rate,
+                                                                   later: spoke > 0, gapBudget: spoke > 0 ? left : nil)
+                spoke += 1
                 if Task.isCancelled || myID != self.replyID { break }
                 guard !audioOut.samples.isEmpty else { continue }
                 self.enqueued += 1
@@ -625,7 +659,12 @@ final class CallController: ObservableObject {
                     self.debug.firstAudioMs = Int(Date().timeIntervalSince(self.turnStart) * 1000)
                     slog("tts: first audio after \(self.debug.firstAudioMs)ms")
                 }
-                self.audio.enqueue(samples: audioOut.samples, sampleRate: audioOut.rate) { [weak self] in
+                // سكتة قصيرة طبيعية بين القطع بدل لصقها أو سكوت ميت
+                var samples = audioOut.samples
+                if spoke > 1 { samples = [Float](repeating: 0, count: Int(audioOut.rate * 0.15)) + samples }
+                let dur = Double(samples.count) / audioOut.rate
+                self.playUntil = max(self.playUntil, Date()).addingTimeInterval(dur)
+                self.audio.enqueue(samples: samples, sampleRate: audioOut.rate) { [weak self] in
                     Task { @MainActor in
                         guard let self, myID == self.replyID else { return }
                         self.played += 1
@@ -633,6 +672,8 @@ final class CallController: ObservableObject {
                         self.checkReplyFinished()
                     }
                 }
+              }
+              if Task.isCancelled || myID != self.replyID { break }
             }
         }
 
@@ -665,7 +706,7 @@ final class CallController: ObservableObject {
                     self.liveAI = full
                     let (ready, rest) = TextCleaner.splitSentences(pending, first: first, firstWords: voice.kind == .namaa ? 3 : 7)
                     pending = rest
-                    for s in ready { cont.yield(s); first = false }
+                    for s in ready { self.sentenceQueue.append(s); cont.yield(s); first = false }
                 }
                 if frame != nil {
                     await LLMService.shared.trim()   // نفك ذاكرة ترميز الصورة
@@ -673,7 +714,7 @@ final class CallController: ObservableObject {
                 }
                 if myID == self.replyID {
                     let tail = pending.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !tail.isEmpty { cont.yield(tail) }
+                    if !tail.isEmpty { self.sentenceQueue.append(tail); cont.yield(tail) }
                 }
             } catch {
                 slog("llm: error \(error)")
@@ -734,6 +775,7 @@ final class CallController: ObservableObject {
         guard llmDone, ttsDone, played >= enqueued, state == .thinking || state == .speaking else { return }
         state = .listening
         slog.stage("call:listening")
+        if AppSettings.shared.voice.kind == .namaa { NamaaEngine.shared.renderNextFiller() }
         Task { @MainActor in _ = self.pendingSTTReload() }
         proc.async { self.aiActive = false }
     }
