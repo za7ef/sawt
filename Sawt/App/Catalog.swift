@@ -147,19 +147,42 @@ final class AppSettings: ObservableObject {
     @Published var language: String { didSet { d.set(language, forKey: "language") } }
     @Published var persona: String { didSet { d.set(persona, forKey: "persona") } }
     @Published var patience: Double { didSet { d.set(patience, forKey: "patience") } }
+    /// اختياري ومحفوظ على الجهاز بس.
+    @Published var userName: String { didSet { d.set(userName, forKey: "userName") } }
+    /// "m" مذكر، "f" مؤنث، "" بدون تحديد
+    @Published var addressForm: String { didSet { d.set(addressForm, forKey: "addressForm") } }
 
     private let d = UserDefaults.standard
 
     static let defaultPersona = """
     أنت «صوت»، مساعد ذكي يشتغل على جوال المستخدم بدون إنترنت. تتكلم معه في مكالمة صوتية مباشرة.
-    المستخدم رجّال اسمه محمد من السعودية. خاطبه دائمًا بصيغة المذكر (أنت، تبي، عندك) وأبدًا لا تقول "أنتي" أو "تبين".
-    تكلّم باللهجة السعودية البيضاء الطبيعية إذا كلمك بالعربي، وبالإنجليزي إذا كلمك بالإنجليزي.
+    تكلّم بالعربي بلهجة بيضاء طبيعية إذا كلمك بالعربي، وبالإنجليزي إذا كلمك بالإنجليزي.
     ردودك قصيرة وطبيعية كأنك صاحبه تتكلم مو تكتب: جملة إلى ثلاث جمل غالبًا.
     نوّع كلامك ولا تكرر نفس العبارات أو نفس بداية الرد، ولا تعيد سؤاله عليه.
     جاوب على اللي قاله مباشرة. إذا ما فهمت كلامه (ممكن التمييز غلط) اسأله يعيد باختصار.
     لا تستخدم قوائم ولا رموز ولا إيموجي ولا تنسيق، لأن كلامك يتحول لصوت.
     اكتب الأرقام بالحروف إذا كانت قليلة.
     """
+
+    /// التعليمات الكاملة وقت التشغيل: الشخصية + الاسم وصيغة المخاطبة (إذا محددة) + الذاكرة.
+    func systemPrompt(chat: Bool, query: String) -> String {
+        var s = persona
+        if chat {
+            s = s.replacingOccurrences(of: "تتكلم معه في مكالمة صوتية مباشرة.", with: "تكلمه في دردشة كتابية.")
+        }
+        var extra: [String] = []
+        let name = userName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty { extra.append("اسم المستخدم: \(name).") }
+        switch addressForm {
+        case "m": extra.append("خاطب المستخدم بصيغة المذكر.")
+        case "f": extra.append("خاطب المستخدم بصيغة المؤنث.")
+        default: break
+        }
+        if !extra.isEmpty { s += "\n" + extra.joined(separator: "\n") }
+        let mem = MemoryStore.promptBlock(for: query)
+        if !mem.isEmpty { s += "\n\n" + mem }
+        return s
+    }
 
     private init() {
         llmID = d.string(forKey: "llmID") ?? Catalog.llms[0].id
@@ -178,11 +201,15 @@ final class AppSettings: ObservableObject {
         voiceID = d.string(forKey: "voiceID") ?? (Catalog.voices.first?.id ?? "apple")
         speechRate = d.object(forKey: "speechRate") as? Double ?? 1.0
         language = d.string(forKey: "language") ?? "auto"
-        if let p = d.string(forKey: "persona"), !p.contains("صوت»، مساعد ذكي") || p.contains("بصيغة المذكر") {
+        if let p = d.string(forKey: "persona"), !p.contains("صوت»، مساعد ذكي") || p == AppSettings.defaultPersona {
             persona = p
         } else {
-            persona = AppSettings.defaultPersona   // ترقية الشخصية الافتراضية القديمة
+            // ترقية أي شخصية افتراضية قديمة (كانت فيها معلومات شخصية) للعامة الجديدة
+            persona = AppSettings.defaultPersona
+            d.set(persona, forKey: "persona")
         }
+        userName = d.string(forKey: "userName") ?? ""
+        addressForm = d.string(forKey: "addressForm") ?? ""
         patience = d.object(forKey: "patience") as? Double ?? 0.7
     }
 

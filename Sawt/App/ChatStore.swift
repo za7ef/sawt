@@ -9,6 +9,8 @@ struct Message: Identifiable, Codable, Equatable {
     var text: String
     var viaVoice = false
     var date = Date()
+    /// انحفظ شي في الذاكرة بعد هذا الرد
+    var memorySaved: Bool?
 }
 
 struct Conversation: Identifiable, Codable, Equatable {
@@ -138,8 +140,8 @@ final class ChatStore: ObservableObject {
         append(userMsg)
         isGenerating = true
         streamingText = ""
-        let system = AppSettings.shared.persona.replacingOccurrences(
-            of: "تتكلم معه في مكالمة صوتية مباشرة.", with: "تكلمه في دردشة كتابية.")
+        MemoryStore.shared.cancel()
+        let system = AppSettings.shared.systemPrompt(chat: true, query: t)
         genTask = Task {
             var full = ""
             do {
@@ -163,12 +165,26 @@ final class ChatStore: ObservableObject {
                 }
             }
             let answer = full.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !answer.isEmpty { append(Message(role: .assistant, text: answer)) }
+            if !answer.isEmpty {
+                let reply = Message(role: .assistant, text: answer)
+                append(reply)
+                let convID = currentID
+                MemoryStore.shared.extractLater(exchanges: [(t, answer)]) { [weak self] in
+                    self?.markMemorySaved(reply.id, in: convID)
+                }
+            }
             streamingText = ""
             isGenerating = false
             slog.stage("idle")
             slog("chat: gen done \(full.count) chars")
         }
+    }
+
+    func markMemorySaved(_ id: UUID, in conv: UUID?) {
+        guard let ci = conversations.firstIndex(where: { $0.id == conv }),
+              let mi = conversations[ci].messages.firstIndex(where: { $0.id == id }) else { return }
+        conversations[ci].messages[mi].memorySaved = true
+        save()
     }
 
     func stop() {
