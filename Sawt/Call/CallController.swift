@@ -61,7 +61,9 @@ final class CallController: ObservableObject {
         turns = seed
         let mm = ModelManager.shared
         guard mm.allReady else {
-            error = "النماذج للحين مو جاهزة. انتظر التنزيل في الإعدادات."
+            error = mm.llm.isBusy || mm.stt.isBusy
+                ? "النماذج للحين تتجهز، لحظات وجرّب."
+                : "نزّل نموذج المحادثة ونموذج السمع من شاشة النماذج أول."
             mm.loadAll()
             return
         }
