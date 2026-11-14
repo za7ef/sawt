@@ -168,7 +168,25 @@ actor LLMService {
 
         return AsyncThrowingStream { cont in
             let task = Task {
-                var lastError: Error?
+                let mode = ComputeMode.current
+                var dev = ComputeMode.device(for: mode)
+                if dev == nil {
+                    // كرت الشاشة ممنوع في الخلفية: نوقف بدل ما يطيح التطبيق
+                    slog("llm: paused (background, gpu-only)")
+                    cont.finish(throwing: BackgroundPause())
+                    return
+                }
+                var anyYielded = false
+                var round = 0
+                while true {
+                    round += 1
+                    let useCPU = dev == "cpu"
+                    var interrupted = false
+                    var lastError: Error?
+                    var finished = false
+                    let t0 = Date()
+                    var chunks = 0
+                    await Device.withDefaultDevice(useCPU ? Device.cpu : Device.gpu) {
                 for (i, make) in attempts.enumerated() {
                     let (session, prompt) = make()
                     var yielded = false
@@ -179,6 +197,9 @@ actor LLMService {
                         let imgs: [UserInput.Image] = images.compactMap { u in CIImage(contentsOf: u).map { .ciImage($0) } }
                         for try await chunk in session.streamResponse(to: prompt, images: imgs) {
                             if Task.isCancelled { break }
+                            // التطبيق راح للخلفية وإحنا على كرت الشاشة: نوقف قبل ما يرفض النظام الشغل
+                            if !useCPU && !AppPhase.active { interrupted = true; break }
+                            chunks += 1
                             var text = pendingTag + chunk
                             pendingTag = ""
                             var visible = ""
@@ -200,23 +221,42 @@ actor LLMService {
                                     visible += text; text = ""
                                 }
                             }
-                            if !visible.isEmpty { yielded = true; cont.yield(visible) }
+                            if !visible.isEmpty { yielded = true; anyYielded = true; cont.yield(visible) }
                             else if inThink { cont.yield("") }   // نبّه الواجهة تحدّث التفكير
                         }
+                        if interrupted { return }
                         if !pendingTag.isEmpty, !inThink { cont.yield(pendingTag) }
                         withExtendedLifetime(session) {}
                         // نحتفظ بالجلسة بس إذا الرد كمل (لو انقطع، كاشها مو مضمون)
-                        if reuse, !Task.isCancelled { self.keepCallSession(session) }
-                        MLX.Memory.clearCache()
-                        cont.finish()
+                        if reuse, !Task.isCancelled { await self.keepCallSession(session) }
+                        finished = true
                         return
                     } catch {
                         lastError = error
                         if yielded || Task.isCancelled || i == attempts.count - 1 { break }
                     }
                 }
-                MLX.Memory.clearCache()
-                cont.finish(throwing: SawtError.friendly(lastError))
+                    }
+                    let dt = Date().timeIntervalSince(t0)
+                    if chunks > 1 {
+                        slog("llm: device=\(useCPU ? "cpu" : "gpu") \(chunks) tok in \(Int(dt * 1000))ms ≈ \(String(format: "%.1f", Double(chunks) / max(dt, 0.001))) tok/s")
+                    }
+                    MLX.Memory.clearCache()
+                    if finished { cont.finish(); return }
+                    if interrupted {
+                        // تلقائي وما طلع شي: نعيد الدور على المعالج
+                        if mode == "auto", !anyYielded, round == 1, !Task.isCancelled {
+                            slog("llm: background → retry on cpu")
+                            dev = "cpu"
+                            continue
+                        }
+                        slog("llm: interrupted (background)")
+                        cont.finish(throwing: BackgroundPause())
+                        return
+                    }
+                    cont.finish(throwing: SawtError.friendly(lastError))
+                    return
+                }
             }
             cont.onTermination = { _ in task.cancel() }
         }
@@ -241,4 +281,32 @@ actor LLMService {
         if let l = out.last, l.role == .user { out.removeLast() }
         return out
     }
+}
+
+
+/// طريقة تشغيل النموذج: "gpu" كرت الشاشة، "cpu" المعالج، "auto" كرت الشاشة قدّام والمعالج في الخلفية
+enum ComputeMode {
+    static var current: String { UserDefaults.standard.string(forKey: "llmDevice") ?? "gpu" }
+    /// nil = ممنوع الحين (كرت الشاشة بس والتطبيق في الخلفية)
+    static func device(for mode: String) -> String? {
+        switch mode {
+        case "cpu": return "cpu"
+        case "auto": return AppPhase.active ? "gpu" : "cpu"
+        default: return AppPhase.active ? "gpu" : nil
+        }
+    }
+}
+
+/// حالة التطبيق (قدّام/خلفية) يقراها أي خيط
+enum AppPhase {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var _active = true
+    static var active: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _active }
+        set { lock.lock(); _active = newValue; lock.unlock() }
+    }
+}
+
+struct BackgroundPause: LocalizedError {
+    var errorDescription: String? { "افتح التطبيق عشان أكمل" }
 }
