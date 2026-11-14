@@ -90,10 +90,10 @@ enum Catalog {
     }
 
     static let stts: [STTOption] = [
-        STTOption(id: "apple", title: "سمع آبل",
-                  subtitle: "مدمج في الجوال، خفيف جدًا وبدون تنزيل", approxSize: "0 MB"),
         STTOption(id: "small", title: "Whisper Small",
-                  subtitle: "دقة زينة وذاكرة متوسطة", approxSize: "~220 MB"),
+                  subtitle: "موصى به: دقة زينة وذاكرة متوسطة", approxSize: "~220 MB"),
+        STTOption(id: "apple", title: "سمع آبل",
+                  subtitle: "مدمج في الجوال، الأخف وبدون تنزيل", approxSize: "0 MB"),
         STTOption(id: "large-v3-v20240930_626MB", title: "Whisper Large v3 Turbo",
                   subtitle: "أفضل فهم للعربي لكنه ثقيل ويسخّن", approxSize: "~630 MB"),
     ]

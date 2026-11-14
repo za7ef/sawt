@@ -31,8 +31,16 @@ final class ChatStore: ObservableObject {
 
     private var genTask: Task<Void, Never>?
     private let fileURL: URL = {
-        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        return dir.appendingPathComponent("conversations.json")
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("conversations.json")
+        // نقل المحادثات من المكان القديم
+        let old = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("conversations.json")
+        if !FileManager.default.fileExists(atPath: url.path), FileManager.default.fileExists(atPath: old.path) {
+            try? FileManager.default.moveItem(at: old, to: url)
+        }
+        return url
     }()
 
     init() {
@@ -135,7 +143,7 @@ final class ChatStore: ObservableObject {
         genTask = Task {
             var full = ""
             do {
-                let stream = try await LLMService.shared.stream(system: system, history: Array(history), user: t)
+                let stream = try await LLMService.shared.stream(system: system, history: Array(history), user: t, maxTokens: 1500)
                 for try await chunk in stream {
                     if Task.isCancelled { break }
                     full += chunk
