@@ -11,6 +11,8 @@ struct SettingsView: View {
     @AppStorage("allowAppleServerSTT") private var allowAppleServer = false
     @State private var shareURL: URL?
     @ObservedObject private var namaa = NamaaVoice.shared
+    /// خطوات توليد نماء: أقل = أسرع وجودة أقل. "جرّب" يستخدم نفس الاختيار عشان تقارن بأذنك
+    @AppStorage("namaaSteps") private var namaaSteps = 7
     @ObservedObject private var memory = MemoryStore.shared
     @ObservedObject private var voiceDL = VoiceDownloads.shared
     @State private var namaaWarn = false
@@ -258,6 +260,13 @@ struct SettingsView: View {
                 }
             }
             .disabled(namaa.testing)
+            Picker("الخطوات", selection: $namaaSteps) {
+                Text("6 (أسرع)").tag(6)
+                Text("7 (مقترح)").tag(7)
+                Text("8").tag(8)
+                Text("16 (أعلى جودة، بطيء)").tag(16)
+            }
+            .font(.caption)
             if let r = namaa.lastTest {
                 Text(r).font(.caption).foregroundStyle(.secondary)
             }
