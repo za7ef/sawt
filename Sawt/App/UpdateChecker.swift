@@ -1,12 +1,46 @@
 import Foundation
 import SwiftUI
 
-/// يتحقق من وجود إصدار أحدث بقراءة ملف عام صغير (بدون أي توكن أو بيانات عن المستخدم).
-/// المستودع الرئيسي خاص، فالـCI ينشر update.json في مستودع عام منفصل.
+/// يتحقق من وجود إصدار أحدث بدون أي توكن أو بيانات عن المستخدم.
+/// أول شي يقرأ إصدارات المستودع العام من واجهة GitHub، وإذا ما نفع (مثلًا صار المستودع خاص)
+/// يرجع لملف update.json العام في مستودع منفصل.
 @MainActor
 final class UpdateChecker: ObservableObject {
     static let shared = UpdateChecker()
     static let feed = URL(string: "https://raw.githubusercontent.com/za7ef/sawt-releases/main/update.json")!
+    static let releasesAPI = URL(string: "https://api.github.com/repos/za7ef/sawt/releases?per_page=30")!
+
+    private struct GHRelease: Decodable {
+        let tag_name: String
+        let name: String?
+        let body: String?
+        let html_url: String
+        let draft: Bool
+    }
+
+    /// أحدث بناء من إصدارات GitHub العامة (الوسم build-N). nil إذا ما قدر.
+    private func fromReleases() async -> Info? {
+        var req = URLRequest(url: Self.releasesAPI, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let list = try? JSONDecoder().decode([GHRelease].self, from: data) else { return nil }
+        let builds = list.compactMap { r -> (Int, GHRelease)? in
+            guard !r.draft, r.tag_name.hasPrefix("build-"), let n = Int(r.tag_name.dropFirst(6)) else { return nil }
+            return (n, r)
+        }
+        guard let (n, r) = builds.max(by: { $0.0 < $1.0 }) else { return nil }
+        let version = (r.name ?? "").firstMatch(of: /\d+\.\d+(\.\d+)?/).map { String($0.output.0) } ?? AppVersion.version
+        return Info(version: version, build: n, notes: r.body, url: r.html_url)
+    }
+
+    private func fromFeed() async -> Info? {
+        var req = URLRequest(url: Self.feed, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
+        req.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return try? JSONDecoder().decode(Info.self, from: data)
+    }
 
     struct Info: Codable, Identifiable {
         var version: String
@@ -31,24 +65,18 @@ final class UpdateChecker: ObservableObject {
             guard await NetworkGate.shared.permit("التحقق من التحديثات") else { return }
         } else if !NetworkGate.shared.on { return }
         d.set(now, forKey: "updLastCheck")
-        var req = URLRequest(url: Self.feed, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
-        req.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
-        do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-                if force { lastMessage = "ما قدرت أتحقق من التحديثات الحين." }
-                return
-            }
-            let info = try JSONDecoder().decode(Info.self, from: data)
-            // ما نقبل إلا روابط إصدارات المطوّر نفسه
-            guard info.url.hasPrefix("https://github.com/za7ef/") else { return }
-            if info.build > AppVersion.build {
-                available = info
-            } else if force {
-                lastMessage = "عندك آخر إصدار (\(AppVersion.version) بناء \(AppVersion.build))."
-            }
-        } catch {
+        var found = await fromReleases()
+        if found == nil { found = await fromFeed() }
+        guard let info = found else {
             if force { lastMessage = "ما قدرت أتحقق من التحديثات الحين." }
+            return
+        }
+        // ما نقبل إلا روابط إصدارات المطوّر نفسه
+        guard info.url.hasPrefix("https://github.com/za7ef/") else { return }
+        if info.build > AppVersion.build {
+            available = info
+        } else if force {
+            lastMessage = "عندك آخر إصدار (\(AppVersion.version) بناء \(AppVersion.build))."
         }
     }
 
