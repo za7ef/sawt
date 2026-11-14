@@ -598,6 +598,18 @@ final class CallController: ObservableObject {
         let sentences = AsyncStream<String> { cont = $0 }
         sentenceCont = cont
 
+        // نماء أبطأ من الوقت الحقيقي: إذا أول جملة تأخرت 1.5 ثانية نقول "ممم، طيب" الجاهزة عشان ما يحس بسكتة
+        if voice.kind == .namaa {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard let self, myID == self.replyID, self.state == .thinking, !self.bargePending else { return }
+                let f = NamaaEngine.shared.fillerSamples
+                guard !f.isEmpty else { return }
+                slog("call: filler while namaa thinks")
+                self.audio.enqueue(samples: f, sampleRate: 24_000)
+            }
+        }
+
         // مستهلك الجمل: يحوّل كل جملة لصوت بالترتيب ويجدولها
         speakTask = Task { @MainActor in
             for await sentence in sentences {
