@@ -186,6 +186,7 @@ struct PhoneControlView: View {
     @State private var pasteText = ""
     @State private var hasPairing = PhoneControl.hasPairing
     @State private var busy = false
+    @ObservedObject private var hostPair = HostPairing.shared
     @State private var countdown = 0
     @State private var output = ""
     @State private var typeText = "مرحبا من صوت"
@@ -197,13 +198,31 @@ struct PhoneControlView: View {
                 LabeledContent("ملف الاقتران", value: hasPairing ? "موجود" : "ناقص")
                 Button("استيراد ملف الاقتران") { importing = true }
                 Button("الصق محتوى الملف") { pasting = true }
-                Button("سوّ ملف اقتران من الجوال") { go(.pair, delay: false, label: "pair") }
                 TextField("العنوان", text: $host)
                     .keyboardType(.numbersAndPunctuation)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
             } footer: {
                 Text("لازم LocalDevVPN شغال، وصورة المطوّر (DDI) مركّبة (مثلاً من StikDebug). تقدر تستورد ملف StikDebug، أو تسوّي ملف جديد من الجوال (وافق لو طلع لك طلب ثقة، والملف القديم ينحفظ نسخة).")
+            }
+
+            Section {
+                if hostPair.running {
+                    if !hostPair.pin.isEmpty {
+                        Text(hostPair.pin).font(.system(size: 40, weight: .bold, design: .monospaced))
+                            .frame(maxWidth: .infinity)
+                    }
+                    Text(hostPair.status)
+                    Button("إلغاء", role: .destructive) { hostPair.cancel() }
+                } else {
+                    Button("سوّ ملف اقتران من الجوال") { hostPair.start() }
+                    if !hostPair.result.isEmpty { Text(hostPair.result).font(.footnote).textSelection(.enabled) }
+                    Button("اقتران مباشر (الطريقة القديمة)") { go(.pair, delay: false, label: "pair") }
+                }
+            } header: {
+                Text("اقتران من الجوال (iOS 27)")
+            } footer: {
+                Text("شغّل LocalDevVPN، اضغط الزر، بعدين روح للإعدادات واختر «Sawt» من الأجهزة القريبة. بيطلع لك رمز من ٦ أرقام هنا وبإشعار، اكتبه في الجوال. يبقى صوت شغال بالخلفية ٥ دقايق.")
             }
 
             Section {
