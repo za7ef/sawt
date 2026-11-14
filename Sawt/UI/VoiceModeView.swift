@@ -52,6 +52,10 @@ struct VoiceModeView: View {
             call.onTurnsChanged = { turns in Task { @MainActor in ChatStore.shared.syncFromCall(turns) } }
             call.start(seed: store.seedForCall())
         }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("sawt.endCall"))) { _ in
+            slog("activity: end tapped")
+            dismiss()
+        }
         .onDisappear {
             call.end()
             call.onTurnsChanged = nil
