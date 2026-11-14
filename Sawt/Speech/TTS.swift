@@ -16,6 +16,10 @@ final class SpeechSynth {
         queue.sync { self.load(voice) }
     }
 
+    func unload() {
+        queue.async { self.sherpa = nil; self.loadedVoice = nil }
+    }
+
     private func load(_ voice: VoiceOption) {
         if loadedVoice == voice.id { return }
         sherpa = nil
@@ -23,7 +27,9 @@ final class SpeechSynth {
         guard let root = Catalog.voicesRoot else { return }
         let dir = root.appendingPathComponent(voice.folder)
         let espeak = root.appendingPathComponent("espeak-ng-data").path
-        let threads = max(2, min(4, ProcessInfo.processInfo.activeProcessorCount - 2))
+        // خيطين بس عشان ما يسخن الجوال ويخلي المعالج للنموذج اللغوي
+        let threads = ThermalWatch.isHot ? 1 : 2
+        slog("tts load \(voice.id) threads=\(threads)")
         switch voice.kind {
         case .apple:
             return
@@ -45,6 +51,7 @@ final class SpeechSynth {
                                                  maxNumSentences: 1, silenceScale: 0.2)
             sherpa = SherpaOnnxOfflineTtsWrapper(config: &cfg)
         }
+        slog("tts loaded \(voice.id)")
     }
 
     /// يحوّل جملة لصوت. يُستدعى من أي خيط ويرجع على خيط خلفي.

@@ -9,12 +9,24 @@ actor SpeechRecognizer {
     private var pipe: WhisperKit?
     private var loadedID: String?
 
-    var isReady: Bool { pipe != nil }
+    var isReady: Bool { pipe != nil || loadedID == "apple" }
+
+    func unload() { pipe = nil; loadedID = nil }
 
     /// progress(نسبة التنزيل، هل بدأ التجهيز)
     func load(variant: String, progress: @escaping @Sendable (Double, Bool) -> Void) async throws {
-        if loadedID == variant, pipe != nil { return }
+        if loadedID == variant, pipe != nil || variant == "apple" { return }
         pipe = nil
+        loadedID = nil
+        if variant == "apple" {
+            guard await AppleSTT.authorize() else {
+                throw SawtError.failed("اسمح لتطبيق صوت بالتعرّف على الكلام من الإعدادات.")
+            }
+            loadedID = "apple"
+            progress(1, true)
+            slog("stt apple ready, onDevice=\(AppleSTT.supportsOnDevice)")
+            return
+        }
         let folder = try await WhisperKit.download(variant: variant) { p in
             progress(min(p.fractionCompleted, 0.99), false)
         }
@@ -29,6 +41,7 @@ actor SpeechRecognizer {
 
     /// يرجع النص واللغة المكتشفة.
     func transcribe(_ audio: [Float], language: String?) async throws -> (text: String, language: String) {
+        if loadedID == "apple" { return try await AppleSTT.transcribe(audio, language: language) }
         guard let pipe else { throw SawtError.notReady("نموذج السمع") }
         // ويسبر يحتاج على الأقل ثانية تقريبًا
         var samples = audio
