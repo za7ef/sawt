@@ -77,9 +77,17 @@ jobs:
       - name: توليد المشروع
         run: xcodegen generate
 
+      - name: ذاكرة الحزم المؤقتة
+        uses: actions/cache@v4
+        with:
+          path: spm
+          key: spm-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          restore-keys: spm-${{ runner.os }}-
+
       - name: حل الحزم
         run: |
           xcodebuild -resolvePackageDependencies -project Sawt.xcodeproj -scheme Sawt \
+            -clonedSourcePackagesDirPath spm \
             -skipMacroValidation -skipPackagePluginValidation
 
       - name: البناء
@@ -87,6 +95,7 @@ jobs:
           set -o pipefail
           xcodebuild archive -project Sawt.xcodeproj -scheme Sawt -configuration Release \
             -destination 'generic/platform=iOS' -archivePath build/Sawt.xcarchive \
+            -clonedSourcePackagesDirPath spm \
             -skipMacroValidation -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             2>&1 | tee build.log | grep -E "error:|warning: unre|BUILD|ARCHIVE" || true
