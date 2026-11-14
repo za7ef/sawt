@@ -102,7 +102,8 @@ final class SpeechSynth {
     }
 
     /// يحوّل جملة لصوت. يُستدعى من أي خيط ويرجع على خيط خلفي.
-    func synthesize(_ text: String, voice: VoiceOption, rate: Double) async -> (samples: [Float], rate: Double) {
+    /// later: جملة بعد الأولى في المكالمة (نماء يستخدم خطوات أقل)، gapBudget: كم ثانية صوت باقية في الطابور
+    func synthesize(_ text: String, voice: VoiceOption, rate: Double, later: Bool = false, gapBudget: Double? = nil) async -> (samples: [Float], rate: Double) {
         let clean = TextCleaner.forSpeech(text)
         guard !clean.isEmpty else { return ([], 24_000) }
         let arabic = TextCleaner.hasArabic(clean)
@@ -112,11 +113,14 @@ final class SpeechSynth {
         }
         if voice.kind == .namaa {
             // إذا الجملة طويلة ونماء بيتأخر فيها كثير، نقولها بنبرة بدل سكتة طويلة
-            if CallController.isActive, NamaaEngine.shared.estimatedSeconds(clean) > 8 {
-                slog("tts: namaa too slow for \(clean.count) chars → fallback voice")
+            let est = NamaaEngine.shared.estimatedSeconds(clean) * (later ? 0.8 : 1)
+            // الفجوة المتوقعة = وقت التوليد - الصوت الباقي في الطابور. فجوة كبيرة (> 2.5ث) أسوأ من تبديل الصوت
+            let gap = est - (gapBudget ?? est)
+            if CallController.isActive, est > 8 || (gapBudget != nil && gap > 2.5) {
+                slog("tts: namaa est \(String(format: "%.1f", est))s gap \(String(format: "%.1f", gap))s → fallback voice")
                 return await arabicFallback(clean, rate: rate)
             }
-            let s = await NamaaEngine.shared.synthesize(clean, speed: rate)
+            let s = await NamaaEngine.shared.synthesize(clean, speed: rate, steps: later ? min(NamaaEngine.chosenSteps, 6) : nil)
             if s.isEmpty {
                 slog("tts: namaa gave nothing → fallback voice")
                 return await arabicFallback(clean, rate: rate)
