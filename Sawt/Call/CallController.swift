@@ -76,6 +76,8 @@ final class CallController: ObservableObject {
     private var enqueued = 0
     private var played = 0
     private var llmDone = false
+    /// كل الجمل اتحولت صوت (عشان ما نرجع نسمع والصوت لسا يتجهز)
+    private var ttsDone = true
     private var spokenSoFar = ""
     private var carryUserText = ""
     private var replyID = 0
@@ -110,14 +112,15 @@ final class CallController: ObservableObject {
             await ModelManager.shared.prepareVoice()
             slog.stage("call:listening")
             let avail = RAM.availableMB
-            CallController.isActive = true
-            let persona = AppSettings.shared.systemPrompt(chat: false, query: "")
+            let persona = AppSettings.shared.systemPrompt(chat: false, query: "", memory: false)
             Task { await LLMService.shared.warmup(system: persona) }
             slog("call: after voice load footprint=\(RAM.footprintMB)MB avail=\(avail)MB")
             if avail < 1500, !AppSettings.shared.llmID.lowercased().contains("2b") {
                 self.error = "الذاكرة قليلة لهالنموذج في المكالمة (باقي \(avail)MB). إذا انقفل التطبيق، جرّب Qwen3.5 2B."
             }
             guard self.state == .starting else { return }
+            CallController.isActive = true
+            MemoryStore.shared.cancel()
             self.proc.sync {
                 self.vad = VoiceDetector()
                 self.resetProc()
@@ -189,6 +192,11 @@ final class CallController: ObservableObject {
         let recent = Array(pairs.suffix(6))
         Task { @MainActor in MemoryStore.shared.extractLater(exchanges: recent) }
         Task { await LLMService.shared.resetCallSession() }
+        // نفك الصوت من الذاكرة لو ما رجعت للمكالمة خلال دقيقة
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(60))
+            if !CallController.isActive { SpeechSynth.shared.unload(); ModelManager.shared.voiceIdle() }
+        }
         audio.onMic = nil
         audio.onStateChange = nil
         audio.stop()
@@ -481,6 +489,7 @@ final class CallController: ObservableObject {
         enqueued = 0
         played = 0
         llmDone = false
+        ttsDone = false
         spokenSoFar = ""
         proc.async { self.aiActive = true }
 
@@ -488,7 +497,10 @@ final class CallController: ObservableObject {
         let voice = settings.voice
         let rate = settings.speechRate
         let hist = history()
-        let system = settings.systemPrompt(chat: false, query: text)
+        // التعليمات ثابتة (الجلسة تنعاد استخدامها)، والذاكرة المناسبة تنحط مع كل دور
+        let system = settings.systemPrompt(chat: false, query: "", memory: false)
+        let mem = MemoryStore.promptBlock(for: text, limit: 4)
+        let userText = mem.isEmpty ? text : "[\(mem)]\n\n\(text)"
 
         var cont: AsyncStream<String>.Continuation!
         let sentences = AsyncStream<String> { cont = $0 }
@@ -527,7 +539,7 @@ final class CallController: ObservableObject {
             do {
                 try await self.makeRoomForLLM()
                 slog.stage("call:llm")
-                let stream = try await LLMService.shared.stream(system: system, history: hist, user: text, maxTokens: 300, reuse: true)
+                let stream = try await LLMService.shared.stream(system: system, history: hist, user: userText, maxTokens: 300, reuse: true)
                 for try await chunk in stream {
                     if Task.isCancelled || myID != self.replyID { break }
                     if full.isEmpty {
@@ -556,6 +568,7 @@ final class CallController: ObservableObject {
             self.liveAI = ""
             self.llmDone = true
             await self.speakTask?.value
+            if myID == self.replyID { self.ttsDone = true }
             self.checkReplyFinished()
         }
     }
@@ -600,7 +613,7 @@ final class CallController: ObservableObject {
     }
 
     private func checkReplyFinished() {
-        guard llmDone, played >= enqueued, state == .thinking || state == .speaking else { return }
+        guard llmDone, ttsDone, played >= enqueued, state == .thinking || state == .speaking else { return }
         state = .listening
         slog.stage("call:listening")
         Task { @MainActor in _ = self.pendingSTTReload() }
@@ -637,6 +650,7 @@ final class CallController: ObservableObject {
         }
         liveAI = ""
         llmDone = true
+        ttsDone = true
     }
 }
 
