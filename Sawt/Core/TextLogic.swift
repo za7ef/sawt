@@ -245,3 +245,25 @@ enum FillerPicker {
         return pool[random(pool.count)]
     }
 }
+
+/// وضع التفكير التلقائي: يقرر لكل رسالة إذا تستاهل تفكير عميق (بدون نداء إضافي للنموذج).
+enum ThinkHeuristic {
+    static let cues = ["ليش", "ليه", "لماذا", "كيف أ", "كيف ا", "كيف ن", "اشرح", "وضح", "وضّح", "فسر", "فسّر", "قارن", "الفرق بين",
+                       "خطة", "خطط", "خطوات", "رتب لي", "حلل", "حلّل", "احسب", "برهن", "اثبت", "أثبت", "صحح", "صحّح",
+                       "why", "explain", "compare", "plan", "step by step", "prove", "calculate", "debug", "analy"]
+    static let codeMarks = ["```", "func ", "def ", "class ", "error:", "exception", "{", "};", "import ", "console.", "print("]
+
+    static func shouldThink(_ text: String, hasAttachment: Bool = false) -> Bool {
+        let t = text.lowercased()
+        let words = text.split(whereSeparator: { $0 == " " || $0 == "\n" }).count
+        if words <= 3 { return false }   // تحيات وردود قصيرة
+        // رياضيات: رقمين أو أكثر مع عملية
+        let digits = text.filter { $0.isNumber }.count
+        if digits >= 2, text.contains(where: { "+-×÷*/=^%".contains($0) }) { return true }
+        if codeMarks.contains(where: { t.contains($0) }) { return true }
+        if cues.contains(where: { t.contains($0) }) { return true }
+        if words >= 30 { return true }
+        if hasAttachment, words >= 6, t.contains("?") || t.contains("؟") { return true }
+        return false
+    }
+}
