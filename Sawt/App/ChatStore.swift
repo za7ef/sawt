@@ -228,7 +228,12 @@ final class ChatStore: ObservableObject {
             let prevSearched = lastAI.map { $0.autoSearch == true || !($0.sources ?? []).isEmpty } ?? false
             let prevU = (current?.messages ?? []).last(where: { $0.role == .user })?.text
             let prevTopic = prevU.map { SearchHeuristic.verdict($0) == .yes } ?? false
-            if (prevSearched || prevTopic), t.split(separator: " ").count <= 15 {
+            // متابعة بس إذا مو مجاملة، ولها صلة بالموضوع (كلمة مشتركة) أو مقطع قصير (مكان/اسم/تاريخ)
+            let words = t.split(separator: " ").count
+            let prevKW = Set(Relevance.keywords(prevU ?? ""))
+            let overlap = !prevKW.isDisjoint(with: Relevance.keywords(t))
+            let related = !ThinkHeuristic.isSmallTalk(t) && (overlap || words <= 6)
+            if (prevSearched || prevTopic), words <= 15, related {
                 searchVerdict = .yes
                 slog("chat: search follow-up")
             }

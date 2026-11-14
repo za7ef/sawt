@@ -33,7 +33,10 @@ enum WebSearch {
     - استخدمها كمعلومات بس، واذكر رقم المصدر بين قوسين مربعين مثل [1] بعد المعلومة.
     - إذا النتائج ما تكفي أو تتعارض، قل كذا بصراحة.
     أنت الحين قادر توصل للويب في هالرسالة عن طريق هالنتائج، فلا تقول إنك ما تقدر تتصفح.
-    - خلك على نفس لهجتك وأسلوبك المعتاد (لا تتحول للفصحى عشان النتائج فصحى)، وجاوب مباشرة.
+    - إذا المصادر ما تأكد المعلومة (مثل موعد أو رقم)، قل بوضوح إنها مو مؤكدة، ولا تخمّن تاريخ من عندك.
+    - انتبه لتاريخ اليوم: أي تاريخ قبله صار ماضي (لا تقدمه كتوقع)، وفضّل أحدث معلومة في النتائج.
+    - اكتب الأرقام والتواريخ بالأرقام.
+    - مهم: جاوب بنفس لهجتك العامية المعتادة، مو فصحى، حتى لو النتائج فصحى. مثال: بدل «لم يتم الإعلان عن موعد» قل «لسا ما أعلنوا موعد».
     - إذا فيه بيانات مباشرة (طقس أو أسعار) اعتمد عليها بالأرقام، ولا ترجع تسأل عن شي موجود فيها.
     """
 
@@ -204,6 +207,10 @@ enum WebSearch {
         var parts: [String] = []
         var sources: [WebSource] = []
         for p in pages {
+            guard Relevance.isRelevant(title: p.title, text: p.text, query: query) else {
+                slog("web: dropped irrelevant \(p.url)")
+                continue
+            }
             let (ctx, _) = Attachments.context(for: p.text, query: query, budget: each)
             guard !ctx.isEmpty else { continue }
             sources.append(WebSource(title: p.title.isEmpty ? (URL(string: p.url)?.host ?? p.url) : p.title, url: p.url))
