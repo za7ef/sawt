@@ -19,6 +19,7 @@ struct VoiceModeView: View {
                 Spacer()
                 OrbView(mic: call.micLevel, out: call.outLevel, state: call.state)
                     .frame(width: 260, height: 260)
+                    .contentShape(Circle())
                     .onTapGesture { call.interrupt() }
                 Text(statusText)
                     .font(.headline)

@@ -23,19 +23,25 @@ struct OrbView: View {
 
     var body: some View {
         // 30 إطار بالثانية (15 لو الجوال حار) بدل 120، أخف بكثير على كرت الشاشة
-        TimelineView(.animation(minimumInterval: interval, paused: !animated)) { ctx in
-            let t: Double = ctx.date.timeIntervalSinceReferenceDate
-            Canvas { gc, size in draw(&gc, size, t) }
+        // اللوحة أكبر من الإطار بكثير عشان التوهج يتلاشى بالكامل وما يطلع مربع مقصوص
+        GeometryReader { geo in
+            let pad: CGFloat = min(geo.size.width, geo.size.height) * 0.9
+            TimelineView(.animation(minimumInterval: interval, paused: !animated)) { ctx in
+                let t: Double = ctx.date.timeIntervalSinceReferenceDate
+                Canvas { gc, size in draw(&gc, size, t, pad) }
+            }
+            .padding(-pad)
+            .allowsHitTesting(false)
         }
         .onChange(of: mic) { _, v in withAnimation(.easeOut(duration: 0.12)) { smoothMic = smoothMic * 0.4 + Double(v) * 0.6 } }
         .onChange(of: out) { _, v in withAnimation(.easeOut(duration: 0.12)) { smoothOut = smoothOut * 0.4 + Double(v) * 0.6 } }
         .accessibilityHidden(true)
     }
 
-    private func draw(_ gc: inout GraphicsContext, _ size: CGSize, _ t: Double) {
+    private func draw(_ gc: inout GraphicsContext, _ size: CGSize, _ t: Double, _ pad: CGFloat) {
         let energy: Double = max(smoothMic, smoothOut)
         let thinkPulse: Double = state == .thinking ? 0.06 * sin(t * 4) : 0
-        let r: Double = min(size.width, size.height) / 2
+        let r: Double = (min(size.width, size.height) - 2 * pad) / 2
         let c = CGPoint(x: size.width / 2, y: size.height / 2)
         let base: Double = r * (0.78 + 0.16 * energy + thinkPulse)
         let colors = palette
