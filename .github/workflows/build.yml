@@ -150,6 +150,8 @@ jobs:
           </dict></plist>
           PL
           sed -i '' 's/^          //' ent.plist
+          for x in Payload/Sawt.app/PlugIns/*.appex; do [ -d "$x" ] && codesign -f -s - "$x"; done || true
+          ls Payload/Sawt.app/PlugIns || true
           codesign -f -s - --entitlements ent.plist Payload/Sawt.app || echo "codesign skipped"
           codesign -d --entitlements - Payload/Sawt.app || true
           zip -qry Sawt.ipa Payload
