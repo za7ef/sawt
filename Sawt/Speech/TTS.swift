@@ -18,6 +18,7 @@ final class SpeechSynth {
 
     func unload() {
         queue.async { self.sherpa = nil; self.loadedVoice = nil }
+        NamaaEngine.shared.unload()
     }
 
     private func load(_ voice: VoiceOption) {
@@ -31,7 +32,11 @@ final class SpeechSynth {
         let threads = ThermalWatch.isHot ? 1 : 2
         slog("tts load \(voice.id) threads=\(threads)")
         switch voice.kind {
-        case .apple, .namaa:
+        case .apple:
+            return
+        case .namaa:
+            // نحمّله مع تجهيز المكالمة بدل أول جملة
+            NamaaEngine.shared.preload()
             return
         case .piper(let onnx):
             let vits = sherpaOnnxOfflineTtsVitsModelConfig(
@@ -155,9 +160,14 @@ enum TextCleaner {
         var current = ""
         let enders: Set<Character> = [".", "!", "?", "؟", "؛", "\n", "…"]
         let soft: Set<Character> = ["،", ",", ":"]
-        for ch in buffer {
+        let chars = Array(buffer)
+        for (i, ch) in chars.enumerated() {
             current.append(ch)
             let words = current.split(separator: " ").count
+            // نقطة عشرية (3.5): لا نقطع، ولو آخر حرف وصلنا ننتظر الباقي
+            if ch == ".", i > 0, chars[i - 1].isNumber {
+                if i + 1 >= chars.count || chars[i + 1].isNumber { continue }
+            }
             if enders.contains(ch), current.trimmingCharacters(in: .whitespaces).count > 1 {
                 out.append(current); current = ""
             } else if soft.contains(ch), words >= ((first && out.isEmpty) ? 3 : 8) {
