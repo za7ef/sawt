@@ -4,6 +4,8 @@ import MLX
 import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
+import MLXVLM
+import CoreImage
 import Tokenizers
 
 /// النموذج اللغوي المحلي (MLX).
@@ -19,6 +21,8 @@ actor LLMService {
     private func keepCallSession(_ s: ChatSession?) { callSession = s }
 
     var isReady: Bool { container != nil }
+    /// النموذج محمّل بوضع النظر (يقبل صور)
+    private(set) var visionLoaded = false
 
     func unload() {
         container = nil
@@ -47,25 +51,37 @@ actor LLMService {
     /// يُستدعى لما النظام يحذّر من الذاكرة.
     func trim() { MLX.Memory.clearCache() }
 
-    func load(_ option: LLMOption, progress: @escaping @Sendable (Double) -> Void) async throws {
-        if loadedID == option.id, container != nil { return }
+    func load(_ option: LLMOption, vision: Bool = false, progress: @escaping @Sendable (Double) -> Void) async throws {
+        if loadedID == option.id, container != nil, visionLoaded || !vision { return }
         container = nil
+        visionLoaded = false
         MLX.Memory.clearCache()
         // كاش صغير لكرت الشاشة عشان ما تتكدس الذاكرة بين الردود
         MLX.Memory.cacheLimit = 32 * 1024 * 1024
         slog("llm: loading \(option.id)")
         let cfg = option.configuration
-        let c = try await #huggingFaceLoadModelContainer(configuration: cfg, progressHandler: { p in
-            progress(p.fractionCompleted)
-        })
+        // نحدد المصنع بنفسنا: النصي أخف على الذاكرة، والنظر بس لما يحتاجه المستخدم
+        let c: ModelContainer
+        if vision {
+            c = try await VLMModelFactory.shared.loadContainer(
+                from: #hubDownloader(), using: #huggingFaceTokenizerLoader(), configuration: cfg,
+                progressHandler: { p in progress(p.fractionCompleted) })
+        } else {
+            c = try await LLMModelFactory.shared.loadContainer(
+                from: #hubDownloader(), using: #huggingFaceTokenizerLoader(), configuration: cfg,
+                progressHandler: { p in progress(p.fractionCompleted) })
+        }
         container = c
+        visionLoaded = vision
+        slog("llm: loaded vision=\(vision) avail=\(RAM.availableMB)MB")
         loadedID = option.id
         progress(1)
     }
 
     /// يرجع تدفق نص الرد. السجل يحتوي الرسائل السابقة بدون الرسالة الحالية.
     /// إذا رفض قالب المحادثة (بعض النماذج ما تقبل رسالة النظام)، نعيد المحاولة بدمج التعليمات في رسالة المستخدم.
-    func stream(system: String, history: [Chat.Message], user: String, maxTokens: Int = 400, reuse: Bool = false) throws -> AsyncThrowingStream<String, Error> {
+    func stream(system: String, history: [Chat.Message], user: String, maxTokens: Int = 400, reuse: Bool = false,
+                images: [URL] = []) throws -> AsyncThrowingStream<String, Error> {
         guard let container else { throw SawtError.notReady("النموذج اللغوي") }
         var params = GenerateParameters()
         params.maxTokens = ThermalWatch.isHot ? min(200, maxTokens) : maxTokens
@@ -113,7 +129,8 @@ actor LLMService {
                     var inThink = false
                     var pendingTag = ""
                     do {
-                        for try await chunk in session.streamResponse(to: prompt) {
+                        let imgs: [UserInput.Image] = images.compactMap { u in CIImage(contentsOf: u).map { .ciImage($0) } }
+                        for try await chunk in session.streamResponse(to: prompt, images: imgs) {
                             if Task.isCancelled { break }
                             var text = pendingTag + chunk
                             pendingTag = ""
