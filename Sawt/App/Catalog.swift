@@ -100,7 +100,7 @@ enum Catalog {
     static let allVoices: [VoiceOption] = [
         VoiceOption(id: "nabra-saudi", title: "نبرة سعودية",
                     subtitle: "صوت أنثوي طبيعي باللهجة السعودية", folder: "nabra-saudi",
-                    kind: .kokoro(model: "model.onnx")),
+                    kind: .kokoro(model: "model.int8.onnx")),
         VoiceOption(id: "nabra-msa", title: "نبرة فصحى",
                     subtitle: "صوت أنثوي طبيعي بالفصحى", folder: "nabra-msa",
                     kind: .kokoro(model: "model.int8.onnx")),

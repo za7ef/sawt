@@ -113,7 +113,7 @@ enum ModelFiles {
         for d in [FileManager.SearchPathDirectory.cachesDirectory, .documentDirectory, .applicationSupportDirectory] {
             r += fm.urls(for: d, in: .userDomainMask)
         }
-        r.append(fm.homeDirectoryForCurrentUser.appendingPathComponent(".cache"))
+        r.append(URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".cache"))
         return r
     }
 
