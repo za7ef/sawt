@@ -50,10 +50,12 @@ struct SawtApp: App {
                     // الخلفية مو كراش: النظام يقفل التطبيقات اللي بالخلفية عادي
                     if p == .background {
                         slog("background"); if !AudioIO.shared.ownedByCall { slog.stage("") }
+                        store.flush()
                         Task { await LLMService.shared.trim() }
                         bgTask?.cancel()
                         bgTask = Task {
-                            try? await Task.sleep(for: .seconds(180))
+                            // iOS يوقف التطبيق بعد ثواني بالخلفية، فنفك بدري
+                            try? await Task.sleep(for: .seconds(8))
                             if Task.isCancelled { return }
                             await models.unloadForBackground()
                         }

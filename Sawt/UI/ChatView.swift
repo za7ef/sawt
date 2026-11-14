@@ -185,6 +185,10 @@ struct ChatView: View {
                     }
                     .padding(.horizontal, 16).padding(.top, 6)
                 }
+                if pending.contains(where: { $0.kind == .image }) && settings.llm.vision {
+                    Text("أول صورة تحتاج تحميل النموذج بوضع النظر، ياخذ ثواني وذاكرة أكثر شوي.")
+                        .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16)
+                }
                 if pending.contains(where: { $0.kind == .image }) && !settings.llm.vision {
                     HStack(spacing: 6) {
                         Text("\(settings.llm.title) ما يشوف الصور، بيقرأ النص اللي فيها بس.")

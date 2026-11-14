@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var confirmAll = false
     @State private var unused: [Storage.ModelFolder] = []
     @AppStorage("showCallDebug") private var showCallDebug = false
+    @AppStorage("allowAppleServerSTT") private var allowAppleServer = false
     @State private var shareURL: URL?
     @ObservedObject private var namaa = NamaaVoice.shared
     @ObservedObject private var memory = MemoryStore.shared
@@ -71,13 +72,22 @@ struct SettingsView: View {
                     Text("سريع: يرد أول ما توقف. صبور: يعطيك وقت تفكر بين الكلام. يتطبق من المكالمة الجاية.")
                 }
 
-                Section("لغة السمع") {
+                Section {
                     Picker("اللغة", selection: $settings.language) {
                         Text("تلقائي").tag("auto")
                         Text("عربي").tag("ar")
                         Text("English").tag("en")
                     }
                     .pickerStyle(.segmented)
+                    if settings.sttID == "apple" && !AppleSTT.supportsOnDevice {
+                        Toggle("اسمح لسمع آبل يستخدم الإنترنت", isOn: $allowAppleServer)
+                    }
+                } header: {
+                    Text("لغة السمع")
+                } footer: {
+                    if settings.sttID == "apple" && !AppleSTT.supportsOnDevice {
+                        Text("جوالك ما يدعم التعرّف على العربي على الجهاز، فسمع آبل يحتاج يرسل صوتك لسيرفرات آبل. بدون هالخيار ما يشتغل؛ والبديل الخاص تمامًا: Whisper من شاشة النماذج.")
+                    }
                 }
 
                 Section {
