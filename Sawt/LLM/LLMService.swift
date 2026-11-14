@@ -52,7 +52,7 @@ actor LLMService {
     func trim() { MLX.Memory.clearCache() }
 
     func load(_ option: LLMOption, vision: Bool = false, progress: @escaping @Sendable (Double) -> Void) async throws {
-        if loadedID == option.id, container != nil, visionLoaded || !vision { return }
+        if loadedID == option.id, container != nil, visionLoaded == vision { return }
         container = nil
         visionLoaded = false
         MLX.Memory.clearCache()
