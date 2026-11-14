@@ -284,3 +284,24 @@ enum ThinkHeuristic {
         return false
     }
 }
+
+/// وضع البحث التلقائي: هل السؤال يحتاج معلومة حديثة من الإنترنت؟
+enum SearchHeuristic {
+    static let cues = ["اليوم", "الآن", "هالأيام", "آخر أخبار", "أخبار", "اخبار", "أحدث", "احدث", "آخر إصدار", "اخر اصدار",
+                       "سعر", "أسعار", "اسعار", "بكم", "طقس", "الجو بكرة", "الجو اليوم", "درجة الحرارة", "مباراة", "مباراه",
+                       "نتيجة", "نتيجه", "الدوري", "متى ينزل", "متى يصدر", "متى صدر", "متى نزل", "موعد", "ابحث", "دور لي", "دوّر",
+                       "سعر الصرف", "الدولار", "البيتكوين", "ترند", "2025", "2026", "2027", "٢٠٢٥", "٢٠٢٦",
+                       "latest", "news", "price", "weather", "today", "score", "release date", "search", "look up", "current"]
+
+    enum Verdict { case yes, no, unsure }
+
+    static func verdict(_ text: String) -> Verdict {
+        let t = " " + text.lowercased() + " "
+        if cues.contains(where: { t.contains($0) }) { return .yes }
+        let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = s.split(separator: " ").count
+        if words <= 3 || ThinkHeuristic.smallTalk.contains(where: { t.contains($0) }) { return .no }
+        if s.hasSuffix("?") || s.hasSuffix("؟") { return .unsure }
+        return .no
+    }
+}
