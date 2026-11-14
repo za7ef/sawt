@@ -130,7 +130,8 @@ jobs:
           files: Sawt.ipa
 
       - name: نشر ملف التحديث العام
-        # يحتاج سر SAWT_RELEASES_TOKEN (توكن دقيق بصلاحية الكتابة على za7ef/sawt-releases فقط)
+        # ننشر update.json بس (بدون IPA) في مستودع عام، لأن تراخيص بعض الأصوات المدمجة ما تسمح بإعادة النشر العام.
+        # يحتاج سر SAWT_RELEASES_TOKEN (توكن دقيق بصلاحية Contents: write على za7ef/sawt-releases فقط)
         env:
           GH_TOKEN: ${{ secrets.SAWT_RELEASES_TOKEN }}
         run: |
@@ -139,24 +140,18 @@ jobs:
           N=${{ github.run_number }}
           V=${{ steps.ver.outputs.version }}
           PUB=za7ef/sawt-releases
-          gh release create "build-$N" Sawt.ipa -R $PUB --title "صوت $V (بناء $N)" \
-            --notes "$(git log -1 --pretty=%B)" || true
           git log -1 --pretty=%B > /tmp/notes.txt
-          python3 - "$V" "$N" "$PUB" <<'PY'
+          python3 - "$V" "$N" "${{ github.repository }}" <<'PY'
           import json, sys
-          v, n, pub = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+          v, n, repo = sys.argv[1], int(sys.argv[2]), sys.argv[3]
           notes = open("/tmp/notes.txt").read().strip()
           json.dump({"version": v, "build": n, "notes": notes,
-                     "url": f"https://github.com/{pub}/releases/tag/build-{n}"},
+                     "url": f"https://github.com/{repo}/releases/tag/build-{n}"},
                     open("/tmp/update.json", "w"), ensure_ascii=False, indent=2)
           PY
           SHA=$(gh api repos/$PUB/contents/update.json --jq .sha 2>/dev/null || echo "")
           gh api -X PUT repos/$PUB/contents/update.json -f message="تحديث $V (بناء $N)" \
             -f content="$(base64 < /tmp/update.json | tr -d '\n')" ${SHA:+-f sha=$SHA}
-          # نخلي آخر 10 إصدارات بس
-          gh release list -R $PUB --limit 100 --json tagName --jq '.[10:][].tagName' | while read t; do
-            gh release delete "$t" -R $PUB --yes --cleanup-tag || true
-          done
 
       - name: تنظيف الإصدارات القديمة
         env:
