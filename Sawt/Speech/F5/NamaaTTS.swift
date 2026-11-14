@@ -234,6 +234,31 @@ final class NamaaEngine: @unchecked Sendable {
     private let statLock = NSLock()
     /// "ممم" جاهزة بصوت نماء تنقال لو الرد الأول تأخر
     private var _loaded = false
+    private let holdSem = DispatchSemaphore(value: 0)
+    private var holding = false
+
+    /// يوقف طابور نماء (بعد ما تخلص الجملة الحالية) ويفضي كاش MLX، عشان ترميز الصورة ياخذ الـGPU والذاكرة لحاله
+    func hold() async {
+        statLock.lock()
+        if holding { statLock.unlock(); return }
+        holding = true
+        statLock.unlock()
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            queue.async {
+                MLX.Memory.clearCache()
+                c.resume()
+                self.holdSem.wait()   // الطابور واقف لين release
+            }
+        }
+    }
+
+    func release() {
+        statLock.lock()
+        let was = holding
+        holding = false
+        statLock.unlock()
+        if was { holdSem.signal() }
+    }
     /// نماء محمّل في الذاكرة (لحساب ميزانية الذاكرة مع الكاميرا)
     var isLoaded: Bool { statLock.lock(); defer { statLock.unlock() }; return _loaded }
 
