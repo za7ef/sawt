@@ -70,6 +70,12 @@ check(ThinkHeuristic.shouldThink("عندي لغز لك وش الشي اللي ي
 check(ThinkHeuristic.verdict("وش أفضل وقت أزور فيه العلا؟") == .unsure, "Think: سؤال عادي = مصنّف")
 check(ThinkHeuristic.verdict("كيفك اليوم يا صاحبي؟") == .no, "Think: سوالف")
 
+// SearchHeuristic
+check(SearchHeuristic.verdict("كم سعر الذهب اليوم") == .yes, "Search: سعر")
+check(SearchHeuristic.verdict("هلا والله") == .no, "Search: تحية")
+check(SearchHeuristic.verdict("مين اخترع المصباح الكهربائي؟") == .unsure, "Search: سؤال عام = مصنّف")
+check(SearchHeuristic.verdict("اكتب لي قصيدة عن البحر") == .no, "Search: طلب كتابة")
+
 // MemoryLine
 let now0 = Date(timeIntervalSince1970: 1_800_000_000)
 if case .add(let t, let imp, let cat, let exp)? = MemoryLine.parse("+ 4 | ناس | دائم | أخته اسمها سميرة", now: now0) {
