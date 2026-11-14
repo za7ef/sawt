@@ -21,7 +21,18 @@ final class ModelManager: ObservableObject {
     @Published var downloaded: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "downloadedLLMs") ?? [])
     @Published var downloadedSTT: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "downloadedSTT") ?? [])
     /// النموذج اللي ينزل الحين.
-    @Published var downloadingID: String? { didSet { Storage.downloadActive = downloadingID != nil || NamaaVoice.shared.isBusy } }
+    @Published var downloadingID: String? { didSet { refreshDownloadFlag() } }
+    private var sttDownloading = false { didSet { refreshDownloadFlag() } }
+
+    /// فيه تنزيل شغال (نموذج لغوي أو سمع أو نماء): مسح الكاش ما يلمس الملفات المؤقتة.
+    func refreshDownloadFlag() {
+        let active = downloadingID != nil || sttDownloading || NamaaVoice.shared.isBusy
+        if Storage.downloadActive && !active {
+            // خلص تنزيل: نتأكد ملفاته برا النسخ الاحتياطي
+            Task.detached(priority: .utility) { Storage.excludeModelsFromBackup() }
+        }
+        Storage.downloadActive = active
+    }
 
     private var llmTask: Task<Void, Never>?
     private var sttTask: Task<Void, Never>?
@@ -213,7 +224,9 @@ final class ModelManager: ObservableObject {
         sttToken += 1
         let token = sttToken
         stt = downloadedSTT.contains(variant) ? .preparing : .loading(0)
+        sttDownloading = !downloadedSTT.contains(variant)
         sttTask = Task {
+            defer { if sttToken == token { sttDownloading = false } }
             do {
                 try await withTimeout(seconds: 1_800, what: "نموذج السمع") {
                     try await SpeechRecognizer.shared.load(variant: variant) { p, preparing in

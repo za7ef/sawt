@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// أي آيفونات تشغّل النموذج براحة، حسب ذاكرة الجهاز.
 /// الذاكرة: 4GB = آيفون 12 و12 ميني و13 و13 ميني • 6GB = 12 Pro و13 Pro و14 و14 Plus و14 Pro و15 و15 Plus
@@ -38,10 +39,20 @@ enum DeviceFit {
 
     enum Fit { case both, textOnly, none, unknown }
 
+    /// الحد الفعلي اللي يسمح فيه iOS لهالتطبيق الحين (المستخدم + المتبقي)، بدل جدول ثابت.
+    /// يتغيّر حسب الجهاز وصلاحية زيادة الذاكرة؛ نرجع للجدول إذا القراءة غير متاحة.
+    static var appBudgetGB: Double {
+        let avail = Double(os_proc_available_memory())
+        guard avail > 0 else { return deviceTier.budgetGB }
+        let used = Double(RAM.footprintMB) * 1_048_576
+        return (avail + used) / 1_073_741_824 * 0.92   // هامش أمان
+    }
+
     static func fitHere(_ m: LLMOption) -> Fit {
         guard m.ramGB > 0 else { return .unknown }
-        if deviceTier.budgetGB >= callNeed(m) { return .both }
-        if deviceTier.budgetGB >= textNeed(m) { return .textOnly }
+        let budget = appBudgetGB
+        if budget >= callNeed(m) { return .both }
+        if budget >= textNeed(m) { return .textOnly }
         return .none
     }
 }

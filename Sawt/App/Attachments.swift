@@ -192,9 +192,9 @@ enum Attachments {
     // MARK: السياق
 
     /// يقسم النص الطويل لقطع ويختار الأقرب للسؤال، بحد أقصى من الحروف (عشان سياق النموذج والذاكرة).
-    static func context(for text: String, query: String, budget: Int) -> (String, Bool) {
+    static func context(for text: String, query: String, budget: Int, requireMatch: Bool = false) -> (String, Bool) {
         let clean = text.replacingOccurrences(of: "\r", with: "")
-        if clean.count <= budget { return (clean, false) }
+        if !requireMatch, clean.count <= budget { return (clean, false) }
         let size = 700
         var chunks: [String] = []
         var cur = ""
@@ -211,11 +211,16 @@ enum Attachments {
         let q = MemoryStore.tokens(query)
         let scored = chunks.enumerated().map { (i, c) -> (Int, Double) in
             let s = Double(q.intersection(MemoryStore.tokens(c)).count)
-            return (i, s + (i == 0 ? 0.5 : 0))   // أول قطعة غالبًا فيها العنوان والمقدمة
+            return (i, s + (i == 0 && !requireMatch ? 0.5 : 0))   // أول قطعة غالبًا فيها العنوان والمقدمة
+        }
+        if requireMatch {
+            // للرسائل اللاحقة: بس إذا السؤال فعلًا يطابق شي في الملف
+            guard scored.contains(where: { $0.1 >= 1 }) else { return ("", false) }
         }
         var picked = Set<Int>()
         var used = 0
-        for (i, _) in scored.sorted(by: { $0.1 > $1.1 }) {
+        for (i, sc) in scored.sorted(by: { $0.1 > $1.1 }) {
+            if requireMatch, sc < 1 { continue }
             if used + chunks[i].count > budget { continue }
             picked.insert(i); used += chunks[i].count
         }

@@ -103,7 +103,12 @@ final class ChatStore: ObservableObject {
     /// يستبدل رسائل المحادثة الحالية بنتيجة المكالمة.
     func syncFromCall(_ turns: [Turn]) {
         let i = ensureCurrent()
-        let voiceMsgs = turns.map { Message(role: $0.role == .user ? .user : .assistant, text: $0.text, viaVoice: true) }
+        // نفس معرّف الدور عشان الرسائل ما تنعاد رسمها كل مرة (معرّفات ثابتة)
+        let voiceMsgs = turns.map { t -> Message in
+            var m = Message(role: t.role == .user ? .user : .assistant, text: t.text, viaVoice: true)
+            m.id = t.id
+            return m
+        }
         let base = conversations[i].messages.filter { callBaseIDs.contains($0.id) }
         conversations[i].messages = base + Array(voiceMsgs.dropFirst(callSeedCount))
         conversations[i].updated = Date()
@@ -121,7 +126,7 @@ final class ChatStore: ObservableObject {
         let msgs = current?.messages ?? []
         callBaseIDs = Set(msgs.map(\.id))
         callSeedCount = msgs.count
-        return msgs.map { Turn(role: $0.role == .user ? .user : .assistant, text: $0.text) }
+        return msgs.map { Turn(id: $0.id, role: $0.role == .user ? .user : .assistant, text: $0.text) }
     }
 
     private var saveTask: Task<Void, Never>?
@@ -221,7 +226,7 @@ final class ChatStore: ObservableObject {
         var parts: [String] = []
         // ملفات من رسائل سابقة: نجيب المقاطع الأقرب للسؤال الجديد (بحد أصغر)
         if attachments.isEmpty, let f = earlier.last(where: { $0.kind == .file }) {
-            let (ctx, _) = Attachments.context(for: f.fullText, query: t, budget: 2500)
+            let (ctx, _) = Attachments.context(for: f.fullText, query: t, budget: 2500, requireMatch: true)
             if !ctx.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 parts.append("[مقاطع من الملف المرفق سابقًا: \(f.name)]\n\(ctx)\n[نهاية المقاطع]")
             }

@@ -8,6 +8,9 @@ struct MemoryItem: Identifiable, Codable, Equatable {
     var text: String
     var created = Date()
     var updated = Date()
+    /// مثبّتة: تنضاف للتعليمات دايمًا وما تنحذف تلقائيًا
+    var pinned: Bool?
+    var isPinned: Bool { pinned ?? false }
 }
 
 @MainActor
@@ -54,6 +57,12 @@ final class MemoryStore: ObservableObject {
         save()
     }
 
+    func togglePin(_ id: UUID) {
+        guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+        items[i].pinned = !items[i].isPinned
+        save()
+    }
+
     func add(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
@@ -86,14 +95,16 @@ final class MemoryStore: ObservableObject {
         lock.lock(); let items = snapshot; lock.unlock()
         guard on, !items.isEmpty else { return "" }
         let q = Self.tokens(query)
-        var scored: [(MemoryItem, Double)] = items.map { item in
-            let t = Self.tokens(item.text)
-            let overlap = Double(q.intersection(t).count)
+        let qg = Self.trigrams(query)
+        let pinned = items.filter { $0.isPinned }.prefix(limit).map { $0.text }
+        var scored: [(MemoryItem, Double)] = items.filter { !$0.isPinned }.map { item in
+            let overlap = Double(q.intersection(Self.tokens(item.text)).count)
+            let tri = Self.jaccard(qg, Self.trigrams(item.text))
             let age = Date().timeIntervalSince(item.updated) / 86_400
-            return (item, overlap * 2 + max(0, 1 - age / 30) * 0.5)
+            return (item, overlap * 2 + tri * 3 + max(0, 1 - age / 30) * 0.5)
         }
         scored.sort { $0.1 > $1.1 }
-        var picked = scored.prefix(limit).map { $0.0.text }
+        var picked = pinned + scored.prefix(max(0, limit - pinned.count)).map { $0.0.text }
         var chars = 0
         picked = picked.filter { chars += $0.count; return chars <= 600 }
         guard !picked.isEmpty else { return "" }
@@ -129,10 +140,24 @@ final class MemoryStore: ObservableObject {
         return out
     }
 
-    nonisolated static func similarity(_ a: String, _ b: String) -> Double {
-        let x = tokens(a), y = tokens(b)
+    /// ثلاثيات الحروف: تلقط الكلمات بتصريفات مختلفة (يشتغل/شغله/الشغل).
+    nonisolated static func trigrams(_ s: String) -> Set<String> {
+        var out = Set<String>()
+        for w in tokens(s) {
+            let c = Array(w)
+            if c.count < 3 { out.insert(w); continue }
+            for i in 0 ... (c.count - 3) { out.insert(String(c[i ..< i + 3])) }
+        }
+        return out
+    }
+
+    nonisolated static func jaccard(_ x: Set<String>, _ y: Set<String>) -> Double {
         guard !x.isEmpty, !y.isEmpty else { return 0 }
         return Double(x.intersection(y).count) / Double(x.union(y).count)
+    }
+
+    nonisolated static func similarity(_ a: String, _ b: String) -> Double {
+        max(jaccard(tokens(a), tokens(b)), jaccard(trigrams(a), trigrams(b)) * 0.9)
     }
 
     // MARK: الاستخراج
@@ -164,16 +189,22 @@ final class MemoryStore: ObservableObject {
 
     private func run(_ exchanges: [(user: String, assistant: String)]) async -> Int {
         guard await LLMService.shared.isReady else { return 0 }
-        let known = items.prefix(40).map { "- " + $0.text }.joined(separator: "\n")
+        // نعطي النموذج المعروف مرقّم عشان يقدر يعدّل أو يحذف
+        let query = exchanges.map { $0.user }.joined(separator: " ")
+        let qg = Self.trigrams(query)
+        let relevant = Array(items.sorted { Self.jaccard(qg, Self.trigrams($0.text)) > Self.jaccard(qg, Self.trigrams($1.text)) }.prefix(25))
+        let known = relevant.enumerated().map { "\($0.offset + 1). \($0.element.text)" }.joined(separator: "\n")
         let convo = exchanges.suffix(6).map {
             "المستخدم: \($0.user.prefix(400))\nالمساعد: \($0.assistant.prefix(200))"
         }.joined(separator: "\n")
         let system = """
         مهمتك استخراج حقائق دائمة ومهمة عن المستخدم من كلامه هو فقط: تفضيلاته، أشخاص في حياته، شغله، خططه المستمرة، أشياء طلب تذكرها.
         لا تستخرج أسئلة عامة أو معلومات مؤقتة أو كلام المساعد.
-        اكتب كل حقيقة في سطر يبدأ بـ "- " بجملة قصيرة جدًا بلغة المستخدم (مثل: - يحب القهوة بدون سكر).
-        إذا الحقيقة تعدّل شي معروف، اكتبها بصيغتها الجديدة.
-        إذا ما فيه شي جديد يستاهل، اكتب: لا شيء
+        اكتب كل عملية في سطر، بجمل قصيرة جدًا بلغة المستخدم:
+        + حقيقة جديدة        (مثال: + يحب القهوة بدون سكر)
+        ~ رقم: الصيغة الجديدة   (إذا كلامه يغيّر حقيقة معروفة، مثال: ~ 3: صار يشتغل في الرياض)
+        x رقم                 (إذا قال إن حقيقة معروفة غلط أو ما عادت صحيحة، أو طلب ينساها)
+        إذا ما فيه شي يستاهل، اكتب: لا شيء
         """
         let user = """
         المعروف حاليًا:
@@ -184,7 +215,7 @@ final class MemoryStore: ObservableObject {
         """
         var out = ""
         do {
-            let s = try await LLMService.shared.stream(system: system, history: [], user: user, maxTokens: 120)
+            let s = try await LLMService.shared.stream(system: system, history: [], user: user, maxTokens: 160)
             for try await c in s {
                 if Task.isCancelled { return 0 }
                 out += c
@@ -193,26 +224,54 @@ final class MemoryStore: ObservableObject {
             slog("memory: extract failed \(error)")
             return 0
         }
-        var lines: [String] = []
+        enum Op { case add(String), update(Int, String), delete(Int) }
+        var ops: [Op] = []
         for raw in out.components(separatedBy: .newlines) {
-            let trimmed: String = raw.trimmingCharacters(in: .whitespaces)
-            guard trimmed.hasPrefix("-") || trimmed.hasPrefix("•") else { continue }
-            let body: String = String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)
-            let n: Int = body.count
-            if n < 4 || n > 140 || body.contains("لا شيء") { continue }
-            lines.append(body)
-            if lines.count == 4 { break }
+            let line: String = raw.trimmingCharacters(in: .whitespaces)
+            guard let first = line.first else { continue }
+            let body: String = String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
+            if body.contains("لا شيء") { continue }
+            switch first {
+            case "+", "-", "•":
+                if body.count >= 4 && body.count <= 140 { ops.append(.add(body)) }
+            case "~":
+                let parts = body.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+                if parts.count == 2, let n = Int(parts[0]), parts[1].count >= 4, parts[1].count <= 140 {
+                    ops.append(.update(n, parts[1]))
+                }
+            case "x", "X", "×":
+                if let n = Int(body.filter(\.isNumber)) { ops.append(.delete(n)) }
+            default: continue
+            }
+            if ops.count == 6 { break }
         }
         var added = 0
-        for l in lines {
-            if let i = items.firstIndex(where: { Self.similarity($0.text, l) >= 0.5 }) {
-                if items[i].text != l { items[i].text = l; items[i].updated = Date(); added += 1 }
-            } else {
-                items.insert(MemoryItem(text: l), at: 0)
-                added += 1
+        for op in ops {
+            switch op {
+            case .add(let l):
+                if let i = items.firstIndex(where: { Self.similarity($0.text, l) >= 0.5 }) {
+                    if items[i].text != l, !items[i].isPinned { items[i].text = l; items[i].updated = Date(); added += 1 }
+                } else {
+                    items.insert(MemoryItem(text: l), at: 0)
+                    added += 1
+                }
+            case .update(let n, let l):
+                guard n >= 1, n <= relevant.count,
+                      let i = items.firstIndex(where: { $0.id == relevant[n - 1].id }), !items[i].isPinned else { continue }
+                items[i].text = l; items[i].updated = Date(); added += 1
+            case .delete(let n):
+                guard n >= 1, n <= relevant.count,
+                      let i = items.firstIndex(where: { $0.id == relevant[n - 1].id }), !items[i].isPinned else { continue }
+                items.remove(at: i); added += 1
             }
         }
-        if items.count > Self.maxItems { items = Array(items.sorted { $0.updated > $1.updated }.prefix(Self.maxItems)) }
+        let lines = ops
+        if items.count > Self.maxItems {
+            // المثبّتة ما تنحذف؛ نشيل الأقدم من الباقي
+            let pins = items.filter { $0.isPinned }
+            let rest = items.filter { !$0.isPinned }.sorted { $0.updated > $1.updated }.prefix(max(0, Self.maxItems - pins.count))
+            items = pins + rest
+        }
         if added > 0 { save() }
         slog("memory: extracted \(lines.count) saved \(added) total \(items.count)")
         return added
@@ -242,13 +301,27 @@ struct MemoryView: View {
                     Button {
                         draft = item.text; editing = item
                     } label: {
-                        Text(item.text).foregroundStyle(.primary)
+                        HStack {
+                            Text(item.text).foregroundStyle(.primary)
+                            if item.isPinned {
+                                Spacer()
+                                Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .swipeActions(edge: .leading) {
+                        Button { store.togglePin(item.id) } label: {
+                            Label(item.isPinned ? "إلغاء التثبيت" : "تثبيت", systemImage: item.isPinned ? "pin.slash" : "pin")
+                        }
+                        .tint(.orange)
                     }
                 }
                 .onDelete { idx in store.delete(idx.map { store.items[$0].id }) }
                 Button { draft = ""; adding = true } label: { Label("أضف معلومة", systemImage: "plus") }
             } header: {
                 Text("المحفوظ (\(store.items.count))")
+            } footer: {
+                Text("اسحب يمين على أي معلومة عشان تثبّتها: المثبّتة تنضاف للتعليمات دايمًا وما تتغير تلقائيًا.")
             }
             if !store.items.isEmpty {
                 Section {

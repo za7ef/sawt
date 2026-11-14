@@ -29,6 +29,7 @@ final class Log: @unchecked Sendable {
     let crashURL = Log.dir.appendingPathComponent("crash-reports.txt")
     let fileURL: URL = FileManager.default.temporaryDirectory.appendingPathComponent("sawt-log.txt")
     private var handle: FileHandle?
+    private var unsynced = 0
 
     /// وش كان التطبيق يسوي آخر شي (لو انقفل فجأة نعرف وين).
     private(set) var previousRunCrashed = false
@@ -61,9 +62,11 @@ final class Log: @unchecked Sendable {
         queue.async {
             self.lines.append(line)
             if self.lines.count > 3000 { self.lines.removeFirst(500) }
+            // write() يوصل للنظام مباشرة فيبقى حتى لو انقفل التطبيق؛ المزامنة للقرص كل 50 سطر بس (أخف)
             if let data = (line + "\n").data(using: .utf8) {
                 try? self.handle?.write(contentsOf: data)
-                try? self.handle?.synchronize()
+                self.unsynced += 1
+                if self.unsynced >= 50 { try? self.handle?.synchronize(); self.unsynced = 0 }
             }
         }
         #if DEBUG
