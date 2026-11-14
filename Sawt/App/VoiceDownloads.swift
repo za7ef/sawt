@@ -8,7 +8,7 @@ final class VoiceDownloads: ObservableObject {
     struct Item: Identifiable {
         let id: String          // نفس معرّف VoiceOption
         let folder: String
-        let base: String        // بداية رابط التنزيل
+        let bases: [String]     // بدايات روابط التنزيل بالترتيب (الأول أساسي والباقي احتياط)
         let files: [(remote: [String], local: String)]   // أكثر من جزء = تنضم بالترتيب
         let approx: String
         let gb: Double
@@ -18,13 +18,14 @@ final class VoiceDownloads: ObservableObject {
         // نبرة السعودية (Apache-2.0، من oddadmix/Nabra-Saudi-82M): المصدر الأصلي PyTorch بس،
         // فننزّل نسختنا المحوّلة لـONNX من إصدار الأصوات العام
         Item(id: "nabra-saudi", folder: "nabra-saudi",
-             base: "https://github.com/za7ef/sawt/releases/download/voices/",
+             bases: ["https://github.com/za7ef/sawt-releases/releases/download/voices/",
+                     "https://github.com/za7ef/sawt/releases/download/voices/"],
              files: [((0..<9).map { String(format: "nabra-saudi-model.int8.onnx.part%02d", $0) }, "model.int8.onnx"),
                      (["nabra-saudi-tokens.txt"], "tokens.txt"),
                      (["nabra-saudi-voices.bin"], "voices.bin")],
              approx: "~84 MB", gb: 0.1),
         Item(id: "piper-miro", folder: "piper-miro",
-             base: "https://huggingface.co/csukuangfj/vits-piper-ar_JO-SA_miro_V2-high-int8/resolve/main/",
+             bases: ["https://huggingface.co/csukuangfj/vits-piper-ar_JO-SA_miro_V2-high-int8/resolve/main/"],
              files: [(["ar_JO-SA_miro_V2-high.onnx"], "ar_JO-SA_miro_V2-high.onnx"), (["tokens.txt"], "tokens.txt")],
              approx: "~19 MB", gb: 0.05),
     ]
@@ -65,9 +66,18 @@ final class VoiceDownloads: ObservableObject {
                     let out = try FileHandle(forWritingTo: partial)
                     defer { try? out.close() }
                     for r in f.remote {
-                        guard let url = URL(string: item.base + r) else { throw URLError(.badURL) }
-                        let (tmp, resp) = try await URLSession.shared.download(from: url)
-                        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+                        var got: URL?
+                        var lastErr: Error = URLError(.badServerResponse)
+                        for base in item.bases {
+                            guard let url = URL(string: base + r) else { continue }
+                            do {
+                                let (t, resp) = try await URLSession.shared.download(from: url)
+                                if (resp as? HTTPURLResponse)?.statusCode == 200 { got = t; break }
+                                try? FileManager.default.removeItem(at: t)
+                            } catch { lastErr = error }
+                            slog("voice: \(r) not at \(base), trying next")
+                        }
+                        guard let tmp = got else { throw lastErr }
                         try out.write(contentsOf: try Data(contentsOf: tmp, options: .mappedIfSafe))
                         try? FileManager.default.removeItem(at: tmp)
                     }

@@ -13,6 +13,14 @@ struct MemoryItem: Identifiable, Codable, Equatable {
     var isPinned: Bool { pinned ?? false }
     /// متى انحذفت تلقائيًا (سلة المحذوفات، تنمسح بعد 7 أيام)
     var deletedAt: Date?
+    /// الأهمية 1-5 حسب تقدير النموذج (القديمة بدونها = 3)
+    var importance: Int?
+    var level: Int { importance ?? 3 }
+    /// هوية، تفضيلات، ناس، خطط، صحة، شغل، أخرى
+    var category: String?
+    /// المعلومات المؤقتة تنتهي بعد هالتاريخ
+    var expires: Date?
+    var isExpired: Bool { (expires ?? .distantFuture) < Date() }
 }
 
 @MainActor
@@ -45,8 +53,11 @@ final class MemoryStore: ObservableObject {
 
     private init() {
         if let list = SafeFile.load([MemoryItem].self, from: fileURL) {
-            items = list
-            MemoryStore.snapshot = list
+            // المؤقتة اللي فات وقتها ما تنحفظ (إلا المثبّتة)
+            let live = list.filter { $0.isPinned || !$0.isExpired }
+            items = live
+            MemoryStore.snapshot = live
+            if live.count != list.count { SafeFile.write(live, to: fileURL) }
         }
         let week = Date().addingTimeInterval(-7 * 86_400)
         trash = (SafeFile.load([MemoryItem].self, from: trashURL) ?? []).filter { ($0.deletedAt ?? .distantPast) > week }
@@ -88,7 +99,9 @@ final class MemoryStore: ObservableObject {
     func add(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
-        items.insert(MemoryItem(text: t), at: 0)
+        var m = MemoryItem(text: t)
+        m.importance = 4   // أضافها بنفسه
+        items.insert(m, at: 0)
         save()
     }
 
@@ -119,12 +132,19 @@ final class MemoryStore: ObservableObject {
         guard on, !items.isEmpty else { return "" }
         let q = Self.tokens(query)
         let qg = Self.trigrams(query)
-        let pinned = items.filter { $0.isPinned }.prefix(limit).map { $0.text }
-        var scored: [(MemoryItem, Double)] = items.filter { !$0.isPinned }.map { item in
+        let live = items.filter { $0.isPinned || !$0.isExpired }
+        // المثبّتة + الأهم جدًا (5) تنضاف دايمًا
+        let always = live.filter { $0.isPinned || $0.level >= 5 }
+            .sorted { ($0.isPinned ? 1 : 0, $0.level) > ($1.isPinned ? 1 : 0, $1.level) }
+        let pinned = always.prefix(limit).map { $0.text }
+        let alwaysIDs = Set(always.prefix(limit).map { $0.id })
+        var scored: [(MemoryItem, Double)] = live.filter { !alwaysIDs.contains($0.id) }.map { item in
             let overlap = Double(q.intersection(Self.tokens(item.text)).count)
             let tri = Self.jaccard(qg, Self.trigrams(item.text))
             let age = Date().timeIntervalSince(item.updated) / 86_400
-            return (item, overlap * 2 + tri * 3 + max(0, 1 - age / 30) * 0.5)
+            let rel = overlap * 2 + tri * 3
+            // الأهمية ترفع الترتيب، بس ما تجيب شي ما له علاقة أبدًا
+            return (item, rel * (0.7 + 0.15 * Double(item.level)) + Double(item.level - 3) * 0.3 + max(0, 1 - age / 30) * 0.5)
         }
         scored.sort { $0.1 > $1.1 }
         var picked = pinned + scored.prefix(max(0, limit - pinned.count)).map { $0.0.text }
@@ -220,14 +240,38 @@ final class MemoryStore: ObservableObject {
         let convo = exchanges.suffix(6).map {
             "المستخدم: \($0.user.prefix(400))\nالمساعد: \($0.assistant.prefix(200))"
         }.joined(separator: "\n")
+        let today = { () -> String in
+            let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
+            return f.string(from: Date())
+        }()
         let system = """
-        مهمتك استخراج حقائق دائمة ومهمة عن المستخدم من كلامه هو فقط: تفضيلاته، أشخاص في حياته، شغله، خططه المستمرة، أشياء طلب تذكرها.
-        لا تستخرج أسئلة عامة أو معلومات مؤقتة أو كلام المساعد.
-        اكتب كل عملية في سطر، بجمل قصيرة جدًا بلغة المستخدم:
-        + حقيقة جديدة        (مثال: + يحب القهوة بدون سكر)
-        ~ رقم: الصيغة الجديدة   (إذا كلامه يغيّر حقيقة معروفة، مثال: ~ 3: صار يشتغل في الرياض)
-        x رقم                 (إذا قال إن حقيقة معروفة غلط أو ما عادت صحيحة، أو طلب ينساها)
+        مهمتك تقرر وش يستاهل ينحفظ عن المستخدم من كلامه هو فقط (مو كلام المساعد)، وكم أهميته.
+        لا تحفظ: السوالف والتحيات، الأسئلة العامة أو اللي مرة وحدة، المزاج اللحظي، أي شي يقدر ينعرف من السؤال نفسه.
+        احفظ: هويته وأهله وناسه، تفضيلاته الثابتة، شغله، أهدافه وخططه، صحته، وأي شي قال "تذكر".
+
+        الأهمية:
+        5 = أساسي دايم (اسمه، أهله، حساسية أو مرض، شي قال تذكره)
+        4 = مهم ويتكرر (شغله، مدينته، هدف كبير، تفضيل قوي)
+        3 = مفيد (هواية، تفضيل عادي، خطة قريبة)
+        2 = بسيط أو عابر
+        1 = تافه
+        المدة: دائم، أو مؤقت، أو تاريخ انتهاء بصيغة YYYY-MM-DD للخطط والمواعيد (اليوم \(today)).
+        الفئة وحدة من: هوية، تفضيلات، ناس، خطط، صحة، شغل، أخرى.
+
+        اكتب كل عملية في سطر، بجملة قصيرة جدًا بلغة المستخدم:
+        + أهمية | فئة | مدة | الحقيقة
+        ~ رقم | أهمية | الصيغة الجديدة   (إذا كلامه يحدّث حقيقة معروفة: عدّلها بدل ما تضيف سطر جديد)
+        x رقم   (إذا قال إن حقيقة معروفة غلط أو طلب ينساها)
         إذا ما فيه شي يستاهل، اكتب: لا شيء
+
+        أمثلة:
+        المستخدم: هلا كيفك → لا شيء
+        المستخدم: وش عاصمة اليابان؟ → لا شيء
+        المستخدم: والله تعبان اليوم → لا شيء
+        المستخدم: بنتي بيان عمرها ثلاث شهور → + 5 | ناس | دائم | عنده بنت اسمها بيان (انولدت تقريبًا قبل ثلاث شهور)
+        المستخدم: عندي موعد أسنان يوم الخميس الجاي → + 3 | صحة | <تاريخ الخميس> | عنده موعد أسنان الخميس
+        المستخدم: تذكر إني ما آكل بصل → + 5 | تفضيلات | دائم | ما ياكل بصل
+        المستخدم: نقلت شغلي للرياض (والمعروف 2. يشتغل في جدة) → ~ 2 | 4 | صار يشتغل في الرياض
         """
         let user = """
         المعروف حاليًا:
@@ -238,7 +282,7 @@ final class MemoryStore: ObservableObject {
         """
         var out = ""
         do {
-            let s = try await LLMService.shared.stream(system: system, history: [], user: user, maxTokens: 160)
+            let s = try await LLMService.shared.stream(system: system, history: [], user: user, maxTokens: 220)
             for try await c in s {
                 if Task.isCancelled { return 0 }
                 out += c
@@ -247,42 +291,41 @@ final class MemoryStore: ObservableObject {
             slog("memory: extract failed \(error)")
             return 0
         }
-        enum Op { case add(String), update(Int, String), delete(Int) }
-        var ops: [Op] = []
+        var ops: [MemoryLine] = []
         for raw in out.components(separatedBy: .newlines) {
-            let line: String = raw.trimmingCharacters(in: .whitespaces)
-            guard let first = line.first else { continue }
-            let body: String = String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
-            if body.contains("لا شيء") { continue }
-            switch first {
-            case "+", "-", "•":
-                if body.count >= 4 && body.count <= 140 { ops.append(.add(body)) }
-            case "~":
-                let parts = body.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-                if parts.count == 2, let n = Int(parts[0]), parts[1].count >= 4, parts[1].count <= 140 {
-                    ops.append(.update(n, parts[1]))
-                }
-            case "x", "X", "×":
-                if let n = Int(body.filter(\.isNumber)) { ops.append(.delete(n)) }
-            default: continue
-            }
+            if let op = MemoryLine.parse(raw) { ops.append(op) }
             if ops.count == 6 { break }
         }
-        var added = 0
+        var added = 0, skipped = 0
         let mayForget = exchanges.contains { Self.hasForgetCue($0.user) }
+        let remember = exchanges.contains { MemoryLine.hasRememberCue($0.user) }
         for op in ops {
             switch op {
-            case .add(let l):
+            case .add(let l, var imp, let cat, let exp):
+                if remember { imp = max(imp, 4) }
+                // الأقل من 3 ما ينحفظ إلا إذا طلب يتذكره
+                guard imp >= 3 else { skipped += 1; continue }
                 if let i = items.firstIndex(where: { Self.similarity($0.text, l) >= 0.5 }) {
-                    if items[i].text != l, !items[i].isPinned { items[i].text = l; items[i].updated = Date(); added += 1 }
+                    // نفس الحقيقة: نحدّثها بدل سطر جديد
+                    guard !items[i].isPinned else { continue }
+                    if items[i].text != l || items[i].level < imp {
+                        items[i].text = l; items[i].updated = Date()
+                        items[i].importance = max(items[i].level, imp)
+                        items[i].category = cat; items[i].expires = exp
+                        added += 1
+                    }
                 } else {
-                    items.insert(MemoryItem(text: l), at: 0)
+                    var m = MemoryItem(text: l)
+                    m.importance = imp; m.category = cat; m.expires = exp
+                    items.insert(m, at: 0)
                     added += 1
                 }
-            case .update(let n, let l):
+            case .update(let n, let l, let imp):
                 guard n >= 1, n <= relevant.count,
                       let i = items.firstIndex(where: { $0.id == relevant[n - 1].id }), !items[i].isPinned else { continue }
-                items[i].text = l; items[i].updated = Date(); added += 1
+                items[i].text = l; items[i].updated = Date()
+                if let imp { items[i].importance = imp }
+                added += 1
             case .delete(let n):
                 guard n >= 1, n <= relevant.count,
                       let i = items.firstIndex(where: { $0.id == relevant[n - 1].id }), !items[i].isPinned else { continue }
@@ -294,11 +337,14 @@ final class MemoryStore: ObservableObject {
                 added += 1
             }
         }
+        if skipped > 0 { slog("memory: skipped \(skipped) low-importance") }
+        items.removeAll { !$0.isPinned && $0.isExpired }
         let lines = ops   // للسجل تحت
         if items.count > Self.maxItems {
-            // المثبّتة ما تنحذف؛ نشيل الأقدم من الباقي
+            // المثبّتة ما تنحذف
             let pins = items.filter { $0.isPinned }
-            let rest = items.filter { !$0.isPinned }.sorted { $0.updated > $1.updated }.prefix(max(0, Self.maxItems - pins.count))
+            // نشيل الأقل أهمية ثم الأقدم
+            let rest = items.filter { !$0.isPinned }.sorted { ($0.level, $0.updated) > ($1.level, $1.updated) }.prefix(max(0, Self.maxItems - pins.count))
             items = pins + rest
         }
         if added > 0 { save() }
@@ -331,7 +377,10 @@ struct MemoryView: View {
                         draft = item.text; editing = item
                     } label: {
                         HStack {
-                            Text(item.text).foregroundStyle(.primary)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(item.text).foregroundStyle(.primary)
+                                MemoryMeta(item: item)
+                            }
                             if item.isPinned {
                                 Spacer()
                                 Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary)
@@ -389,5 +438,26 @@ struct MemoryView: View {
         .confirmationDialog("تحذف كل الذاكرة؟", isPresented: $confirmAll, titleVisibility: .visible) {
             Button("حذف الكل", role: .destructive) { store.deleteAll() }
         }
+    }
+}
+
+/// سطر صغير تحت المعلومة: الأهمية (نقاط) والفئة، ومتى تنتهي إذا مؤقتة.
+struct MemoryMeta: View {
+    let item: MemoryItem
+    var body: some View {
+        HStack(spacing: 6) {
+            HStack(spacing: 2) {
+                ForEach(1...5, id: \.self) { i in
+                    Circle().frame(width: 4, height: 4).opacity(i <= item.level ? 0.9 : 0.2)
+                }
+            }
+            .accessibilityLabel("الأهمية \(item.level) من 5")
+            if let c = item.category { Text(c) }
+            if let e = item.expires {
+                Text("لين \(e.formatted(.dateTime.day().month(.abbreviated)))")
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
     }
 }
