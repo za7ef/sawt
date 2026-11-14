@@ -28,6 +28,38 @@ enum PhoneControl {
 
     static var hasPairing: Bool { FileManager.default.fileExists(atPath: pairingURL.path) }
 
+    /// يتأكد إن البيانات plist ويحدد نوعها، وبعدين يحفظها
+    static func save(_ data: Data) -> String {
+        guard let obj = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            return "الملف مو plist صالح (\(data.count) بايت)"
+        }
+        let kind: String
+        if obj["public_key"] != nil && obj["private_key"] != nil && obj["identifier"] != nil { kind = "RemotePairing" }
+        else if obj["HostID"] != nil || obj["DeviceCertificate"] != nil { kind = "lockdown" }
+        else { kind = "غير معروف" }
+        do {
+            let dest = pairingURL
+            try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: dest, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            return "تم حفظ ملف الاقتران (\(kind)، \(data.count) بايت)"
+        } catch {
+            return "فشل الحفظ: \(error.localizedDescription)"
+        }
+    }
+
+    static func importFile(_ url: URL) -> String {
+        let ok = url.startAccessingSecurityScopedResource()
+        defer { if ok { url.stopAccessingSecurityScopedResource() } }
+        var readErr: NSError?
+        var out = ""
+        // NSFileCoordinator عشان الملفات اللي في iCloud أو عند مزوّد ثاني
+        NSFileCoordinator().coordinate(readingItemAt: url, options: .withoutChanges, error: &readErr) { u in
+            do { out = save(try Data(contentsOf: u)) } catch { out = "فشل القراءة: \(error.localizedDescription)" }
+        }
+        if let readErr, out.isEmpty { out = "فشل القراءة: \(readErr.localizedDescription)" }
+        return out
+    }
+
     static func config(host: String) -> String {
         let d: [String: String] = ["pairing_file": pairingURL.path, "host": host]
         let data = (try? JSONSerialization.data(withJSONObject: d)) ?? Data("{}".utf8)
@@ -63,6 +95,8 @@ enum PhoneControl {
 struct PhoneControlView: View {
     @AppStorage("pcHost") private var host = "10.7.0.1"
     @State private var importing = false
+    @State private var pasting = false
+    @State private var pasteText = ""
     @State private var hasPairing = PhoneControl.hasPairing
     @State private var busy = false
     @State private var countdown = 0
@@ -75,6 +109,7 @@ struct PhoneControlView: View {
                 LabeledContent("الأداة", value: PhoneControl.available ? "مبنية" : "غير مبنية")
                 LabeledContent("ملف الاقتران", value: hasPairing ? "موجود" : "ناقص")
                 Button("استيراد ملف الاقتران") { importing = true }
+                Button("الصق محتوى الملف") { pasting = true }
                 TextField("العنوان", text: $host)
                     .keyboardType(.numbersAndPunctuation)
                     .autocorrectionDisabled()
@@ -114,21 +149,44 @@ struct PhoneControlView: View {
             }
         }
         .navigationTitle("تحكم بالجوال (تجريبي)")
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.propertyList, .xml, .data, .item]) { result in
-            guard case .success(let url) = result else { return }
-            let ok = url.startAccessingSecurityScopedResource()
-            defer { if ok { url.stopAccessingSecurityScopedResource() } }
-            do {
-                let data = try Data(contentsOf: url)
-                let dest = PhoneControl.pairingURL
-                try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try data.write(to: dest, options: .atomic)
-                hasPairing = true
-                output = "تم حفظ ملف الاقتران (\(data.count) بايت)"
-            } catch {
-                output = "فشل الاستيراد: \(error.localizedDescription)"
+        .sheet(isPresented: $importing) {
+            DocPicker { url in
+                importing = false
+                guard let url else { Log.shared("phonectl picker: cancelled"); return }
+                Log.shared("phonectl picker: picked \(url.lastPathComponent)")
+                output = PhoneControl.importFile(url)
+                hasPairing = PhoneControl.hasPairing
+                Log.shared("phonectl import: \(output)")
+            }
+            .ignoresSafeArea()
+        }
+        .sheet(isPresented: $pasting) {
+            NavigationStack {
+                TextEditor(text: $pasteText)
+                    .font(.caption.monospaced())
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .padding()
+                    .navigationTitle("الصق محتوى الملف")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("إلغاء") { pasting = false } }
+                        ToolbarItem(placement: .primaryAction) {
+                            Button("لصق") { pasteText = UIPasteboard.general.string ?? pasteText }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("حفظ") {
+                                output = PhoneControl.save(Data(pasteText.utf8))
+                                hasPairing = PhoneControl.hasPairing
+                                Log.shared("phonectl paste: \(output)")
+                                pasting = false
+                            }
+                            .disabled(pasteText.isEmpty)
+                        }
+                    }
             }
         }
+        .onAppear { hasPairing = PhoneControl.hasPairing }
     }
 
     private func go(_ op: PhoneControl.Op, delay: Bool, label: String) {
@@ -148,6 +206,35 @@ struct PhoneControlView: View {
             UIPasteboard.general.string = r
             output = String(r.prefix(4000))
             busy = false
+        }
+    }
+}
+
+/// منتقي ملفات UIKit مباشر (asCopy) — أثبت من fileImporter مع بعض الإضافات
+struct DocPicker: UIViewControllerRepresentable {
+    let done: (URL?) -> Void
+
+    func makeCoordinator() -> Coord { Coord(done: done) }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let vc = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
+        vc.allowsMultipleSelection = false
+        vc.delegate = context.coordinator
+        Log.shared("phonectl picker: presented")
+        return vc
+    }
+
+    func updateUIViewController(_ vc: UIDocumentPickerViewController, context: Context) {}
+
+    final class Coord: NSObject, UIDocumentPickerDelegate {
+        let done: (URL?) -> Void
+        init(done: @escaping (URL?) -> Void) { self.done = done }
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            Log.shared("phonectl picker: didPick \(urls.count)")
+            done(urls.first)
+        }
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            done(nil)
         }
     }
 }

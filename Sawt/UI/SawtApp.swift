@@ -35,6 +35,14 @@ struct SawtApp: App {
                     models.loadAll()
                     await updater.check()
                 }
+                .onOpenURL { url in
+                    // ملف اقتران مفتوح عبر «فتح في»/المشاركة
+                    let ext = url.pathExtension.lowercased()
+                    guard ["plist", "mobiledevicepairing", "mobiledevicepair"].contains(ext) else { return }
+                    let r = PhoneControl.importFile(url)
+                    slog("phonectl openURL \(url.lastPathComponent): \(r)")
+                    updater.lastMessage = r
+                }
                 .sheet(item: $updater.available) { UpdateSheet(info: $0).environment(\.layoutDirection, .rightToLeft) }
                 .alert("التحديثات", isPresented: Binding(get: { updater.lastMessage != nil },
                                                         set: { if !$0 { updater.lastMessage = nil } })) {
