@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var usage: Storage.Usage?
     @State private var confirmAll = false
     @State private var unused: [Storage.ModelFolder] = []
+    @AppStorage("showCallDebug") private var showCallDebug = false
     @State private var shareURL: URL?
 
     var body: some View {
@@ -102,6 +103,7 @@ struct SettingsView: View {
                 }
 
                 Section("التشخيص") {
+                    Toggle("إظهار معلومات التشخيص في المكالمة", isOn: $showCallDebug)
                     Button {
                         shareURL = Log.shared.export()
                     } label: {

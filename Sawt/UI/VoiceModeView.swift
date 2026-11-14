@@ -8,7 +8,7 @@ struct VoiceModeView: View {
     @EnvironmentObject var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
     @State private var showCaptions = true
-    @AppStorage("showDebug") private var showDebug = true
+    @AppStorage("showCallDebug") private var showDebug = false
 
     var body: some View {
         ZStack {
