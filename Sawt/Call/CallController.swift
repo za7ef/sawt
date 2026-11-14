@@ -45,6 +45,8 @@ final class CallController: ObservableObject {
     /// فكّينا نموذج السمع مؤقتًا عشان الذاكرة وقت الرد
     private var sttUnloaded = false
     private var userTalking = false
+    /// بث تمييز آبل للدور الحالي (على خيط المعالجة)
+    private var appleStream: AppleStream?
     private var fragmentTimer: Task<Void, Never>?
     private var sttReload: Task<Void, Never>?
 
@@ -103,6 +105,7 @@ final class CallController: ObservableObject {
             // نجهز الصوت هنا (مو وقت فتح التطبيق) عشان الذاكرة
             self.debug.stage = "يجهّز الصوت"
             slog("call: preparing voice")
+            await LLMService.shared.resetCallSession()
             slog.stage("call:tts-load")
             await ModelManager.shared.prepareVoice()
             slog.stage("call:listening")
@@ -170,6 +173,7 @@ final class CallController: ObservableObject {
 
     func end() {
         cancelReply(recordPartial: true)
+        Task { await LLMService.shared.resetCallSession() }
         audio.onMic = nil
         audio.onStateChange = nil
         audio.stop()
@@ -218,6 +222,8 @@ final class CallController: ObservableObject {
         specTask?.cancel()
         specTask = nil
         specText = nil
+        appleStream?.cancel()
+        appleStream = nil
         if !keepAI { aiActive = false }
         vad?.reset()
     }
@@ -226,15 +232,19 @@ final class CallController: ObservableObject {
         guard !procMuted, let vad else { return }
         preRoll.append(contentsOf: samples)
         if preRoll.count > 9_600 { preRoll.removeFirst(preRoll.count - 9_600) } // 0.6 ثانية
-        if inSpeech { utter.append(contentsOf: samples) }
+        if inSpeech {
+            utter.append(contentsOf: samples)
+            appleStream?.append(samples)
+        }
 
         for (speech, db) in vad.process(samples) {
             procDB = db
             procSpeech = speech
             if !inSpeech {
                 // أثناء كلام الذكاء نحتاج دليل أقوى عشان ما يقاطع نفسه من بقايا الصدى
-                let need = aiActive ? 7 : 3
-                let loudEnough = aiActive ? db > -44 : true
+                // وقت ما الذكاء يتكلم (أو بعد ما خلصت كلامك بشوي) نحتاج صوت أعلى وأطول عشان الصدى والضجة ما تفتح دور
+                let need = aiActive ? 10 : 4
+                let loudEnough = aiActive ? db > -40 : db > -52
                 speechRun = (speech && loudEnough) ? speechRun + 1 : 0
                 if speechRun >= need {
                     inSpeech = true
@@ -244,6 +254,7 @@ final class CallController: ObservableObject {
                     speechRun = 0
                     let barge = aiActive
                     aiActive = false
+                    startAppleStream()
                     DispatchQueue.main.async { self.userStarted(bargeIn: barge) }
                 }
                 continue
@@ -261,13 +272,17 @@ final class CallController: ObservableObject {
 
             silenceRun += 1
             let silenceMs = Double(silenceRun) * windowMs
-            if silenceMs >= 280, specTask == nil, voicedWindows >= 6 {
+            if silenceMs >= 280, specTask == nil, appleStream == nil, voicedWindows >= 6 {
                 startSpeculative()
             }
             var endMs = patienceMs
             if let t = specText?.trimmingCharacters(in: .whitespaces) {
                 if let last = t.last, "؟?.!".contains(last) { endMs *= 0.65 }
                 if TurnHeuristics.soundsUnfinished(t) { endMs *= 1.8 }
+                else if appleStream != nil, !t.isEmpty, !TurnHeuristics.isFragment(t) {
+                    // النص الجزئي واضح وكامل: ننهي الدور أسرع
+                    endMs = max(600, endMs * 0.7)
+                }
             }
             let tooLong = utter.count > 16_000 * 25
             // لازم كلام كافي (حوالي ثلث ثانية) قبل ما ننهي الدور، عشان كلمة أو نفس ما يطلق رد
@@ -278,9 +293,27 @@ final class CallController: ObservableObject {
                 // صوت قصير جدًا (كحة أو طقة): نتجاهله
                 inSpeech = false
                 utter.removeAll()
+                appleStream?.cancel()
+                appleStream = nil
                 DispatchQueue.main.async { self.userCancelled() }
             }
         }
+    }
+
+    /// يبدأ بث تمييز آبل لهالدور (على خيط المعالجة).
+    private func startAppleStream() {
+        appleStream?.cancel()
+        appleStream = nil
+        guard (UserDefaults.standard.string(forKey: "sttID") ?? "apple") == "apple" else { return }
+        let s = AppleStream()
+        s.onPartial = { [weak self] text in
+            guard let self else { return }
+            self.proc.async { if self.appleStream === s { self.specText = text } }
+            DispatchQueue.main.async { if !text.isEmpty { self.liveUser = text } }
+        }
+        guard s.start(language: Self.whisperLanguage()) else { slog("stt: apple stream unavailable"); return }
+        s.append(utter)
+        appleStream = s
     }
 
     private func startSpeculative() {
@@ -310,12 +343,18 @@ final class CallController: ObservableObject {
         let spec = specTask
         specTask = nil
         specText = nil
+        let stream = appleStream
+        appleStream = nil
         aiActive = true
         let lang = Self.whisperLanguage()
         let t0 = Date()
         Task {
             var result: (String, String)
-            if let spec, !spec.isCancelled {
+            if let stream {
+                slog.stage("call:stt")
+                let text = await stream.finish()
+                result = (text, lang ?? "ar")
+            } else if let spec, !spec.isCancelled {
                 result = await spec.value
             } else {
                 slog.stage("call:stt")
@@ -473,7 +512,7 @@ final class CallController: ObservableObject {
             do {
                 try await self.makeRoomForLLM()
                 slog.stage("call:llm")
-                let stream = try await LLMService.shared.stream(system: system, history: hist, user: text, maxTokens: 300)
+                let stream = try await LLMService.shared.stream(system: system, history: hist, user: text, maxTokens: 300, reuse: true)
                 for try await chunk in stream {
                     if Task.isCancelled || myID != self.replyID { break }
                     if full.isEmpty {
