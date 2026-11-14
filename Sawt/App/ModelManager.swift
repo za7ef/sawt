@@ -31,10 +31,17 @@ final class ModelManager: ObservableObject {
     var allReady: Bool { llm.isReady && stt.isReady }
 
     /// عند فتح التطبيق: نشغّل بس النماذج اللي نزلت قبل. ما ننزّل شي تلقائيًا.
+    /// النماذج تتحمل وحدة وحدة عشان ما ترتفع الذاكرة مرة وحدة. الصوت يتحمل وقت الحاجة بس.
     func loadAll() {
-        if llm == .idle, downloaded.contains(AppSettings.shared.llmID) { activate(AppSettings.shared.llm) }
-        if stt == .idle, downloadedSTT.contains(AppSettings.shared.sttID) { loadSTT() }
-        prepareVoice()
+        Task {
+            if llm == .idle, downloaded.contains(AppSettings.shared.llmID) {
+                await activate(AppSettings.shared.llm).value
+            }
+            let sid = AppSettings.shared.sttID
+            if stt == .idle, sid == "apple" || downloadedSTT.contains(sid) {
+                await loadSTT().value
+            }
+        }
     }
 
     func loadLLM() { activate(AppSettings.shared.llm) }
@@ -46,7 +53,8 @@ final class ModelManager: ObservableObject {
     }
 
     /// ينزّل النموذج (إذا ما نزل) ويشغّله.
-    func activate(_ option: LLMOption) {
+    @discardableResult
+    func activate(_ option: LLMOption) -> Task<Void, Never> {
         AppSettings.shared.llmID = option.id
         llmTask?.cancel()
         llmToken += 1
@@ -78,8 +86,10 @@ final class ModelManager: ObservableObject {
                 guard llmToken == token else { return }
                 downloadingID = nil
                 llm = Task.isCancelled ? .idle : .failed(SawtError.friendly(error).localizedDescription)
+                slog("llm load failed: \(error)")
             }
         }
+        return llmTask!
     }
 
     /// يوقف التنزيل مؤقتًا. الملفات اللي نزلت تبقى، والباقي يكمل لما تضغط تنزيل مرة ثانية.
@@ -99,12 +109,57 @@ final class ModelManager: ObservableObject {
             llm = .idle
             Task { await LLMService.shared.unload() }
         }
-        ModelFiles.remove(repo: option.id)
+        Storage.deleteLLM(option.id)
         downloaded.remove(option.id)
         UserDefaults.standard.set(Array(downloaded), forKey: "downloadedLLMs")
     }
 
-    func loadSTT() {
+    func deleteSTT(_ variant: String) {
+        guard variant != "apple" else { return }
+        if AppSettings.shared.sttID == variant {
+            sttTask?.cancel(); sttToken += 1; stt = .idle
+            Task { await SpeechRecognizer.shared.unload() }
+        }
+        Storage.deleteWhisper(variant)
+        downloadedSTT.remove(variant)
+        UserDefaults.standard.set(Array(downloadedSTT), forKey: "downloadedSTT")
+    }
+
+    /// يحذف مجلد معيّن من شاشة الملفات.
+    func deleteFolder(_ f: Storage.ModelFolder) {
+        switch f.kind {
+        case .llm(let repo):
+            if let opt = Catalog.llms.first(where: { $0.id == repo }) { delete(opt) } else { Storage.remove(f) }
+        case .whisper(let v):
+            if downloadedSTT.contains(v) { deleteSTT(v) }
+        }
+        Storage.remove(f)
+    }
+
+    /// المجلدات الناقصة أو المهجورة (لتنبيه التنظيف عند الفتح).
+    func orphanFolders() async -> [Storage.ModelFolder] {
+        let d = downloaded, s = downloadedSTT
+        let busy = downloadingID
+        return await Task.detached(priority: .utility) {
+            Storage.modelFolders(downloaded: d, downloadedSTT: s).filter { f in
+                if case .llm(let r) = f.kind, r == busy { return false }
+                return f.isOrphan
+            }
+        }.value
+    }
+
+    func deleteAllModels() {
+        llmTask?.cancel(); llmToken += 1; llm = .idle; downloadingID = nil
+        Task { await LLMService.shared.unload(); await SpeechRecognizer.shared.unload() }
+        if AppSettings.shared.sttID != "apple" { sttTask?.cancel(); sttToken += 1; stt = .idle }
+        Storage.deleteAllModels()
+        downloaded.removeAll(); downloadedSTT.removeAll()
+        UserDefaults.standard.set([String](), forKey: "downloadedLLMs")
+        UserDefaults.standard.set([String](), forKey: "downloadedSTT")
+    }
+
+    @discardableResult
+    func loadSTT() -> Task<Void, Never> {
         let variant = AppSettings.shared.sttID
         sttTask?.cancel()
         sttToken += 1
@@ -134,17 +189,25 @@ final class ModelManager: ObservableObject {
             } catch {
                 guard sttToken == token else { return }
                 stt = .failed(SawtError.friendly(error).localizedDescription)
+                slog("stt load failed: \(error)")
             }
         }
+        return sttTask!
     }
 
-    func prepareVoice() {
-        voiceReady = false
+    /// يجهّز الصوت المختار (وقت المكالمة أو التجربة). يرجع بعد ما يجهز.
+    func prepareVoice() async {
         let v = AppSettings.shared.voice
-        Task.detached(priority: .userInitiated) {
+        await Task.detached(priority: .userInitiated) {
             SpeechSynth.shared.prepare(v)
-            await MainActor.run { ModelManager.shared.voiceReady = true }
-        }
+        }.value
+        voiceReady = true
+    }
+
+    /// يغيّر الصوت: نفك الصوت القديم من الذاكرة، والجديد يتحمل وقت الحاجة.
+    func voiceChanged() {
+        voiceReady = false
+        SpeechSynth.shared.unload()
     }
 }
 
