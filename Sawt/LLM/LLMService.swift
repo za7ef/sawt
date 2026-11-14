@@ -22,7 +22,7 @@ actor LLMService {
     /// عدد الأدوار في جلسة المكالمة الحالية؛ بعد حد معيّن نبدأ جلسة جديدة بسجل مختصر عشان الكاش ما يكبر بلا حد.
     private var callTurns = 0
     /// فيه جلسة مكالمة بتنعاد استخدامها في الدور الجاي
-    var hasCallSession: Bool { callSession != nil && callTurns < 10 }
+    var hasCallSession: Bool { callSession != nil && callTurns < 20 }
 
     var isReady: Bool { container != nil }
     /// النموذج محمّل بوضع النظر (يقبل صور)
@@ -130,7 +130,7 @@ actor LLMService {
             },
         ]
 
-        if reuse, callTurns >= 10 {
+        if reuse, callTurns >= 20 {
             slog("llm: call session long (\(callTurns) turns) → fresh session with trimmed history")
             callSession = nil; callTurns = 0
         }
