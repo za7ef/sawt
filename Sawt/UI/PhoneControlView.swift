@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import Network
 
 // تجربة «تحكم بالجوال»: يتصل بخدمات المطوّر في نفس الجوال (عبر LocalDevVPN على 10.7.0.1)
 // بملف الاقتران، ويقرأ شجرة الوصول ويرسل لمسة/كتابة. للاختبار فقط قبل بناء الوكيل.
@@ -93,17 +94,62 @@ enum PhoneControl {
         return out
     }
 
-    static func config(host: String) -> String {
-        let d: [String: String] = ["pairing_file": pairingURL.path, "host": host]
+    static func config(host: String, rpPort: UInt16) -> String {
+        let d: [String: Any] = ["pairing_file": pairingURL.path, "host": host, "rp_port": Int(rpPort)]
         let data = (try? JSONSerialization.data(withJSONObject: d)) ?? Data("{}".utf8)
         return String(decoding: data, as: UTF8.self)
     }
 
     enum Op: Sendable { case probe, ax(UInt32), tap(UInt16, UInt16), keys(String) }
 
+    /// يكتشف منفذ _remotepairing._tcp عبر Bonjour (يفضّل واجهة loopback/الـVPN)
+    @MainActor
+    static func discoverRPPort(timeout: Double = 4) async -> (port: UInt16, info: String) {
+        await withCheckedContinuation { (cont: CheckedContinuation<(port: UInt16, info: String), Never>) in
+            let q = DispatchQueue(label: "sawt.bonjour")
+            let params = NWParameters.tcp
+            params.includePeerToPeer = true
+            let browser = NWBrowser(for: .bonjour(type: "_remotepairing._tcp", domain: "local."), using: params)
+            final class Box: @unchecked Sendable { var done = false; var conn: NWConnection?; var seen: [String] = [] }
+            let box = Box()
+            let finish: @Sendable (UInt16, String) -> Void = { p, i in
+                q.async {
+                    guard !box.done else { return }
+                    box.done = true
+                    browser.cancel(); box.conn?.cancel()
+                    cont.resume(returning: (p, i))
+                }
+            }
+            browser.stateUpdateHandler = { st in
+                if case .failed(let e) = st { finish(0, "bonjour failed: \(e)") }
+            }
+            browser.browseResultsChangedHandler = { results, _ in
+                guard box.conn == nil else { return }
+                let list = results.map { r in (r, r.interfaces.contains { $0.name.hasPrefix("lo") || $0.name.hasPrefix("utun") }) }
+                box.seen = list.map { "\($0.0.endpoint) [\($0.0.interfaces.map(\.name).joined(separator: ","))]" }
+                guard let pick = list.first(where: { $0.1 }) ?? list.first else { return }
+                let c = NWConnection(to: pick.0.endpoint, using: params)
+                box.conn = c
+                c.stateUpdateHandler = { st in
+                    switch st {
+                    case .ready, .waiting:
+                        if case .hostPort(let h, let p) = c.currentPath?.remoteEndpoint, p.rawValue != 0 {
+                            finish(p.rawValue, "bonjour \(h):\(p.rawValue) seen=\(box.seen)")
+                        }
+                    case .failed(let e): finish(0, "resolve failed: \(e) seen=\(box.seen)")
+                    default: break
+                    }
+                }
+                c.start(queue: q)
+            }
+            browser.start(queue: q)
+            q.asyncAfter(deadline: .now() + timeout) { finish(0, "bonjour timeout seen=\(box.seen)") }
+        }
+    }
+
     /// يشغّل العملية في خيط خلفي (الدوال متزامنة وتحجز الخيط)
-    static func run(_ op: Op, host: String) async -> String {
-        let cfg = config(host: host)
+    static func run(_ op: Op, host: String, rpPort: UInt16 = 0) async -> String {
+        let cfg = config(host: host, rpPort: rpPort)
         return await Task.detached(priority: .userInitiated) { () -> String in
             #if SAWTCTL
             let p: UnsafeMutablePointer<CChar>? = cfg.withCString { c in
@@ -236,8 +282,11 @@ struct PhoneControlView: View {
             }
             let info = PhoneControl.storedInfo()
             Log.shared("phonectl pairing: \(info)")
-            var r = await PhoneControl.run(op, host: h)
-            r = "pairing: \(info)\n" + r
+            var rp: (port: UInt16, info: String) = (0, "lockdown")
+            if info.contains("kind=RemotePairing") { rp = await PhoneControl.discoverRPPort() }
+            Log.shared("phonectl rp port: \(rp.port) \(rp.info)")
+            var r = await PhoneControl.run(op, host: h, rpPort: rp.port)
+            r = "pairing: \(info)\nrp: \(rp.port) \(rp.info)\n" + r
             Log.shared("phonectl \(label): \(r.prefix(6000))")
             UIPasteboard.general.string = r
             output = String(r.prefix(4000))
