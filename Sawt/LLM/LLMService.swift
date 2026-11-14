@@ -12,6 +12,11 @@ actor LLMService {
 
     private var container: ModelContainer?
     private var loadedID: String?
+    /// جلسة المكالمة: نحتفظ فيها بين الأدوار عشان ما نعيد معالجة التعليمات والمحادثة كل مرة (كاش KV).
+    private var callSession: ChatSession?
+
+    func resetCallSession() { callSession = nil }
+    private func keepCallSession(_ s: ChatSession?) { callSession = s }
 
     var isReady: Bool { container != nil }
 
@@ -19,6 +24,7 @@ actor LLMService {
         container = nil
         loadedID = nil
         warmedID = nil
+        callSession = nil
         MLX.Memory.clearCache()
     }
 
@@ -59,7 +65,7 @@ actor LLMService {
 
     /// يرجع تدفق نص الرد. السجل يحتوي الرسائل السابقة بدون الرسالة الحالية.
     /// إذا رفض قالب المحادثة (بعض النماذج ما تقبل رسالة النظام)، نعيد المحاولة بدمج التعليمات في رسالة المستخدم.
-    func stream(system: String, history: [Chat.Message], user: String, maxTokens: Int = 400) throws -> AsyncThrowingStream<String, Error> {
+    func stream(system: String, history: [Chat.Message], user: String, maxTokens: Int = 400, reuse: Bool = false) throws -> AsyncThrowingStream<String, Error> {
         guard let container else { throw SawtError.notReady("النموذج اللغوي") }
         var params = GenerateParameters()
         params.maxTokens = ThermalWatch.isHot ? min(200, maxTokens) : maxTokens
@@ -72,7 +78,7 @@ actor LLMService {
         let ctx: [String: any Sendable]? = isQwen3 ? ["enable_thinking": false] : nil
 
         // المحاولة الأولى: رسالة نظام عادية. الثانية: بدون رسالة نظام وبتناوب صارم.
-        let attempts: [() -> (ChatSession, String)] = [
+        var attempts: [() -> (ChatSession, String)] = [
             {
                 (ChatSession(container, instructions: sys, history: history, generateParameters: params,
                              additionalContext: ctx), user)
@@ -90,6 +96,13 @@ actor LLMService {
                                     additionalContext: ctx), first)
             },
         ]
+
+        if reuse, let existing = callSession {
+            existing.generateParameters = params
+            attempts.insert({ (existing, user) }, at: 0)
+            slog("llm: reusing call session (kv cache)")
+        }
+        callSession = nil   // ترجع بس إذا خلص الدور بنجاح
 
         return AsyncThrowingStream { cont in
             let task = Task {
@@ -123,6 +136,8 @@ actor LLMService {
                         }
                         if !pendingTag.isEmpty, !inThink { cont.yield(pendingTag) }
                         withExtendedLifetime(session) {}
+                        // نحتفظ بالجلسة بس إذا الرد كمل (لو انقطع، كاشها مو مضمون)
+                        if reuse, !Task.isCancelled { self.keepCallSession(session) }
                         MLX.Memory.clearCache()
                         cont.finish()
                         return
