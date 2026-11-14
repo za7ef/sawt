@@ -10,6 +10,7 @@ struct SettingsView: View {
     @AppStorage("showCallDebug") private var showCallDebug = false
     @State private var shareURL: URL?
     @ObservedObject private var namaa = NamaaVoice.shared
+    @ObservedObject private var memory = MemoryStore.shared
     @State private var namaaWarn = false
     @State private var confirmNamaaDelete = false
 
@@ -84,6 +85,29 @@ struct SettingsView: View {
                     Button("رجّع الافتراضي") { settings.persona = AppSettings.defaultPersona }
                 } header: {
                     Text("شخصية المساعد")
+                }
+
+                Section {
+                    TextField("اسمك", text: $settings.userName)
+                    Picker("خاطبني بصيغة", selection: $settings.addressForm) {
+                        Text("بدون تحديد").tag("")
+                        Text("مذكر").tag("m")
+                        Text("مؤنث").tag("f")
+                    }
+                } header: {
+                    Text("عنك (اختياري)")
+                } footer: {
+                    Text("محفوظ على جوالك بس، ويُضاف للتعليمات إذا عبّيته.")
+                }
+
+                Section {
+                    NavigationLink {
+                        MemoryView()
+                    } label: {
+                        LabeledContent("الذاكرة", value: "\(memory.items.count)")
+                    }
+                } footer: {
+                    Text("يحفظ معلومات مهمة عنك من المحادثات على جوالك بس. تقدر تعدلها أو تحذفها.")
                 }
 
                 Section {

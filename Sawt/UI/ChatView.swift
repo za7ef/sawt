@@ -235,6 +235,7 @@ struct EmptyState: View {
 struct MessageRow: View {
     let message: Message
     var streaming = false
+    @State private var showMemory = false
 
     var body: some View {
         HStack(alignment: .top) {
@@ -251,6 +252,12 @@ struct MessageRow: View {
                 Spacer(minLength: 50)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
+                    if message.memorySaved == true {
+                        Button { showMemory = true } label: {
+                            Text("تم حفظ الذاكرة").font(.caption2).foregroundStyle(.gray)
+                        }
+                        .buttonStyle(.plain)
+                    }
                     if streaming && message.text.isEmpty {
                         TypingDots()
                     } else {
@@ -284,6 +291,7 @@ struct MessageRow: View {
             }
         }
         .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity), removal: .opacity))
+        .sheet(isPresented: $showMemory) { NavigationStack { MemoryView() } }
     }
 }
 
