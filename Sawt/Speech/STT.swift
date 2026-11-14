@@ -1,0 +1,65 @@
+import Foundation
+import WhisperKit
+
+/// تحويل الكلام إلى نص على الجهاز عن طريق WhisperKit.
+actor SpeechRecognizer {
+    static let shared = SpeechRecognizer()
+
+    private var pipe: WhisperKit?
+    private var loadedID: String?
+
+    var isReady: Bool { pipe != nil }
+
+    func load(variant: String, progress: @escaping @Sendable (Double) -> Void) async throws {
+        if loadedID == variant, pipe != nil { return }
+        pipe = nil
+        let folder = try await WhisperKit.download(variant: variant) { p in
+            progress(p.fractionCompleted * 0.9)
+        }
+        let cfg = WhisperKitConfig(model: variant, modelFolder: folder.path, verbose: false,
+                                   prewarm: true, load: true, download: false)
+        pipe = try await WhisperKit(cfg)
+        loadedID = variant
+        progress(1)
+    }
+
+    /// يرجع النص واللغة المكتشفة.
+    func transcribe(_ audio: [Float], language: String?) async throws -> (text: String, language: String) {
+        guard let pipe else { throw SawtError.notReady("نموذج السمع") }
+        // ويسبر يحتاج على الأقل ثانية تقريبًا
+        var samples = audio
+        if samples.count < 16_000 { samples += [Float](repeating: 0, count: 16_000 - samples.count) }
+        var opts = DecodingOptions(
+            task: .transcribe, language: language, temperature: 0,
+            temperatureFallbackCount: 2, usePrefillPrompt: language != nil,
+            detectLanguage: language == nil, skipSpecialTokens: true,
+            withoutTimestamps: true, suppressBlank: true,
+            noSpeechThreshold: 0.6)
+        opts.chunkingStrategy = ChunkingStrategy.none
+        let results = try await pipe.transcribe(audioArray: samples, decodeOptions: opts)
+        let text = results.map(\.text).joined(separator: " ")
+            .replacingOccurrences(of: "\\[[^\\]]*\\]|\\([^\\)]*\\)", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let lang = results.first?.language ?? (language ?? "ar")
+        return (Self.filterHallucination(text), lang)
+    }
+
+    /// ويسبر أحيانًا يتخيل جمل مشهورة على الصمت.
+    private static func filterHallucination(_ t: String) -> String {
+        let junk = ["اشتركوا في القناة", "ترجمة نانسي قنقر", "شكرا للمشاهدة", "شكراً للمشاهدة",
+                    "Thank you for watching", "Thanks for watching", "Subtitles by", "موسيقى"]
+        for j in junk where t.localizedCaseInsensitiveContains(j) && t.count < j.count + 12 { return "" }
+        return t
+    }
+}
+
+enum SawtError: LocalizedError {
+    case notReady(String)
+    case failed(String)
+    var errorDescription: String? {
+        switch self {
+        case .notReady(let w): return "\(w) مو جاهز. نزّله من الإعدادات."
+        case .failed(let m): return m
+        }
+    }
+}
