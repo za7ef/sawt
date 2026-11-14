@@ -4,13 +4,38 @@ struct RootView: View {
     @EnvironmentObject var store: ChatStore
     @EnvironmentObject var models: ModelManager
     @State private var orphans: [Storage.ModelFolder] = []
-    @State private var crashNotice = Log.shared.previousRunCrashed
+    @State private var crashNotice = false
+    /// انقفل المرة اللي فاتت؟ نعرض شاشة الاسترداد بدل المحادثة (عشان السجل يوصل حتى لو المحادثة نفسها تكرش)
+    @State private var recovering = Log.shared.previousRunCrashed
     @State private var shareURL: URL?
     @State private var drawerOpen = false
     @State private var drag: CGFloat = 0
     private let drawerWidth: CGFloat = 300
 
     var body: some View {
+        if recovering {
+            CrashRecoveryView { loadModels in
+                recovering = false
+                SafeStart.holding = false
+                slog("recovery: continue loadModels=\(loadModels)")
+                if loadModels {
+                    ModelManager.shared.loadAll()
+                    Task { await UpdateChecker.shared.check() }
+                }
+            }
+        } else {
+            main
+                .onAppear {
+                    slog.stage("ui:chat")
+                    Task {
+                        try? await Task.sleep(for: .seconds(4))
+                        if !ModelManager.shared.llm.isBusy { slog.stage("idle") }
+                    }
+                }
+        }
+    }
+
+    private var main: some View {
         GeometryReader { geo in
             let open = drawerOpen ? drawerWidth : 0
             let offset = max(0, min(drawerWidth, open + drag))
@@ -152,5 +177,46 @@ struct DrawerView: View {
         .padding(.bottom, 8)
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showModels) { ModelsView() }
+    }
+}
+
+/// يمنع التحميل التلقائي لين يقرر المستخدم في شاشة الاسترداد.
+enum SafeStart {
+    @MainActor static var holding = Log.shared.previousRunCrashed
+}
+
+/// تطلع إذا التطبيق انقفل فجأة المرة اللي فاتت: تصدير السجل بدون ما نفتح المحادثة أو نحمّل النموذج.
+struct CrashRecoveryView: View {
+    let onContinue: (Bool) -> Void
+    @State private var shareURL: URL?
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Spacer()
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 44)).foregroundStyle(.orange)
+            Text("التطبيق انقفل فجأة المرة اللي فاتت").font(.title3.weight(.semibold))
+            Text("كان وقتها في: \(Log.shared.previousStage.isEmpty ? "غير معروف" : Log.shared.previousStage)")
+                .font(.footnote).foregroundStyle(.secondary)
+            Text("صدّر السجل وأرسله عشان نعرف السبب. تقدر بعدها تكمل عادي، أو تفتح بدون تحميل النموذج إذا تكرر الانقفال.")
+                .font(.callout).multilineTextAlignment(.center).foregroundStyle(.secondary)
+                .padding(.horizontal, 24)
+            Button {
+                shareURL = Log.shared.export()
+            } label: {
+                Label("صدّر السجل", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity).padding(.vertical, 6)
+            }
+            .buttonStyle(.borderedProminent)
+            Button { onContinue(true) } label: { Text("كمّل عادي").frame(maxWidth: .infinity).padding(.vertical, 6) }
+                .buttonStyle(.bordered)
+            Button { onContinue(false) } label: { Text("افتح بدون تحميل النموذج").frame(maxWidth: .infinity).padding(.vertical, 6) }
+                .buttonStyle(.bordered)
+            Spacer()
+        }
+        .padding(24)
+        .background(Theme.bg.ignoresSafeArea())
+        .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) {
+            if let u = shareURL { ActivityView(items: [u]) }
+        }
     }
 }

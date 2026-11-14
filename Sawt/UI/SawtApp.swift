@@ -30,6 +30,8 @@ struct SawtApp: App {
                 .task {
                     // نخلي أول إطار يطلع قبل تحميل النموذج الثقيل
                     try? await Task.sleep(for: .milliseconds(400))
+                    // بعد انقفال مفاجئ: ننتظر قرار المستخدم في شاشة الاسترداد
+                    guard !SafeStart.holding else { slog("launch: holding (recovery)"); return }
                     models.loadAll()
                     await updater.check()
                 }
@@ -66,7 +68,7 @@ struct SawtApp: App {
                     if p == .active {
                         bgTask?.cancel(); bgTask = nil
                         slog.stage(call.state == .idle ? "idle" : "call")
-                        if models.llm == .idle { models.loadAll() }
+                        if models.llm == .idle, !SafeStart.holding { models.loadAll() }
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
