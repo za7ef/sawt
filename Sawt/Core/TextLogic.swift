@@ -291,7 +291,8 @@ enum SearchHeuristic {
                        "سعر", "أسعار", "اسعار", "بكم", "طقس", "الجو بكرة", "الجو اليوم", "درجة الحرارة", "مباراة", "مباراه",
                        "نتيجة", "نتيجه", "الدوري", "متى ينزل", "متى يصدر", "متى صدر", "متى نزل", "موعد", "ابحث", "دور لي", "دوّر",
                        "سعر الصرف", "الدولار", "البيتكوين", "ترند", "2025", "2026", "2027", "٢٠٢٥", "٢٠٢٦",
-                       "latest", "news", "price", "weather", "today", "score", "release date", "search", "look up", "current"]
+                       "بحث", "دور على", "دور عن", "قوقل", "جوجل", "قوقل", "الطقس", "الجو", "حرارة", "مطر", "صرف",
+                       "latest", "news", "price", "weather", "today", "score", "release date", "search", "look up", "current", "google"]
 
     enum Verdict { case yes, no, unsure }
 
@@ -303,5 +304,54 @@ enum SearchHeuristic {
         if words <= 3 || ThinkHeuristic.smallTalk.contains(where: { t.contains($0) }) { return .no }
         if s.hasSuffix("?") || s.hasSuffix("؟") { return .unsure }
         return .no
+    }
+}
+
+/// نوايا البيانات المباشرة (طقس/عملات) وأماكن مذكورة في النص
+enum LiveIntent {
+    static let weatherWords = ["طقس", "الجو", "جو ", "حرارة", "حراره", "مطر", "أمطار", "امطار", "غبار", "رطوبة", "weather", "temperature", "rain", "forecast"]
+    static let currencyWords = ["سعر الصرف", "صرف", "الدولار", "دولار", "اليورو", "يورو", "بالريال", "كم الريال", "عملة", "عملات", "currency", "exchange rate", "usd", "eur"]
+
+    static func isWeather(_ t: String) -> Bool { weatherWords.contains { (" " + t + " ").contains($0) } }
+    static func isCurrency(_ t: String) -> Bool { currencyWords.contains { t.contains($0) } }
+
+    /// كلمات بعد "في"/"ب" أو كلمة مستقلة: نجرب أول 4 مرشحين في الترميز الجغرافي
+    static func placeCandidates(_ text: String) -> [String] {
+        let stop: Set<String> = ["الطقس", "طقس", "الجو", "جو", "اليوم", "بكرة", "الحين", "كيف", "وش", "كم", "درجة", "الحرارة", "تحديدا", "تحديدًا",
+                                 "السعودية", "في", "عن", "هو", "هي", "the", "in", "weather", "today", "what", "is", "how", "مطر", "حرارة", "عندنا"]
+        let clean = text.replacingOccurrences(of: "؟", with: " ").replacingOccurrences(of: "?", with: " ")
+            .replacingOccurrences(of: "،", with: " ").replacingOccurrences(of: ",", with: " ")
+        let words = clean.split(separator: " ").map(String.init)
+        var out: [String] = []
+        // "في المدينة المنورة" → "المدينة المنورة" ثم "المدينة"
+        for (i, w) in words.enumerated() where w == "في" || w == "in" || w == "ب" {
+            if i + 2 < words.count, !stop.contains(words[i + 1]) { out.append(words[i + 1] + " " + words[i + 2]) }
+            if i + 1 < words.count, !stop.contains(words[i + 1]) { out.append(words[i + 1]) }
+        }
+        for w in words where w.hasPrefix("ب") && w.count > 3 && !stop.contains(w) {
+            let s = String(w.dropFirst())
+            if s.hasPrefix("ال") { out.append(s) }
+        }
+        for (i, w) in words.enumerated().reversed() where !stop.contains(w) && w.count > 2 {
+            if i + 1 < words.count, !stop.contains(words[i + 1]) { out.append(w + " " + words[i + 1]) }
+            out.append(w)
+        }
+        var seen = Set<String>()
+        return Array(out.filter { seen.insert($0).inserted }.prefix(5))
+    }
+
+    /// رموز الطقس WMO بالعربي
+    static func weatherText(_ c: Int) -> String {
+        switch c {
+        case 0: "صحو"
+        case 1, 2: "غائم جزئيًا"
+        case 3: "غائم"
+        case 45, 48: "ضباب"
+        case 51, 53, 55, 56, 57: "رذاذ"
+        case 61, 63, 65, 66, 67, 80, 81, 82: "مطر"
+        case 71, 73, 75, 77, 85, 86: "ثلج"
+        case 95, 96, 99: "عواصف رعدية"
+        default: "غير معروف"
+        }
     }
 }
