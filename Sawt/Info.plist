@@ -36,6 +36,7 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_remotepairing._tcp</string>
+		<string>_remotepairing-pairable-host._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>يحتاجه «تحكم بالجوال» للوصول لخدمة الاقتران في جوالك نفسه.</string>
