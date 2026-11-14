@@ -41,13 +41,21 @@ final class CallCamera: NSObject, ObservableObject, AVCaptureVideoDataOutputSamp
     @MainActor func start() async -> Bool {
         guard await Self.authorize() else { return false }
         let useFront = front
-        let ok: Bool = await withCheckedContinuation { c in
-            queue.async {
-                c.resume(returning: self.configure(front: useFront))
-                if !self.session.isRunning { self.session.startRunning() }
+        // أول تشغيل بعد السماح أحيانًا يفشل: نعيد مرة بعد نص ثانية
+        var ok = false
+        for attempt in 0..<2 {
+            ok = await withCheckedContinuation { c in
+                queue.async {
+                    let configured = self.configure(front: useFront)
+                    if configured, !self.session.isRunning { self.session.startRunning() }
+                    c.resume(returning: configured && self.session.isRunning)
+                }
             }
+            if ok { break }
+            slog("camera: start attempt \(attempt + 1) failed")
+            try? await Task.sleep(for: .milliseconds(500))
         }
-        running = ok && session.isRunning
+        running = ok
         slog("camera: start ok=\(running) front=\(useFront)")
         return running
     }

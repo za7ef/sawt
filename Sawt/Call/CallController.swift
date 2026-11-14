@@ -376,7 +376,7 @@ final class CallController: ObservableObject {
         s.onPartial = { [weak self] text in
             guard let self else { return }
             self.proc.async { if self.appleStream === s { self.specText = text } }
-            DispatchQueue.main.async { if !text.isEmpty { self.liveUser = text } }
+            DispatchQueue.main.async { if !text.isEmpty { self.confirmBargeIn(); self.liveUser = text } }
         }
         guard s.start(language: Self.whisperLanguage()) else { slog("stt: apple stream unavailable"); return }
         s.append(utter)
@@ -446,8 +446,19 @@ final class CallController: ObservableObject {
 
     // MARK: أحداث المستخدم (main)
 
+    /// مقاطعة مؤجلة: ما نوقف الرد لين يطلع كلام فعلي (عشان صدى صوت الرد ما يقطعه)
+    private var bargePending = false
+
     private func userStarted(bargeIn: Bool) {
         slog("vad: user started speaking\(bargeIn ? " (barge-in)" : "")")
+        if bargeIn, AppSettings.shared.sttID == "apple", state == .speaking || state == .thinking {
+            bargePending = true
+            fragmentTimer?.cancel()
+            fragmentTimer = nil
+            userTalking = true
+            slog("vad: barge-in pending (waiting for words)")
+            return
+        }
         if bargeIn || state == .thinking || state == .speaking {
             cancelReply(recordPartial: true)
         }
@@ -458,7 +469,18 @@ final class CallController: ObservableObject {
         state = .hearing
     }
 
+    /// أول كلام فعلي وصل أثناء مقاطعة مؤجلة: الحين نوقف الرد.
+    private func confirmBargeIn() {
+        guard bargePending else { return }
+        bargePending = false
+        slog("vad: barge-in confirmed by words")
+        cancelReply(recordPartial: true)
+        if carryUserText.isEmpty { liveUser = "" }
+        state = .hearing
+    }
+
     private func userCancelled() {
+        if bargePending { bargePending = false; userTalking = false; return }
         userTalking = false
         if state == .hearing { state = carryUserText.isEmpty ? .listening : .hearing }
         if !carryUserText.isEmpty { scheduleFragmentFlush() }
@@ -476,6 +498,17 @@ final class CallController: ObservableObject {
     }
 
     private func userFinished(text: String, force: Bool = false) {
+        if bargePending {
+            bargePending = false
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // ما كان كلام (غالبًا صدى): الرد يكمل عادي
+                userTalking = false
+                slog("turn: empty barge-in ignored, reply continues")
+                return
+            }
+            userTalking = false
+            cancelReply(recordPartial: true)
+        }
         // رجع يتكلم قبل ما يوصل النص: نخزنه ونضيفه لكلامه الجاي بدل ما نرد مرتين
         if userTalking {
             let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -549,7 +582,16 @@ final class CallController: ObservableObject {
         let system = settings.systemPrompt(chat: false, query: "", memory: false)
         let mem = MemoryStore.promptBlock(for: text, limit: 4)
         // الكاميرا شغالة: نلتقط إطار واحد مصغّر مع نهاية كلامك
-        let frame: URL? = cameraOn ? CallCamera.shared.snapshot() : nil
+        // الصورة تاخذ ذاكرة كثير وقت الترميز: نتخطاها إذا الذاكرة قليلة
+        var picked: URL? = nil
+        if cameraOn {
+            if RAM.availableMB < 2300 {
+                slog("call: skip camera frame, low memory avail=\(RAM.availableMB)MB")
+            } else {
+                picked = CallCamera.shared.snapshot(maxSide: 448)
+            }
+        }
+        let frame = picked
 
 
         var cont: AsyncStream<String>.Continuation!
@@ -589,6 +631,8 @@ final class CallController: ObservableObject {
             do {
                 try await self.makeRoomForLLM()
                 // نضيف الذاكرة بس إذا تغيّرت، أو إذا الجلسة جديدة (بعد مقاطعة أو خطأ أو جلسة طويلة)
+                // دور فيه صورة: جلسة جديدة بالنص بس (بدون كاش قديم ولا صور سابقة)، وما نحتفظ فيها بعدين
+                if frame != nil { await LLMService.shared.resetCallSession() }
                 if !(await LLMService.shared.hasCallSession) { self.lastMemBlock = "" }
                 var userText = (mem.isEmpty || mem == self.lastMemBlock) ? text : "[\(mem)]\n\n\(text)"
                 if frame != nil {
@@ -596,7 +640,7 @@ final class CallController: ObservableObject {
                 }
                 if !mem.isEmpty { self.lastMemBlock = mem }
                 slog.stage("call:llm")
-                let stream = try await LLMService.shared.stream(system: system, history: hist, user: userText, maxTokens: 300, reuse: true,
+                let stream = try await LLMService.shared.stream(system: system, history: hist, user: userText, maxTokens: 300, reuse: frame == nil,
                                                                 images: frame.map { [$0] } ?? [])
                 for try await chunk in stream {
                     if Task.isCancelled || myID != self.replyID { break }
@@ -610,6 +654,10 @@ final class CallController: ObservableObject {
                     let (ready, rest) = TextCleaner.splitSentences(pending, first: first)
                     pending = rest
                     for s in ready { cont.yield(s); first = false }
+                }
+                if frame != nil {
+                    await LLMService.shared.trim()   // نفك ذاكرة ترميز الصورة
+                    if let frame { try? FileManager.default.removeItem(at: frame) }
                 }
                 if myID == self.replyID {
                     let tail = pending.trimmingCharacters(in: .whitespacesAndNewlines)
