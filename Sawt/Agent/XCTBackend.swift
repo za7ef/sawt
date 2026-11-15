@@ -8,6 +8,10 @@ import ObjectiveC
 /// (بدون بث الشاشة). كل نداء لأطر XCTest يصير على الخيط الرئيسي (شرط XCTest) عن طريق main.sync
 /// من خيط خلفي، فما فيه deadlock، وكل نداء داخل SawtTryCatch عشان أي استثناء يصير خطأ بدل كراش.
 /// الجلسة (تحميل الأطر + التفويض + الإعداد) تنجهز مرة وحدة بكل تشغيل للتطبيق، وكائنات التطبيقات تنحفظ.
+#if SAWTCTL
+@_silgen_name("sawtctl_xct_release") private func c_xct_release_backend()
+#endif
+
 /// أول واحد ينادي claim() ياخذها (للحد الزمني: النتيجة أو انتهاء الوقت، مو الاثنين)
 final class XCTOnce: @unchecked Sendable {
     private let lock = NSLock()
@@ -61,6 +65,52 @@ enum XCTBackend {
     nonisolated(unsafe) private static var quiescenceOff: String?
     /// حالة وضع الأتمتة بعد آخر تجهيز
     nonisolated(unsafe) static var automation: String = "؟"
+    /// رقم جيل الجلسة: يزيد مع كل تجهيز ناجح (أي انقطاع من جيل قديم ما يأثر)
+    nonisolated(unsafe) static var generation = 0
+    nonisolated(unsafe) static var axLoaded: String = "؟"
+    nonisolated(unsafe) static var sessionState: String = "مطفية"
+    nonisolated(unsafe) private static var keeper: Task<Void, Never>?
+    nonisolated(unsafe) private static var bundles: [Int32: String] = [:]
+    /// سبب آخر فشل للقراءة السريعة (يطلع في سجل الاختبار)
+    nonisolated(unsafe) static var lastAXError = ""
+
+    /// مفتاح «وضع الأتمتة» في صفحة الوكيل
+    static var automationOn: Bool { UserDefaults.standard.bool(forKey: "xctAutomation") }
+
+    // MARK: - وضع الأتمتة (جلسة دائمة)
+
+    /// يشغّل الجلسة ويبدأ مراقب يعيد بناءها لو انقطعت (كل ١٥ ثانية). يرجع سبب الفشل أو nil
+    static func startAutomation() async -> String? {
+        keeper?.cancel()
+        let cfg = await XCTestProbe.connectionConfig()
+        var e: String? = nil
+        if !prepared { e = await prepare(cfg: cfg, force: true) }
+        keeper = Task.detached(priority: .utility) {
+            while !Task.isCancelled && automationOn {
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                if Task.isCancelled || !automationOn { break }
+                if !prepared && !preparing {
+                    slog("xct: keeper rebuilding session")
+                    sessionState = "تنبني من جديد…"
+                    let c = await XCTestProbe.connectionConfig()
+                    if let err = await prepare(cfg: c, force: true) { sessionState = "فشل البناء: " + String(err.prefix(80)) }
+                }
+            }
+        }
+        return e
+    }
+
+    /// يوقف الجلسة الدائمة ويفك التفويض
+    static func stopAutomation() {
+        keeper?.cancel(); keeper = nil
+        prepared = false
+        generation += 1   // أي معالج انقطاع قديم يتجاهل
+        #if SAWTCTL
+        c_xct_release_backend()
+        #endif
+        sessionState = "مطفية"
+        slog("xct: automation stopped")
+    }
     private static func disableQuiescence() -> String {
         if let q = quiescenceOff { return q }
         guard let cls = NSClassFromString("XCUIApplicationProcess") else { quiescenceOff = "XCUIApplicationProcess مو موجود"; return quiescenceOff! }
@@ -122,7 +172,20 @@ enum XCTBackend {
                 cont.resume(returning: nil)
             }
         }
-        if err == nil { prepared = true }
+        if err == nil {
+            prepared = true
+            generation += 1
+            let gen = generation
+            axLoaded = SawtXCTLoadAccessibility(4).map { "✗ " + $0 } ?? "محمّل"
+            let watched = SawtXCTWatchSession {
+                // الجلسة انقطعت: نعلّمها، والمراقب يعيد بناءها لو وضع الأتمتة شغّال
+                guard gen == generation else { return }
+                prepared = false
+                sessionState = "انقطعت (جيل \(gen))"
+                slog("xct: session invalidated gen \(gen)")
+            }
+            sessionState = "شغّالة (جيل \(gen))" + (watched ? "" : "؛ بدون مراقبة انقطاع")
+        }
         slog("xct: prepare \(err == nil ? "ok" : "failed: \(err!)") \(Int(Date().timeIntervalSince(t) * 1000))ms")
         return err
     }
@@ -296,12 +359,71 @@ enum XCTBackend {
         return (rootName, nodes, raw)
     }
 
-    /// يقرأ التطبيق اللي قدّام. لو صوت نفسه قدّام ما نصوّره (خيطه الرئيسي مشغول بالانتظار) ونرجّع isSelf
-    static func readFront(screen: CGSize) async -> Screen? {
-        guard prepared else { return nil }
+    /// معرّف حزمة لرقم عملية: من عميل الوصول، وإلا من XCUIApplication (محفوظ)
+    private static func bundleFor(_ pid: Int32, hint: String?) async -> String {
+        if let b = bundles[pid] { return b }
+        if let hint, !hint.isEmpty { bundles[pid] = hint; return hint }
+        let b: String? = await onMainTimed(3) { () -> String in app(pid: pid)?.1 ?? "" }
+        if let b, !b.isEmpty { bundles[pid] = b }
+        return b ?? ""
+    }
+
+    /// قراءة سريعة عبر عميل الوصول مباشرة (بدون الخيط الرئيسي). nil = نرجع للطريقة القديمة
+    /// skipSelf: نتجاهل صوت نفسه ونقرأ أول تطبيق ثاني نشط (للاختبار وصوت قدّام)
+    static func readFrontAX(screen: CGSize, maxDepth: Int = 60, maxChildren: Int = 300, timeout: Double = 6, skipSelf: Bool = false) async -> Screen? {
+        let t = Date()
         let me = Bundle.main.bundleIdentifier ?? "com.za7ef.sawt"
         let myPid = getpid()
-        return await onMain { () -> Screen? in
+        var list: [(Int32, String)] = []
+        for d in SawtXCTActiveApps() {
+            guard let n = d["pid"] as? NSNumber else { continue }
+            let pid = n.int32Value
+            if skipSelf && pid == myPid { continue }
+            list.append((pid, await bundleFor(pid, hint: d["bundle"] as? String)))
+        }
+        if list.isEmpty && skipSelf {
+            // صوت وحده نشط: نقرأ الشاشة الرئيسية (رقم عمليتها من XCUIApplication)
+            let sb: Int32? = await onMainTimed(3) { () -> Int32 in
+                guard let a = app(bundle: "com.apple.springboard") else { return 0 }
+                return (kvc(a, "processID") as? NSNumber)?.int32Value ?? 0
+            }
+            if let sb, sb > 0 { list.append((sb, "com.apple.springboard")) }
+        }
+        guard let front = list.first(where: { $0.1 != "com.apple.springboard" && !$0.1.isEmpty }) ?? list.first else {
+            lastAXError = "ما فيه تطبيقات نشطة"
+            slog("xct: ax no active apps"); return nil
+        }
+        let (pid, bundle) = front
+        if pid == myPid || bundle == me {
+            return Screen(name: "صوت", bundle: me, isSelf: true, nodes: [], raw: 0, ms: Int(Date().timeIntervalSince(t) * 1000))
+        }
+        let snap: NSObject? = await withCheckedContinuation { (cont: CheckedContinuation<NSObject?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                var why: NSString?
+                let r = SawtXCTAXRead(pid, maxDepth, maxChildren, timeout, &why)
+                if r == nil {
+                    lastAXError = "\(bundle): \(why ?? "")"
+                    slog("xct: ax read \(bundle) failed: \(why ?? "")")
+                }
+                cont.resume(returning: r)
+            }
+        }
+        guard let snap else { return nil }
+        let (name, nodes, raw) = flatten(snap, screen: screen)
+        let ms = Int(Date().timeIntervalSince(t) * 1000)
+        let shown = bundle == "com.apple.springboard" ? "الشاشة الرئيسية" : (name.isEmpty ? bundle : name)
+        slog("xct: ax read \(bundle) raw=\(raw) els=\(nodes.count) \(ms)ms")
+        return Screen(name: shown, bundle: bundle, isSelf: false, nodes: nodes, raw: raw, ms: ms)
+    }
+
+    /// يقرأ التطبيق اللي قدّام: عميل الوصول أول (أسرع)، وإلا لقطة XCUIApplication القديمة بحد زمني
+    static func readFront(screen: CGSize) async -> Screen? {
+        guard prepared else { return nil }
+        if let s = await readFrontAX(screen: screen) { return s }
+        slog("xct: ax read failed → old snapshot")
+        let me = Bundle.main.bundleIdentifier ?? "com.za7ef.sawt"
+        let myPid = getpid()
+        let r: Screen?? = await onMainTimed(10) { () -> Screen? in
             let t = Date()
             guard let f = frontApp() else { slog("xct: no front app"); return nil }
             let (app, pid, bundle) = f
@@ -320,6 +442,7 @@ enum XCTBackend {
             slog("xct: read \(bundle) raw=\(raw) els=\(nodes.count) \(ms)ms")
             return Screen(name: shown, bundle: bundle, isSelf: false, nodes: nodes, raw: raw, ms: ms)
         }
+        return r ?? nil
     }
 
     // MARK: - الأفعال
@@ -464,13 +587,28 @@ enum XCTBackend {
         // ١) التجهيز مع تفويض جديد (الجلسة القديمة ممكن تنرفض: XCTDaemonErrorDomain 41)
         var t = Date()
         start("prepare")
-        let prep: String?? = await withTimeout(90) { await prepare(cfg: cfg, force: true, onChecks: onChecks) }
+        let keep = automationOn && prepared
+        let prep: String?? = await withTimeout(90) { await prepare(cfg: cfg, force: !keep, onChecks: onChecks) }
         guard let prepRes = prep else { add(false, "prepare", t, "انتهى الوقت (٩٠ ثانية)؛ غالبًا الاتصال المحلي أو رمز الجوال"); return false }
         if let e = prepRes { add(false, "prepare", t, e); return false }
-        add(true, "prepare", t, "تفويض جديد؛ وضع الأتمتة: \(automation)؛ انتظار الهدوء: \(quiescenceOff ?? "؟")")
+        add(true, "prepare", t, "\(keep ? "الجلسة الدائمة" : "تفويض جديد")؛ \(sessionState)؛ وضع الأتمتة: \(automation)؛ الوصول: \(axLoaded)؛ انتظار الهدوء: \(quiescenceOff ?? "؟")")
 
-        // ٢) لقطة SpringBoard مرتين: الأولى ممكن تطوّل، الثانية تقيس السرعة الفعلية
+        // ٢أ) القراءة السريعة عبر عميل الوصول (مرتين: الثانية ساخنة)
         for i in 1...2 {
+            t = Date()
+            start("read-ax\(i)")
+            let r: Screen?? = await withTimeout(12) { await readFrontAX(screen: screen, skipSelf: true) }
+            switch r {
+            case .none: add(false, "read-ax\(i)", t, "انتهى الوقت (١٢ ثانية)")
+            case .some(.none): add(false, "read-ax\(i)", t, "فشلت: \(lastAXError.prefix(200))")
+            case .some(.some(let sc)):
+                let sample = sc.nodes.prefix(5).map { "\($0.kind):\($0.label.prefix(18))" }.joined(separator: "، ")
+                add(true, "read-ax\(i)", t, sc.isSelf ? "صوت نفسه قدّام (ما نقرأه)" : "\(sc.name)؛ \(sc.raw) عقدة، \(sc.nodes.count) عنصر؛ \(sample)")
+            }
+        }
+
+        // ٢ب) للمقارنة: لقطة SpringBoard بالطريقة القديمة (XCUIApplication) مرة وحدة
+        for i in 1...1 {
             t = Date()
             start("snapshot\(i)")
             let s: (Bool, String)? = await onMainTimed(20) { () -> (Bool, String) in
@@ -482,8 +620,7 @@ enum XCTBackend {
                 return (true, "\(fl.raw) عقدة، \(fl.nodes.count) عنصر؛ \(sample)")
             }
             guard let s else { add(false, "snapshot\(i)", t, "انتهى الوقت (٢٠ ثانية)"); return false }
-            add(s.0, "snapshot\(i)", t, s.1)
-            if !s.0 { return false }
+            add(s.0, "snapshot\(i)", t, s.1)   // فشلها ما يوقف الاختبار (مقارنة بس)
         }
 
         // ٣) التطبيق اللي قدّام

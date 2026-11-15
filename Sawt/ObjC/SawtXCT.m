@@ -114,3 +114,177 @@ NSString * _Nullable SawtXCTSynthesize(NSArray<NSValue *> *points, double durati
         return [NSString stringWithFormat:@"%@: %@", e.name, e.reason ?: @""];
     }
 }
+
+// MARK: - قراءة الشاشة عبر عميل الوصول
+
+static id SawtAXClient(void) {
+    Class cls = NSClassFromString(@"XCAXClient_iOS");
+    SEL s = NSSelectorFromString(@"sharedClient");
+    if (!cls || ![cls respondsToSelector:s]) return nil;
+    return ((id (*)(id, SEL))objc_msgSend)(cls, s);
+}
+
+static id SawtKVC(id obj, NSString *key) {
+    @try { return [obj valueForKey:key]; } @catch (__unused NSException *e) { return nil; }
+}
+
+static NSArray *SawtActiveElements(id client) {
+    SEL s = NSSelectorFromString(@"activeApplications");
+    if (!client || ![client respondsToSelector:s]) return @[];
+    id list = ((id (*)(id, SEL))objc_msgSend)(client, s);
+    return [list isKindOfClass:NSArray.class] ? list : @[];
+}
+
+NSArray<NSDictionary<NSString *, id> *> *SawtXCTActiveApps(void) {
+    NSMutableArray *out = [NSMutableArray array];
+    @try {
+        for (id e in SawtActiveElements(SawtAXClient())) {
+            NSNumber *pid = SawtKVC(e, @"processIdentifier");
+            if (![pid isKindOfClass:NSNumber.class]) continue;
+            NSString *bundle = SawtKVC(e, @"bundleIdentifier") ?: SawtKVC(e, @"bundleID");
+            NSMutableDictionary *d = [NSMutableDictionary dictionaryWithObject:pid forKey:@"pid"];
+            if ([bundle isKindOfClass:NSString.class] && bundle.length) d[@"bundle"] = bundle;
+            [out addObject:d];
+        }
+    } @catch (__unused NSException *e) {}
+    return out;
+}
+
+/// ينفّذ الكتلة على خيط خلفي وينتظرها بحد زمني. timedOut = YES لو ما خلصت
+static id SawtWithin(double seconds, BOOL *timedOut, id (^work)(void)) {
+    __block id result = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        id r = work();
+        result = r;
+        dispatch_semaphore_signal(sem);
+    });
+    BOOL late = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC))) != 0;
+    if (timedOut) *timedOut = late;
+    return late ? nil : result;
+}
+
+NSString * _Nullable SawtXCTLoadAccessibility(double timeout) {
+    id client = SawtAXClient();
+    if (!client) return @"XCAXClient_iOS مو موجود";
+    SEL s = NSSelectorFromString(@"loadAccessibility:");
+    if (![client respondsToSelector:s]) return @"loadAccessibility: مو مدعوم";
+    BOOL late = NO;
+    NSString *r = SawtWithin(timeout, &late, ^id {
+        @try {
+            NSError *err = nil;
+            BOOL ok = ((BOOL (*)(id, SEL, NSError **))objc_msgSend)(client, s, &err);
+            if (ok) return @"";
+            return err ? err.localizedDescription : @"رجع NO";
+        } @catch (NSException *e) {
+            return [NSString stringWithFormat:@"%@: %@", e.name, e.reason ?: @""];
+        }
+    });
+    if (late) return [NSString stringWithFormat:@"ما رد خلال %.0f ثانية", timeout];
+    return r.length ? r : nil;
+}
+
+/// الخصائص اللي نحتاجها بس (كل خاصية زيادة تكلّف خادم الوصول طلبات أكثر لكل عنصر)
+static NSArray *SawtSnapshotAttributes(void) {
+    static NSArray *attrs;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSArray *keys = @[@"elementType", @"identifier", @"label", @"value", @"placeholderValue", @"frame", @"children"];
+        attrs = keys;
+        Class snap = NSClassFromString(@"XCElementSnapshot");
+        SEL map = NSSelectorFromString(@"axAttributesForElementSnapshotKeyPaths:isMacOS:");
+        if (snap && [snap respondsToSelector:map]) {
+            @try {
+                id mapped = ((id (*)(id, SEL, id, BOOL))objc_msgSend)(snap, map, keys, NO);
+                if ([mapped isKindOfClass:NSSet.class]) mapped = [(NSSet *)mapped allObjects];
+                if ([mapped isKindOfClass:NSArray.class] && [(NSArray *)mapped count] > 0) attrs = mapped;
+            } @catch (__unused NSException *e) {}
+        }
+    });
+    return attrs;
+}
+
+static NSMutableDictionary<NSNumber *, NSDate *> *SawtHung(void) {
+    static NSMutableDictionary *d;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ d = [NSMutableDictionary dictionary]; });
+    return d;
+}
+
+NSObject * _Nullable SawtXCTAXRead(int pid, NSInteger maxDepth, NSInteger maxChildren, double timeout, NSString * _Nullable * _Nullable why) {
+    NSString *reason = nil;
+    NSObject *root = nil;
+    @try {
+        NSNumber *key = @(pid);
+        @synchronized (SawtHung()) {
+            NSDate *since = SawtHung()[key];
+            if (since && -since.timeIntervalSinceNow < 15) {
+                if (why) *why = @"العملية معلّقة من قراءة سابقة (نتجاهلها شوي)";
+                return nil;
+            }
+        }
+        id client = SawtAXClient();
+        if (!client) { if (why) *why = @"XCAXClient_iOS مو موجود"; return nil; }
+        id element = nil;
+        for (id e in SawtActiveElements(client)) {
+            NSNumber *p = SawtKVC(e, @"processIdentifier");
+            if ([p isKindOfClass:NSNumber.class] && p.intValue == pid) { element = e; break; }
+        }
+        if (!element) { if (why) *why = @"التطبيق مو ضمن النشطة"; return nil; }
+        SEL req = NSSelectorFromString(@"requestSnapshotForElement:attributes:parameters:error:");
+        if (![client respondsToSelector:req]) { if (why) *why = @"requestSnapshotForElement مو مدعوم"; return nil; }
+        NSMutableDictionary *params = [NSMutableDictionary dictionary];
+        SEL defSel = NSSelectorFromString(@"defaultParameters");
+        if ([client respondsToSelector:defSel]) {
+            id defs = ((id (*)(id, SEL))objc_msgSend)(client, defSel);
+            if ([defs isKindOfClass:NSDictionary.class]) [params addEntriesFromDictionary:defs];
+        }
+        if (maxDepth > 0) params[@"maxDepth"] = @(maxDepth);
+        if (maxChildren > 0) { params[@"maxChildren"] = @(maxChildren); params[@"maxArrayCount"] = @(maxChildren); }
+        params[@"traverseFromParentsToChildren"] = @YES;
+        NSDictionary *frozen = params.copy;
+        NSArray *attrs = SawtSnapshotAttributes();
+        __block NSString *err = nil;
+        BOOL late = NO;
+        id result = SawtWithin(timeout, &late, ^id {
+            @try {
+                NSError *e = nil;
+                id r = ((id (*)(id, SEL, id, id, id, NSError **))objc_msgSend)(client, req, element, attrs, frozen, &e);
+                if (!r) err = e ? [NSString stringWithFormat:@"%@ %ld %@", e.domain, (long)e.code, e.localizedDescription] : @"رجع فاضي";
+                return r;
+            } @catch (NSException *x) {
+                err = [NSString stringWithFormat:@"%@: %@", x.name, x.reason ?: @""];
+                return nil;
+            }
+        });
+        if (late) {
+            @synchronized (SawtHung()) { SawtHung()[key] = [NSDate date]; }
+            if (why) *why = [NSString stringWithFormat:@"ما رد خلال %.0f ثانية", timeout];
+            return nil;
+        }
+        @synchronized (SawtHung()) { [SawtHung() removeObjectForKey:key]; }
+        if (!result) { reason = err ?: @"رجع فاضي"; }
+        else {
+            // النتيجة أحيانًا غلاف فيه الجذر
+            id inner = SawtKVC(result, @"rootElementSnapshot") ?: SawtKVC(result, @"_rootElementSnapshot");
+            root = [inner isKindOfClass:NSObject.class] ? inner : result;
+        }
+    } @catch (NSException *x) {
+        reason = [NSString stringWithFormat:@"%@: %@", x.name, x.reason ?: @""];
+    }
+    if (!root && why) *why = reason;
+    return root;
+}
+
+BOOL SawtXCTWatchSession(void (^handler)(void)) {
+    @try {
+        NSString *why = nil;
+        id session = SawtSharedSession(&why);
+        SEL s = NSSelectorFromString(@"registerInvalidationHandler:");
+        if (!session || ![session respondsToSelector:s]) return NO;
+        ((void (*)(id, SEL, id))objc_msgSend)(session, s, handler);
+        return YES;
+    } @catch (__unused NSException *e) {
+        return NO;
+    }
+}

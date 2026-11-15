@@ -157,7 +157,9 @@ final class PhoneAgent: ObservableObject {
         if Self.see == .xct, !XCTBackend.isReady {
             say("تجهيز XCTest… (دخّل رمز الجوال لو طلبه)")
             let cfg = await XCTestProbe.connectionConfig()
-            if let e = await XCTBackend.prepare(cfg: cfg) {
+            var prepErr: String?
+            if XCTBackend.automationOn { prepErr = await XCTBackend.startAutomation() } else { prepErr = await XCTBackend.prepare(cfg: cfg) }
+            if let e = prepErr {
                 say("⚠️ XCTest ما جهز: \(e.prefix(140)) — أكمل بالطريقة العادية")
             }
         }
@@ -1136,6 +1138,9 @@ struct PhoneAgentView: View {
     @State private var tapRunning = false
     @State private var tapHits = 0
     @State private var targetFrame = CGRect.zero
+    @AppStorage("xctAutomation") private var xctAuto = false
+    @State private var autoStatus = XCTBackend.sessionState
+    @State private var autoBusy = false
     @State private var shareLive = false
     @AppStorage("agentModelPick") private var agentPick = ""
     @State private var keysVersion = 0
@@ -1288,6 +1293,40 @@ struct PhoneAgentView: View {
                 }
                 if xctWaiting { Text("دورك: دخّل رمز الجوال لو طلبه iOS").foregroundStyle(.orange) }
                 if !xctOut.isEmpty { Text(xctOut).font(.footnote.monospaced()).textSelection(.enabled) }
+                // وضع الأتمتة: جلسة XCTest دائمة تنبني من جديد لحالها لو انقطعت
+                Toggle(isOn: $xctAuto) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("وضع الأتمتة")
+                        Text(autoBusy ? "يجهّز… (دخّل رمز الجوال لو طلبه)" : autoStatus).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(autoBusy)
+                .onChange(of: xctAuto) { _, on in
+                    if on {
+                        autoBusy = true
+                        Task { @MainActor in
+                            let e = await XCTBackend.startAutomation()
+                            autoStatus = e.map { "✗ " + String($0.prefix(120)) } ?? XCTBackend.sessionState
+                            autoBusy = false
+                        }
+                    } else {
+                        XCTBackend.stopAutomation()
+                        autoStatus = XCTBackend.sessionState
+                    }
+                }
+                .task {
+                    // يحدّث الحالة كل ثانيتين، ويرجّع الجلسة لو المفتاح شغّال من قبل
+                    if xctAuto && !XCTBackend.isReady && !autoBusy {
+                        autoBusy = true
+                        let e = await XCTBackend.startAutomation()
+                        autoStatus = e.map { "✗ " + String($0.prefix(120)) } ?? XCTBackend.sessionState
+                        autoBusy = false
+                    }
+                    while !Task.isCancelled {
+                        if !autoBusy { autoStatus = XCTBackend.sessionState }
+                        try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    }
+                }
                 // اختبار الضغط: XCTest يلمس الهدف هذا، ولو العدّاد زاد يعني اللمس وصل فعلًا
                 Button("🎯 هدف الضغط: \(tapHits)") { tapHits += 1 }
                     .buttonStyle(.bordered)

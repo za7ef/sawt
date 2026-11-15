@@ -14,4 +14,18 @@ FOUNDATION_EXPORT NSString * _Nullable SawtXCTEnableAutomation(void);
 /// ينادى من خيط خلفي (ينتظر الرد بحد timeout). يرجع nil لو انقبل الحدث، وإلا السبب.
 FOUNDATION_EXPORT NSString * _Nullable SawtXCTSynthesize(NSArray<NSValue *> *points, double duration, double timeout);
 
+/// التطبيقات النشطة من عميل الوصول حق XCTest: مصفوفة قواميس {pid, bundle (لو معروف)}.
+FOUNDATION_EXPORT NSArray<NSDictionary<NSString *, id> *> *SawtXCTActiveApps(void);
+
+/// يحمّل الوصول (loadAccessibility:) في عميل XCTest، بحد زمني. لازم مرة لكل جلسة عشان تطبيقات الطرف الثالث.
+FOUNDATION_EXPORT NSString * _Nullable SawtXCTLoadAccessibility(double timeout);
+
+/// يقرأ شجرة عناصر التطبيق برقم العملية مباشرة من عميل الوصول (requestSnapshotForElement:attributes:parameters:error:)
+/// بخصائص قليلة وحدود للعمق وعدد الأولاد، على خيط مستقل بحد زمني. لو ما رد، العملية تنعلّم "معلّقة"
+/// وما ننسألها لمدة قصيرة. maxDepth/maxChildren = 0 يعني بدون حد. يرجع جذر اللقطة أو nil مع السبب.
+FOUNDATION_EXPORT NSObject * _Nullable SawtXCTAXRead(int pid, NSInteger maxDepth, NSInteger maxChildren, double timeout, NSString * _Nullable * _Nullable why);
+
+/// يسجّل معالج انقطاع على جلسة XCTest المشتركة. يرجع NO لو الجلسة ما تدعمه.
+FOUNDATION_EXPORT BOOL SawtXCTWatchSession(void (^handler)(void));
+
 NS_ASSUME_NONNULL_END
