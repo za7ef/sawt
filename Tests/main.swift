@@ -116,3 +116,11 @@ check(Relevance.isRelevant(title: "سولو ليفلينغ الموسم الثا
 
 print(failures == 0 ? "كل الاختبارات نجحت" : "فشل \(failures)")
 exit(failures == 0 ? 0 : 1)
+
+// مراجعة ١٠
+check(SearchHeuristic.verdict("كيف حالك اليوم") == .no, "Search: كيف حالك اليوم مو بحث")
+check(!LiveIntent.isWeather("الجوال حقي خربان"), "Live: الجوال مو الجو")
+check(SearchHeuristic.verdict("explain concurrent programming in swift please") != .yes, "Search: concurrent مو current")
+check(!ForgetCues.matches("ما عادي أنام بدري لما أكون تعبان"), "ForgetCues: ما عادي")
+check(ForgetCues.matches("I don\u{2019}t remember that, please"), "ForgetCues: فاصلة منحنية")
+check(!ForgetCues.matches("الولد كتب الواجب غلط بس المدرس ما انتبه أمس"), "ForgetCues: غلط بجملة عادية")
