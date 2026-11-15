@@ -317,14 +317,20 @@ enum PhraseMatch {
         for i in 0...(ws.count - p.count) {
             var ok = true
             for j in 0..<p.count {
-                let w = ws[i + j]
-                if w == p[j] { continue }
-                if j == 0, let f = w.first, "وبفلك".contains(f), String(w.dropFirst()) == p[j] { continue }
+                if forms(ws[i + j], prefix: j == 0).contains(bare(p[j])) { continue }
                 ok = false; break
             }
             if ok { return true }
         }
         return false
+    }
+    /// بدون «ال» في أولها
+    static func bare(_ w: String) -> String { w.hasPrefix("ال") && w.count > 3 ? String(w.dropFirst(2)) : w }
+    /// صيغ الكلمة: نفسها، بدون سابقة (و/ب/ف/ل/ك) لأول كلمة، وبدون «ال»
+    static func forms(_ w: String, prefix: Bool) -> Set<String> {
+        var f: Set<String> = [w, bare(w)]
+        if prefix, let c = w.first, "وبفلك".contains(c), w.count > 2 { let d = String(w.dropFirst()); f.insert(d); f.insert(bare(d)) }
+        return f
     }
     static func any(_ text: String, _ phrases: [String]) -> Bool {
         let ws = words(text); return phrases.contains { contains(ws, $0) }
