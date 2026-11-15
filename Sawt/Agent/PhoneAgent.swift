@@ -257,10 +257,50 @@ final class PhoneAgent: ObservableObject {
         return ["tap", "type", "enter", "swipe", "open", "back", "home", "done"].contains(k)
     }
 
+    static func firstJSONArray(_ s: String) -> String {
+        guard let a = s.firstIndex(of: "[") else { return "[]" }
+        var depth = 0
+        for i in s[a...].indices {
+            if s[i] == "[" { depth += 1 }
+            if s[i] == "]" { depth -= 1; if depth == 0 { return String(s[a...i]) } }
+        }
+        return "[]"
+    }
+
+    /// اختبار المطابقة: يرجع سطر لكل حالة (المتوقع ← الناتج)
+    static func matchSelfTest() -> [String] {
+        let cases: [(String, String)] = [
+            ("روح تطبيق متصفح Google", "com.google.chrome.ios"),
+            ("متصفح قوقل", "com.google.chrome.ios"),
+            ("Google", "com.google.GoogleMobile"),
+            ("قوقل ماب", "com.google.Maps"),
+            ("خرائط قوقل", "com.google.Maps"),
+            ("الخرائط", "com.apple.Maps"),
+            ("المتصفح", "com.apple.mobilesafari"),
+            ("الملاحظات", "com.apple.mobilenotes"),
+            ("ملاحظات", "com.apple.mobilenotes"),
+            ("الاعدادات", "com.apple.Preferences"),
+            ("واتساب", "net.whatsapp.WhatsApp"),
+            ("الساعه", "com.apple.mobiletimer"),
+            ("Notes", "com.apple.mobilenotes"),
+        ]
+        return cases.map { c in
+            let got = lookup(c.0)?.bundle ?? "nil"
+            return "\(got == c.1 ? "✅" : "❌") «\(c.0)» → \(got)"
+        }
+    }
+
+    /// بس لو الهدف يبدأ بـ«افتح/open/شغّل» + اسم تطبيق من الجدول بعده مباشرة
     static func mentionedApp(_ g: String) -> String? {
-        let l = g.lowercased()
-        for e in apps where !e.bundle.isEmpty {
-            if e.names.contains(where: { $0.count >= 3 && l.contains($0) }) { return e.names[0] }
+        let t = g.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let v = ["افتح", "إفتح", "open", "شغّل", "شغل"].first(where: { t.lowercased().hasPrefix($0) }) else { return nil }
+        let rest = t.dropFirst(v.count).trimmingCharacters(in: .whitespaces)
+        let words = rest.split(separator: " ").map(String.init)
+        // نجرب أول كلمة، وأول كلمتين، وأول ثلاث (أسماء مثل «واتساب للأعمال»)، والأطول يفوز
+        for n in stride(from: min(3, words.count), through: 1, by: -1) {
+            var cand = words.prefix(n).joined(separator: " ")
+            if cand.hasPrefix("و") && n == 1 && lookup(cand) == nil { cand = String(cand.dropFirst()) }
+            if let e = lookup(cand), !e.bundle.isEmpty { return cand }
         }
         return nil
     }
@@ -517,7 +557,9 @@ final class PhoneAgent: ObservableObject {
         (["الساعة", "ساعة", "المنبه", "منبه", "clock", "alarm"], "com.apple.mobiletimer", "Clock"),
         (["التقويم", "تقويم", "calendar"], "com.apple.mobilecal", "Calendar"),
         (["الخرائط", "خرائط", "maps"], "com.apple.Maps", "Maps"),
-        (["قوقل ماب", "خرائط قوقل", "google maps"], "com.google.Maps", "Google Maps"),
+        (["قوقل ماب", "قوقل مابس", "خرائط قوقل", "خرائط جوجل", "جوجل ماب", "google maps"], "com.google.Maps", "Google Maps"),
+        (["قوقل", "جوجل", "google", "تطبيق قوقل", "بحث قوقل"], "com.google.GoogleMobile", "Google"),
+        (["كروم", "متصفح كروم", "متصفح قوقل", "متصفح جوجل", "متصفح google", "chrome", "google chrome"], "com.google.chrome.ios", "Chrome"),
         (["متجر التطبيقات", "اب ستور", "آب ستور", "app store"], "com.apple.AppStore", "App Store"),
         (["الهاتف", "هاتف", "phone"], "com.apple.mobilephone", "Phone"),
         (["جهات الاتصال", "الأسماء", "contacts"], "com.apple.MobileAddressBook", "Contacts"),
@@ -540,39 +582,78 @@ final class PhoneAgent: ObservableObject {
         (["صوت", "sawt"], "", "Sawt"),
     ]
 
+    static func normName(_ x: String) -> String {
+        var t = String(x.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map { Character($0) })
+        for (f, r) in [("أ", "ا"), ("إ", "ا"), ("آ", "ا"), ("ٱ", "ا"), ("ة", "ه"), ("ى", "ي"), ("ؤ", "و"), ("ئ", "ي")] {
+            t = t.replacingOccurrences(of: f, with: r)
+        }
+        if t.hasPrefix("ال"), t.count > 3 { t = String(t.dropFirst(2)) }
+        return t
+    }
+
+    /// تطابق تام بس (بعد التطبيع) على العبارة كاملة — ما فيه "يحتوي" عشان ما يفتح تطبيق غلط
     static func lookup(_ name: String) -> (bundle: String, en: String)? {
-        let n = name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "تطبيق ", with: "").replacingOccurrences(of: "برنامج ", with: "")
-        for e in apps where e.names.contains(where: { n == $0 }) { return (e.bundle, e.en) }
-        for e in apps where e.names.contains(where: { $0.count >= 3 && (n.contains($0) || $0.contains(n)) }) { return (e.bundle, e.en) }
+        var n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        var changed = true
+        while changed {
+            changed = false
+            for p in ["روح ", "افتح ", "إفتح ", "شغّل ", "شغل ", "open ", "تطبيق ", "برنامج ", "app ", "the "] where n.lowercased().hasPrefix(p) {
+                n = String(n.dropFirst(p.count)).trimmingCharacters(in: .whitespaces); changed = true
+            }
+        }
+        let k = normName(n)
+        // كلمات وصفية: متصفح/browser → كروم لو ذكر قوقل/كروم، وإلا سفاري؛ خرائط + قوقل → خرائط قوقل
+        let l = n.lowercased()
+        let google = ["قوقل", "جوجل", "google", "كروم", "chrome"].contains { l.contains($0) }
+        if ["متصفح", "browser"].contains(where: { l.contains($0) }) {
+            return google ? ("com.google.chrome.ios", "Chrome") : ("com.apple.mobilesafari", "Safari")
+        }
+        if ["خرائط", "ماب", "maps"].contains(where: { l.contains($0) }), google { return ("com.google.Maps", "Google Maps") }
+        for e in apps where e.names.contains(where: { normName($0) == k }) || normName(e.en) == k { return (e.bundle, e.en) }
         return nil
     }
 
     /// جدول → إطلاق بالمعرّف؛ بعدها مطابقة من التطبيقات المثبتة؛ آخر شي البحث بالاسم الإنجليزي
     func openApp(_ name: String) async -> (ok: Bool, info: String) {
         let hit = Self.lookup(name)
-        slog("agent: open «\(name)» → \(hit?.bundle ?? "?")")
+        slog("agent: open requested=«\(name)» table=\(hit?.bundle ?? "none")")
         if let hit, !hit.bundle.isEmpty {
             let r = await Self.exec(.launch(hit.bundle))
+            slog("agent: open chosen=\(hit.bundle) via=table ok=\(r.contains("\"ok\":true"))")
             if r.contains("\"ok\":true") { try? await Task.sleep(nanoseconds: 700_000_000); return (true, r) }
             say("⚠️ إطلاق \(hit.bundle): \(r.prefix(120))")
         }
         let q = hit?.en ?? name
         let r = await Self.exec(.launch(q))
-        if r.contains("\"ok\":true") { try? await Task.sleep(nanoseconds: 1_200_000_000); return (true, r) }
-        say("⚠️ مطابقة الاسم: \(r.prefix(120))")
-        // آخر حل: البحث — بالإنجليزي بس
-        guard q.unicodeScalars.allSatisfy({ $0.isASCII }) else { return (false, "ما عرفت التطبيق «\(name)»") }
+        // السجل فيه المرشحين ودرجاتهم (خطوة match)
+        slog("agent: open match «\(q)» → \(r.prefix(600))")
+        if r.contains("\"ok\":true") { try? await Task.sleep(nanoseconds: 700_000_000); return (true, r) }
+        // غامض: نسأله عن أقوى مرشح بدل ما نخمّن
+        let err = ((try? JSONSerialization.jsonObject(with: Data(r.utf8))) as? [String: Any])?["error"] as? String ?? ""
+        if err.hasPrefix("ambiguous: "),
+           let cands = (try? JSONSerialization.jsonObject(with: Data(Self.firstJSONArray(err).utf8))) as? [[String: Any]],
+           cands.count >= 2 {
+            let names = cands.prefix(3).compactMap { $0["name"] as? String }
+            let ok = await askConfirm("لقيت أكثر من تطبيق لـ«\(name)»: \(names.joined(separator: "، ")).\nأفتح «\(names[0])»؟")
+            if ok, let bid = cands[0]["bundle"] as? String {
+                let r3 = await Self.exec(.launch(bid))
+                slog("agent: open chosen=\(bid) via=user-confirm")
+                if r3.contains("\"ok\":true") { try? await Task.sleep(nanoseconds: 700_000_000); return (true, r3) }
+            }
+        }
+        // ما لقينا أو رفض: بحث سبوتلايت باسم التطبيق (لصق، يشتغل على أي لغة كيبورد)
+        say("ما تأكدت من «\(name)» — أبحث عنه")
         _ = await Self.exec(.keys("home"))
-        try? await Task.sleep(nanoseconds: 700_000_000)
+        try? await Task.sleep(nanoseconds: 600_000_000)
         let b = UIScreen.main.bounds
         let (x, y1) = Self.norm(CGPoint(x: b.midX, y: b.height * 0.4)), (_, y2) = Self.norm(CGPoint(x: 0, y: b.height * 0.65))
         _ = await Self.exec(.drag(x, y1, x, y2))
-        try? await Task.sleep(nanoseconds: 900_000_000)
+        try? await Task.sleep(nanoseconds: 800_000_000)
         _ = await Self.typeText(q)
         try? await Task.sleep(nanoseconds: 700_000_000)
         let r2 = await Self.exec(.keys("return"))
-        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        slog("agent: open chosen=spotlight «\(q)»")
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
         return (r2.contains("\"ok\":true"), r2)
     }
 
@@ -722,6 +803,7 @@ struct PhoneAgentView: View {
     @State private var goal = ""
     @State private var see = PhoneAgent.see
     @AppStorage("agentMaxSteps") private var maxSteps = 10
+    @State private var testOut = ""
     @State private var shareLive = false
 
     var body: some View {
@@ -770,6 +852,14 @@ struct PhoneAgentView: View {
                 }
             }
             if !agent.lastResult.isEmpty { Section("النتيجة") { Text(agent.lastResult) } }
+            Section {
+                Button("اختبار مطابقة أسماء التطبيقات") {
+                    let r = PhoneAgent.matchSelfTest()
+                    r.forEach { slog("agent: matchtest \($0)") }
+                    testOut = r.joined(separator: "\n")
+                }
+                if !testOut.isEmpty { Text(testOut).font(.footnote.monospaced()).textSelection(.enabled) }
+            }
             if !agent.log.isEmpty {
                 Section("الخطوات") {
                     ForEach(agent.log) { s in Text(s.text).font(.footnote) }
