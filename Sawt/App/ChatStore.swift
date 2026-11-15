@@ -282,14 +282,17 @@ final class ChatStore: ObservableObject {
             var web = webAlways || searchV == .yes
             var searchedAuto = searchV == .yes
             do {
-                if searchV == .unsure {
+                // على المعالج نكتفي بالقواعد (كل مصنّف = دور كامل بطيء)
+                let cpuNow = LLMService.onCPU
+                if cpuNow { slog("chat: cpu → skip classifiers") }
+                if searchV == .unsure && !cpuNow {
                     let c0 = Date()
                     let need = await LLMService.shared.classifyNeedsSearch(t)
                     slog("chat: search classifier → \(need) in \(Int(Date().timeIntervalSince(c0) * 1000))ms")
                     if need { web = true; searchedAuto = true }
                 }
                 // القواعد مو متأكدة: مصنّف سريع (رمز أو رمزين) يقرر إذا السؤال يحتاج تفكير
-                if askClassifier {
+                if askClassifier && !cpuNow {
                     let c0 = Date()
                     let need = await LLMService.shared.classifyNeedsThinking(t)
                     slog("chat: think classifier → \(need) in \(Int(Date().timeIntervalSince(c0) * 1000))ms")
