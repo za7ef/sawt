@@ -215,7 +215,7 @@ struct ChatView: View {
             ScrollView {
                 LazyVStack(spacing: 14) {
                     if (store.current?.messages ?? []).isEmpty && !store.isGenerating {
-                        EmptyState(startVoice: startVoice)
+                        EmptyState(startVoice: startVoice, cloudTick: cloudTick)
                             .padding(.top, 120)
                     }
                     ForEach(store.current?.messages ?? []) { m in
@@ -451,6 +451,7 @@ struct ChatView: View {
 
 struct EmptyState: View {
     var startVoice: () -> Void
+    var cloudTick: Int = 0
     @State private var appear = false
 
     var body: some View {
