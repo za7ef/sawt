@@ -459,6 +459,38 @@ pub extern "C" fn sawtctl_ax(cfg: *const c_char, wait_ms: u32) -> *mut c_char {
     })
 }
 
+/// يفتح تطبيق: معرّف حزمة مباشرة، أو اسم نطابقه من قائمة التطبيقات المثبتة. "list" يرجع القائمة.
+#[unsafe(no_mangle)]
+pub extern "C" fn sawtctl_launch(cfg: *const c_char, query: *const c_char) -> *mut c_char {
+    let q = unsafe { std::ffi::CStr::from_ptr(query) }.to_string_lossy().trim().to_string();
+    run(cfg, async move |cfg, steps| {
+        let mut s = connect(&cfg, steps).await?;
+        let mut asvc = idevice::core_device::AppServiceClient::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("appservice: {e:?}"))?;
+        let looks_id = q.contains('.') && !q.contains(' ');
+        let mut bundle = if looks_id { Some(q.clone()) } else { None };
+        let mut names = Vec::new();
+        if bundle.is_none() || q == "list" {
+            let apps = asvc.list_apps(false, true, false, false, true).await.map_err(|e| format!("list_apps: {e:?}"))?;
+            let norm = |x: &str| x.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+            let nq = norm(&q);
+            let mut best: Option<(u8, String)> = None;
+            for a in &apps {
+                names.push(json!([a.name, a.bundle_identifier]));
+                let na = norm(&a.name);
+                if nq.is_empty() || na.is_empty() { continue }
+                let score = if na == nq { 3 } else if na.starts_with(&nq) || nq.starts_with(&na) { 2 } else if na.contains(&nq) || nq.contains(&na) { 1 } else { 0 };
+                if score > 0 && best.as_ref().map_or(true, |b| score > b.0) { best = Some((score, a.bundle_identifier.clone())) }
+            }
+            steps.push(json!({"step": "apps", "count": apps.len()}));
+            if q == "list" { return Ok(json!({"apps": names})) }
+            bundle = best.map(|b| b.1);
+        }
+        let b = bundle.ok_or_else(|| format!("ما لقيت تطبيق باسم «{q}»"))?;
+        let r = asvc.launch_application(b.clone(), &[], false, false, None, None, None).await.map_err(|e| format!("launch {b}: {e:?}"))?;
+        Ok(json!({"bundle": b, "pid": r.pid}))
+    })
+}
+
 /// عناصر الشاشة الظاهرة مع إطاراتها (للوكيل)
 #[unsafe(no_mangle)]
 pub extern "C" fn sawtctl_screen(cfg: *const c_char, wait_ms: u32) -> *mut c_char {
