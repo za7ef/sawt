@@ -81,8 +81,10 @@ struct AgentLiveActivity: Widget {
                     .font(.title2).foregroundStyle(ctx.state.busy ? Color.purple : Color.green)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(ctx.state.task.map { "الوكيل: \($0)" } ?? "المشغّل: \(ctx.state.phaseTitle)").font(.headline).lineLimit(1)
-                    Text(ctx.state.busy ? "\(ctx.state.phaseTitle) — \(ctx.state.step)" : ctx.state.step)
-                        .font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                    HStack(spacing: 6) {
+                        if ctx.state.busy { Text(ctx.state.phaseTitle).font(.subheadline.bold()) }
+                        Text(ctx.state.step).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                    }
                 }
                 Spacer()
                 if ctx.state.busy {
@@ -106,7 +108,13 @@ struct AgentLiveActivity: Widget {
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    Text("\(ctx.state.phaseTitle): \(ctx.state.step)").font(.subheadline).lineLimit(2)
+                    // عنوان الحالة والوصف في نصين منفصلين (عشان ترتيب العربي ما يلخبط النقطتين)
+                    HStack(spacing: 6) {
+                        Text(ctx.state.phaseTitle).font(.subheadline.bold())
+                        Text(ctx.state.step).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                        Spacer(minLength: 0)
+                    }
+                    .environment(\.layoutDirection, .rightToLeft)
                 }
             } compactLeading: {
                 Image(systemName: ctx.state.phaseIcon).foregroundStyle(ctx.state.busy ? Color.purple : Color.green)
