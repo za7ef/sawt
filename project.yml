@@ -53,6 +53,9 @@ targets:
     dependencies:
       - target: SawtWidgets
         embed: true
+      - target: SawtBroadcast
+        embed: true
+      - sdk: ReplayKit.framework
       - package: MLXSwift
         product: MLX
       - package: MLXSwift
@@ -103,6 +106,35 @@ targets:
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGN_IDENTITY: ""
         SKIP_INSTALL: "YES"
+  SawtBroadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: SawtBroadcast
+    info:
+      path: SawtBroadcast/Info.plist
+      properties:
+        CFBundleDisplayName: صوت
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
+          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
+    dependencies:
+      - sdk: ReplayKit.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.za7ef.sawt.broadcast
+        PRODUCT_NAME: SawtBroadcast
+        MARKETING_VERSION: "0.4.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGN_IDENTITY: ""
+        SKIP_INSTALL: "YES"
 schemes:
   Sawt:
     build:
@@ -110,3 +142,4 @@ schemes:
         Sawt: all
     archive:
       config: Release
+
