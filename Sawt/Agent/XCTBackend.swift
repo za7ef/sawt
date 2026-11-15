@@ -573,6 +573,24 @@ enum XCTBackend {
         return result(err.map { "اللمس المركّب فشل: \($0)" }, "tap \(Int(p.x)),\(Int(p.y))", t)
     }
 
+    /// يكتب نص (أو "\n" للإدخال) بحدث كتابة مركّب في الحقل اللي عليه التركيز. نفس قواعد اللمس: 41 = إعادة تفويض ومحاولة وحدة
+    static func type(_ text: String, what: String) async -> String {
+        let t = Date()
+        func run() async -> String? {
+            await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
+                DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTTypeText(text, 60, 5)) }
+            }
+        }
+        var err = await run()
+        if isAuthLost(err) {
+            markAuthLost("كتابة")
+            if await reauthorize() { err = await run() }
+            else { err = "انتهى التفويض وفشلت إعادته: \(err ?? "")" }
+        }
+        // ما نسجّل النص نفسه (ممكن كلمة سر)، بس الطول
+        return result(err.map { "الكتابة المركّبة فشلت: \($0)" }, "\(what) \(text.count) حرف", t)
+    }
+
     /// سحب من نقطة لنقطة بحدث مركّب (نفس قواعد اللمس)
     static func drag(_ a: CGPoint, _ b: CGPoint) async -> String {
         let t = Date()
@@ -625,7 +643,8 @@ enum XCTBackend {
             CGPoint(x: Double(x) / 65535 * screen.width, y: Double(y) / 65535 * screen.height)
         }
         switch op {
-        case .tap, .drag, .keys("home"): break
+        case .tap, .drag, .keys("home"), .keys("return"): break
+        case .keys(let w) where w.hasPrefix("paste:"): break
         case .launch(let q) where looksLikeBundle(q): break
         default: return nil
         }
@@ -637,6 +656,8 @@ enum XCTBackend {
         case .tap(let x, let y): return await tap(den(x, y))
         case .drag(let a, let b, let x, let y): return await drag(den(a, b), den(x, y))
         case .launch(let q): return await open(bundle: q)
+        case .keys("return"): return await type("\n", what: "return")
+        case .keys(let w) where w.hasPrefix("paste:"): return await type(String(w.dropFirst(6)), what: "type")
         default: return await home()
         }
     }

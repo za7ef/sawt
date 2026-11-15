@@ -40,22 +40,24 @@ final class PhoneAgent: ObservableObject {
 
     /// يحدّث النشاط المباشر والإشعار الثابت بالخطوة الحالية
     private func surface(_ step: String, waiting: Bool = false) {
-        let st = AgentActivityAttributes.ContentState(step: step, n: stepNo, waiting: waiting)
-        if let activity {
-            Task { await activity.update(ActivityContent(state: st, staleDate: nil)) }
-        } else if ActivityAuthorizationInfo().areActivitiesEnabled {
-            activity = try? Activity.request(attributes: AgentActivityAttributes(goal: String(goal.prefix(60))),
-                                             content: ActivityContent(state: st, staleDate: nil))
-            slog("agent: activity \(activity == nil ? "failed" : "started")")
-        }
+        let st = AgentActivityAttributes.ContentState(step: step, n: stepNo, waiting: waiting, phase: "step", task: String(goal.prefix(60)))
+        RunnerActivity.show(st, goal: goal)
         AgentNotify.progress(goal: goal, step: step)
     }
 
+    /// مرحلة «يفكّر» في الجزيرة (قبل طلب النموذج)
+    private func surfaceThinking() {
+        RunnerActivity.show(.init(step: "يختار الخطوة الجاية", n: stepNo, waiting: false, phase: "thinking", task: String(goal.prefix(60))), goal: goal)
+    }
+
     private func unsurface() {
-        let a = activity; activity = nil
-        Task {
-            await a?.end(nil, dismissalPolicy: .immediate)
-            for x in Activity<AgentActivityAttributes>.activities { await x.end(nil, dismissalPolicy: .immediate) }
+        activity = nil
+        if Runner.isOn {
+            // المشغّل يبقى: «خلص» شوي، بعدين جاهز، وبعد دقيقة نايم
+            RunnerActivity.show(.init(step: String(lastResult.prefix(80)), n: stepNo, waiting: false, phase: "done", task: nil), goal: goal)
+            RunnerActivity.idle(after: 4)
+        } else {
+            RunnerActivity.end()
         }
         AgentNotify.clear()
     }
@@ -126,6 +128,7 @@ final class PhoneAgent: ObservableObject {
         task?.cancel()
         answer(false)
         if running { say("⏹️ انوقف") }
+        else if Runner.isOn { RunnerActivity.idle(after: 0) } else { RunnerActivity.end() }
         finish("انوقف بطلبك")
     }
 
@@ -216,6 +219,7 @@ final class PhoneAgent: ObservableObject {
                 (app, els) = s2
             }
             let axMs = Int(Date().timeIntervalSince(tAX) * 1000)
+            surfaceThinking()
             let tLLM = Date()
             var limit = els.count
             var screenText = Self.describe(app: app, els)
@@ -890,7 +894,7 @@ final class PhoneAgent: ObservableObject {
     static func typeText(_ t: String) async -> String {
         // دايمًا عن طريق الحافظة: أكواد HID تعتمد على لغة الكيبورد (العربي يقلب hello لحروف عربية)
         // ما نسجّل النص نفسه (ممكن كلمة سر) — بس الطول؛ والحافظة تتفضّى بعد اللصق
-        slog("agent: type via=paste chars=\(t.count)")
+        slog("agent: type via=\(see == .xct ? "xct" : "paste") chars=\(t.count)")
         return await exec(.keys("paste:" + t))
     }
 
@@ -1456,11 +1460,20 @@ enum Runner {
     @discardableResult
     static func set(_ on: Bool) async -> String? {
         UserDefaults.standard.set(on, forKey: "xctAutomation")
+        RunnerActivity.observe()
         if on {
             PhoneAgent.see = .xct
             if !alive { alive = true; HostPairing.shared.keepAlive(true) }
-            return await XCTBackend.startAutomation()
+            let busy = PhoneAgent.shared.running
+            if !busy && !XCTBackend.isReady { RunnerActivity.show(RunnerActivity.state("prep", "يجهّز جلسة XCTest"), goal: "المشغّل") }
+            let e = await XCTBackend.startAutomation()
+            if !busy {
+                if let e { RunnerActivity.show(RunnerActivity.state("sleep", "ما اشتغل: " + String(e.prefix(60))), goal: "المشغّل") }
+                else { RunnerActivity.idle(after: 0) }
+            }
+            return e
         } else {
+            RunnerActivity.end()
             if alive { alive = false; HostPairing.shared.keepAlive(false) }
             if PhoneAgent.shared.running { PhoneAgent.shared.stop() }
             await XCTBackend.disableAutomation()
@@ -1472,7 +1485,11 @@ enum Runner {
     /// عند فتح التطبيق: لو كان شغّال نرجّعه
     static func resume() async {
         if isOn && !XCTBackend.isReady { await set(true) }
-        else if isOn && !alive { alive = true; HostPairing.shared.keepAlive(true) }
+        else if isOn && !alive {
+            alive = true; HostPairing.shared.keepAlive(true)
+            RunnerActivity.observe()
+            if !PhoneAgent.shared.running { RunnerActivity.idle(after: 0) }
+        }
     }
 
     /// نص الحالة القصير للزر
@@ -1522,6 +1539,63 @@ struct RunnerPill: View {
                 if !busy { text = Runner.stateText }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
+        }
+    }
+}
+
+
+/// النشاط المباشر حق المشغّل (الجزيرة الديناميكية): نايم / جاهز / يجهّز / يفكّر / الخطوة N / خلص
+@MainActor
+enum RunnerActivity {
+    private static var current: Activity<AgentActivityAttributes>?
+    private static var idleTask: Task<Void, Never>?
+    private static var observing = false
+
+    static func state(_ phase: String, _ step: String) -> AgentActivityAttributes.ContentState {
+        .init(step: step, n: 0, waiting: false, phase: phase, task: nil)
+    }
+
+    static func show(_ st: AgentActivityAttributes.ContentState, goal: String) {
+        idleTask?.cancel(); idleTask = nil
+        if current == nil { current = Activity<AgentActivityAttributes>.activities.first }
+        if let a = current {
+            Task { await a.update(ActivityContent(state: st, staleDate: nil)) }
+        } else if ActivityAuthorizationInfo().areActivitiesEnabled {
+            current = try? Activity.request(attributes: AgentActivityAttributes(goal: String(goal.prefix(60))),
+                                            content: ActivityContent(state: st, staleDate: nil))
+            slog("runner: activity \(current == nil ? "failed" : "started")")
+        }
+    }
+
+    /// جاهز، وبعد دقيقة بدون مهمة: نايم
+    static func idle(after seconds: Double) {
+        let wait = UInt64(max(0, seconds) * 1_000_000_000)
+        idleTask?.cancel()
+        idleTask = Task { @MainActor in
+            if wait > 0 { try? await Task.sleep(nanoseconds: wait) }
+            guard !Task.isCancelled, Runner.isOn, !PhoneAgent.shared.running else { return }
+            show(state("ready", "أرسل مهمة في المحادثة"), goal: "المشغّل")
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            guard !Task.isCancelled, Runner.isOn, !PhoneAgent.shared.running else { return }
+            show(state("sleep", "يصحى لما ترسل مهمة"), goal: "المشغّل")
+        }
+    }
+
+    static func end() {
+        idleTask?.cancel(); idleTask = nil
+        let a = current; current = nil
+        Task {
+            await a?.end(nil, dismissalPolicy: .immediate)
+            for x in Activity<AgentActivityAttributes>.activities { await x.end(nil, dismissalPolicy: .immediate) }
+        }
+    }
+
+    /// زر «إطفاء» في الجزيرة يطفّي المشغّل
+    static func observe() {
+        if observing { return }
+        observing = true
+        NotificationCenter.default.addObserver(forName: Notification.Name("sawt.stopRunner"), object: nil, queue: .main) { _ in
+            Task { @MainActor in await Runner.set(false) }
         }
     }
 }

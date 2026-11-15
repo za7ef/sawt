@@ -374,3 +374,54 @@ BOOL SawtXCTWatchSession(void (^handler)(void)) {
         return NO;
     }
 }
+
+
+NSString * _Nullable SawtXCTTypeText(NSString *text, NSInteger speed, double timeout) {
+    if (text.length == 0) return @"النص فاضي";
+    @try {
+        NSString *why = nil;
+        id session = SawtSharedSession(&why);
+        if (!session) return why;
+        Class recordCls = NSClassFromString(@"XCSynthesizedEventRecord");
+        Class pathCls = NSClassFromString(@"XCPointerEventPath");
+        SEL initText = NSSelectorFromString(@"initForTextInput");
+        SEL typeSel = NSSelectorFromString(@"typeText:atOffset:typingSpeed:shouldRedact:");
+        SEL initName = NSSelectorFromString(@"initWithName:");
+        SEL addPath = NSSelectorFromString(@"addPointerEventPath:");
+        if (!recordCls || !pathCls || ![pathCls instancesRespondToSelector:initText] ||
+            ![pathCls instancesRespondToSelector:typeSel] || ![recordCls instancesRespondToSelector:initName])
+            return @"دوال الكتابة (initForTextInput / typeText:atOffset:typingSpeed:shouldRedact:) مو موجودة";
+        id path = ((id (*)(id, SEL))objc_msgSend)([pathCls alloc], initText);
+        if (!path) return @"مسار الكتابة رجع فاضي";
+        long long sp = MIN(240, MAX(1, speed));
+        ((void (*)(id, SEL, id, double, long long, BOOL))objc_msgSend)(path, typeSel, text, 0.0, sp, YES);
+        id record = ((id (*)(id, SEL, id))objc_msgSend)([recordCls alloc], initName, @"Sawt type");
+        if (!record || ![record respondsToSelector:addPath]) return @"سجل الكتابة مو جاهز";
+        ((void (*)(id, SEL, id))objc_msgSend)(record, addPath, path);
+
+        SEL proxySel = NSSelectorFromString(@"daemonProxy");
+        id proxy = [session respondsToSelector:proxySel] ? ((id (*)(id, SEL))objc_msgSend)(session, proxySel) : nil;
+        if (!proxy) return @"daemonProxy مو موجود";
+        __block NSString *reply = nil;
+        __block BOOL done = NO;
+        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+        void (^completion)(NSError *) = ^(NSError *e) {
+            reply = e ? [NSString stringWithFormat:@"%@ %ld %@", e.domain, (long)e.code, e.localizedDescription] : nil;
+            done = YES;
+            dispatch_semaphore_signal(sem);
+        };
+        SEL s3 = NSSelectorFromString(@"_XCT_synthesizeEvent:implicitConfirmationInterval:completion:");
+        SEL s2 = NSSelectorFromString(@"_XCT_synthesizeEvent:completion:");
+        if (SawtHas(proxy, s3)) ((void (*)(id, SEL, id, double, id))objc_msgSend)(proxy, s3, record, 0.0, completion);
+        else if (SawtHas(proxy, s2)) ((void (*)(id, SEL, id, id))objc_msgSend)(proxy, s2, record, completion);
+        else return @"daemonProxy ما فيه _XCT_synthesizeEvent";
+        // وقت الكتابة تقريبًا: الحروف ÷ السرعة (حرف بالثانية) + المهلة
+        double total = timeout + (double)text.length / (double)sp;
+        long waited = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(total * NSEC_PER_SEC)));
+        (void)[record class];
+        if (waited != 0 && !done) return [NSString stringWithFormat:@"ما جا رد للكتابة خلال %.0f ثانية", total];
+        return reply;
+    } @catch (NSException *e) {
+        return [NSString stringWithFormat:@"%@: %@", e.name, e.reason ?: @""];
+    }
+}

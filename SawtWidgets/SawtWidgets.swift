@@ -77,37 +77,43 @@ struct AgentLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AgentActivityAttributes.self) { ctx in
             HStack(spacing: 12) {
-                Image(systemName: ctx.state.waiting ? "questionmark.circle.fill" : "wand.and.stars")
-                    .font(.title2).foregroundStyle(.purple)
+                Image(systemName: ctx.state.phaseIcon)
+                    .font(.title2).foregroundStyle(ctx.state.busy ? Color.purple : Color.green)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("الوكيل: \(ctx.attributes.goal)").font(.headline).lineLimit(1)
-                    Text(ctx.state.step).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                    Text(ctx.state.task.map { "الوكيل: \($0)" } ?? "المشغّل: \(ctx.state.phaseTitle)").font(.headline).lineLimit(1)
+                    Text(ctx.state.busy ? "\(ctx.state.phaseTitle) — \(ctx.state.step)" : ctx.state.step)
+                        .font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                 }
                 Spacer()
-                Button(intent: StopAgentIntent()) {
-                    Label("إيقاف", systemImage: "stop.fill")
+                if ctx.state.busy {
+                    Button(intent: StopAgentIntent()) { Label("إيقاف", systemImage: "stop.fill") }.tint(.red)
+                } else {
+                    Button(intent: StopRunnerIntent()) { Label("إطفاء", systemImage: "power") }.tint(.orange)
                 }
-                .tint(.red)
             }
             .padding()
             .environment(\.layoutDirection, .rightToLeft)
         } dynamicIsland: { ctx in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Image(systemName: "wand.and.stars").foregroundStyle(.purple)
+                    Image(systemName: ctx.state.phaseIcon).foregroundStyle(ctx.state.busy ? Color.purple : Color.green)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    Button(intent: StopAgentIntent()) { Label("إيقاف", systemImage: "stop.fill") }.tint(.red)
+                    if ctx.state.busy {
+                        Button(intent: StopAgentIntent()) { Label("إيقاف", systemImage: "stop.fill") }.tint(.red)
+                    } else {
+                        Button(intent: StopRunnerIntent()) { Label("إطفاء", systemImage: "power") }.tint(.orange)
+                    }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    Text("\(ctx.state.n). \(ctx.state.step)").font(.subheadline).lineLimit(2)
+                    Text("\(ctx.state.phaseTitle): \(ctx.state.step)").font(.subheadline).lineLimit(2)
                 }
             } compactLeading: {
-                Image(systemName: "wand.and.stars").foregroundStyle(.purple)
+                Image(systemName: ctx.state.phaseIcon).foregroundStyle(ctx.state.busy ? Color.purple : Color.green)
             } compactTrailing: {
-                Text("\(ctx.state.n)").monospacedDigit()
+                Text(ctx.state.phase == "step" || ctx.state.phase == nil ? "\(ctx.state.n)" : ctx.state.phaseTitle).monospacedDigit()
             } minimal: {
-                Image(systemName: "wand.and.stars").foregroundStyle(.purple)
+                Image(systemName: ctx.state.phaseIcon).foregroundStyle(ctx.state.busy ? Color.purple : Color.green)
             }
         }
     }

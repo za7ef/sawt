@@ -17,6 +17,9 @@ FOUNDATION_EXPORT NSString * _Nullable SawtXCTSynthesize(NSArray<NSValue *> *poi
 /// يطفّي وضع الأتمتة ويخلي الجلسة (disableAutomationModeWithError: أو _XCT_disableAutomationModeWithReply:). يرجع وش صار، ويبدأ بـ✗ لو فشل
 FOUNDATION_EXPORT NSString *SawtXCTDisableAutomation(void);
 
+/// يكتب نص في الحقل اللي عليه التركيز بحدث كتابة مركّب (XCPointerEventPath initForTextInput). "\n" = إدخال. nil = نجح
+FOUNDATION_EXPORT NSString * _Nullable SawtXCTTypeText(NSString *text, NSInteger speed, double timeout);
+
 /// وش مصدر عميل الوصول اللي انلقى (للسجل)
 FOUNDATION_EXPORT NSString *SawtXCTAXSource(void);
 
