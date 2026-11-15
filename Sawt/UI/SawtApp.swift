@@ -40,7 +40,7 @@ struct SawtApp: App {
         }
         let l = Log.shared
         // لو طاح في التوليد والنموذج على المعالج: نرجّع كرت الشاشة عشان ما يتكرر الكراش
-        if l.previousRunCrashed, l.previousStage.contains("llm"), (UserDefaults.standard.string(forKey: "llmDevice") ?? "gpu") != "gpu" {
+        if l.previousRunCrashed, l.previousStage.contains("llm"), !l.previousStage.contains("llm:load"), (UserDefaults.standard.string(forKey: "llmDevice") ?? "gpu") != "gpu" {
             UserDefaults.standard.set("gpu", forKey: "llmDevice")
             slog("launch: llm crashed on cpu/auto → reset llmDevice=gpu")
         }

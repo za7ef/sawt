@@ -129,6 +129,8 @@ struct ChatView: View {
         let _ = cloudTick
         if CloudLLM.active != nil {
             Image(systemName: "cloud.fill").foregroundStyle(.blue).font(.caption)
+        } else if LLMService.onCPU, models.llm == .idle, LlamaModelFile.isDownloaded {
+            Image(systemName: "cpu").foregroundStyle(.secondary).font(.caption)
         } else {
         switch models.llm {
         case .ready: EmptyView()
@@ -358,7 +360,8 @@ struct ChatView: View {
     }
 
     private func send() {
-        guard models.llm.isReady || CloudLLM.active != nil else {
+        guard models.llm.isReady || CloudLLM.active != nil
+                || (LLMService.onCPU && LlamaModelFile.isDownloaded) else {
             store.error = models.llm.isBusy ? "النموذج للحين يتجهز، لحظات." : "اختر نموذج ونزّله من شاشة النماذج أول."
             if !models.llm.isBusy { showModels = true }
             return
