@@ -215,7 +215,17 @@ final class ChatStore: ObservableObject {
         guard !t.isEmpty || !attachments.isEmpty, !isGenerating else { return }
         if t.isEmpty { t = attachments.contains { $0.kind == .image } ? "وش تشوف في الصورة؟" : "لخّص لي الملف باختصار." }
         // أمر للوكيل: "/جوال افتح الملاحظات..." أو "جوال: ..."
-        if let g = PhoneAgentTrigger.goal(t) { Task { @MainActor in PhoneAgent.shared.start(g) }; return }
+        if let g = PhoneAgentTrigger.goal(t) {
+            append(Message(role: .user, text: t))
+            let bubble = Message(role: .assistant, text: "تمام، جاري تنفيذ المهمة…")
+            append(bubble)
+            let conv = currentID
+            Task { @MainActor in
+                PhoneAgent.shared.chatTarget = (conv, bubble.id)
+                PhoneAgent.shared.start(g)
+            }
+            return
+        }
         let earlier = (current?.messages ?? []).flatMap { $0.attachments ?? [] }
         // تفكير عميق يطفي إذا الجوال حار (يطول ويسخّن أكثر)
         let mode = thinkMode
@@ -506,6 +516,14 @@ final class ChatStore: ObservableObject {
         live.reset()
         genID += 1
         isGenerating = false
+    }
+
+    /// يحدّث نص رسالة موجودة (فقاعة حالة الوكيل)
+    func updateText(_ id: UUID, in conv: UUID?, _ text: String, save persist: Bool = false) {
+        guard let ci = conversations.firstIndex(where: { $0.id == (conv ?? currentID) }),
+              let mi = conversations[ci].messages.firstIndex(where: { $0.id == id }) else { return }
+        conversations[ci].messages[mi].text = text
+        if persist { save() }
     }
 
     func append(_ m: Message, to conv: UUID?) {
