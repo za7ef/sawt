@@ -230,7 +230,7 @@ actor LlamaEngine {
         cp.offload_kqv = false
         cp.op_offload = false
         cp.swa_full = true   // عشان نقدر نقص الكاش ونعيد استخدام البداية
-        if spec.template == .chatml { cp.n_ctx = 3072 }   // الوكيل ما يحتاج سياق طويل
+        if spec.template == .chatml { cp.n_ctx = 6144 }   // تعليمات عربية + قائمة عناصر طويلة
         guard let c = llama_init_from_model(m, cp) else {
             llama_model_free(m)
             throw SawtError.failed("ما قدرت أجهّز سياق نموذج المعالج")
@@ -336,6 +336,9 @@ actor LlamaEngine {
                 h.removeFirst()
                 toks = tokenize(render(system: system, history: h, user: user))
             }
+        }
+        if toks.count > budget {
+            throw SawtError.failed("الرسالة أطول من سياق النموذج (\(toks.count) > \(budget))")
         }
         // كاش البداية المشتركة
         var common = 0
