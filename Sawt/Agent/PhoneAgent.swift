@@ -89,6 +89,11 @@ final class PhoneAgent: ObservableObject {
         else if running { why = "الوكيل شغّال على مهمة ثانية — قل «وقف» أول" }
         else if !(PhoneControl.available && PhoneControl.hasPairing) { why = "التحكم بالجوال مو جاهز (اقتران/الأداة)" }
         else if let s = Self.cpuSpecForStep(), !s.isDownloaded { why = "نموذج المعالج (\(Self.cpuSpecForStep()?.name ?? "")) مو منزّل — نزّله من صفحة النماذج ← المعالج" }
+        if why == nil, Self.pick.hasPrefix("cloud:") {
+            if Self.cloud == nil { why = "ما فيه مفتاح للخدمة السحابية المختارة — حطه في «مفاتيح الخدمات»" }
+            else if !UserDefaults.standard.bool(forKey: "cloudConsent") { why = "لازم توافق على تنبيه الخصوصية للوكيل السحابي أول" }
+            else if !NetworkGate.shared.on { why = "الإنترنت مقفول في التطبيق — افتحه من الإعدادات أو اختر نموذج محلي" }
+        }
         // نموذج كرت شاشة مختار للوكيل يختلف عن المحمّل: نحمّله (يصير هو نموذج كرت الشاشة)
         if why == nil, Self.pick.hasPrefix("gpu:"), !LLMService.onCPU {
             let repo = String(Self.pick.dropFirst(4))
@@ -224,7 +229,7 @@ final class PhoneAgent: ObservableObject {
                 attempt += 1
                 action = Self.parse(raw)
                 if action != nil { break }
-                if raw.isEmpty, Self.cpuSpecForStep() != nil { break }   // خطأ تحميل/ذاكرة على المعالج: ما نعيد
+                if raw.isEmpty, Self.cpuSpecForStep() != nil || Self.cloud != nil { break }   // خطأ تحميل/ذاكرة على المعالج: ما نعيد
             }
             if Task.isCancelled { return }
             let llmMs = Int(Date().timeIntervalSince(tLLM) * 1000)
@@ -338,8 +343,18 @@ final class PhoneAgent: ObservableObject {
     /// اختيار شاشة الوكيل: "" = نفس صفحة النماذج حسب الجهاز، "cpu:<id>" نموذج معالج، "gpu:<repo>" نموذج كرت شاشة
     static var pick: String { UserDefaults.standard.string(forKey: "agentModelPick") ?? "" }
     /// نموذج المعالج اللي يشتغل للوكيل الحين (nil = كرت الشاشة)
+    /// مزوّد سحابي مختار للوكيل (لو فيه مفتاح)
+    static var cloud: CloudProvider? {
+        let p = pick
+        // «تلقائي» يتبع صفحة النماذج: لو فيه نموذج سحابي مفعّل للدردشة، الوكيل يستخدمه
+        if p.isEmpty { return CloudLLM.active }
+        guard p.hasPrefix("cloud:"), let c = CloudProvider(rawValue: String(p.dropFirst(6))), c.hasKey else { return nil }
+        return c
+    }
     static func cpuSpecForStep() -> GGUFSpec? {
         let p = pick
+        if cloud != nil { return nil }
+        if p.hasPrefix("cloud:") { return LLMService.onCPU ? GGUFSpec.active : nil }
         if p.hasPrefix("cpu:"), let s = GGUFSpec.all.first(where: { "cpu:" + $0.id == p }), s.isDownloaded { return s }
         if p.hasPrefix("gpu:") {
             if LLMService.onCPU {
@@ -355,6 +370,16 @@ final class PhoneAgent: ObservableObject {
         let t0 = Date()
         var model = "gpu-mlx"
         defer { slog("agent: model=\(model) \(Int(Date().timeIntervalSince(t0) * 1000))ms") }
+        // سحابي (اختياري، بمفتاح المستخدم): النص + الصورة يروحون لخوادم المزوّد
+        if let c = Self.cloud {
+            model = "cloud-\(c.rawValue):\(c.model)\(image == nil ? "" : "+img")"
+            do { return try await CloudAgent.ask(c, system: Self.system, user: user, image: image) }
+            catch {
+                slog("agent: cloud error \(c.rawValue)")   // بدون تفاصيل ممكن فيها بيانات
+                say("⚠️ \(error)")
+                return ""
+            }
+        }
         // على المعالج: نموذج المعالج المختار من صفحة النماذج (llama.cpp) مع قيود الصيغة
         if let spec = Self.cpuSpecForStep() {
             model = "\(spec.id)-cpu+gbnf"
@@ -735,13 +760,15 @@ final class PhoneAgent: ObservableObject {
 
     /// صورة الشاشة مصغّرة مع أرقام العناصر مرسومة عليها: من البث لو شغّال، وإلا لقطة من خدمة الأدوات
     private func visionImage(_ els: [Element], lastFailed: Bool) async -> URL? {
-        guard Self.see == .share else { return nil }
-        if Self.cpuSpecForStep() != nil { slog("agent: vision skipped (cpu/llama.cpp, no mmproj) — text only"); return nil }
-        guard await ModelManager.shared.ensureVision() else { slog("agent: vision unavailable"); return nil }
+        let cloud = Self.cloud != nil
+        // السحابي يشوف الصور دائمًا (لقطة لو البث طافي)؛ المحلي بس في وضع مشاركة الشاشة
+        guard cloud || Self.see == .share else { return nil }
+        if !cloud, Self.cpuSpecForStep() != nil { slog("agent: vision skipped (cpu/llama.cpp, no mmproj) — text only"); return nil }
+        if !cloud { guard await ModelManager.shared.ensureVision() else { slog("agent: vision unavailable"); return nil } }
         guard let fr = await currentFrame() else { return nil }
         let (img, src) = fr
         let mode = src
-        let w: CGFloat = 448
+        let w: CGFloat = cloud ? 768 : 448
         let size = CGSize(width: w, height: (img.size.height / img.size.width * w).rounded())
         let pts = UIScreen.main.bounds.size
         let k = size.width / pts.width
@@ -1068,6 +1095,9 @@ struct PhoneAgentView: View {
     @State private var testOut = ""
     @State private var shareLive = false
     @AppStorage("agentModelPick") private var agentPick = ""
+    @State private var keysVersion = 0
+    @State private var askConsent = false
+    @State private var pendingPick = ""
     @ObservedObject private var models = ModelManager.shared
 
     var body: some View {
@@ -1083,13 +1113,28 @@ struct PhoneAgentView: View {
                 }
                 Picker("نموذج الوكيل", selection: $agentPick) {
                     Text("نفس صفحة النماذج (تلقائي)").tag("")
-                    ForEach(GGUFSpec.all.filter { $0.isDownloaded }) { Text("المعالج: \($0.name)").tag("cpu:" + $0.id) }
-                    ForEach(Catalog.llms.filter { models.downloaded.contains($0.id) }) { Text("كرت الشاشة: \($0.title)").tag("gpu:" + $0.id) }
+                    Section("على الجهاز") {
+                        ForEach(GGUFSpec.all.filter { $0.isDownloaded }) { Text("المعالج: \($0.name)").tag("cpu:" + $0.id) }
+                        ForEach(Catalog.llms.filter { models.downloaded.contains($0.id) }) { Text("كرت الشاشة: \($0.title)").tag("gpu:" + $0.id) }
+                    }
+                    let free = CloudProvider.free.filter { keysVersion >= 0 && $0.hasKey }
+                    if !free.isEmpty {
+                        Section("سحابي مجاني") { ForEach(free) { Text("\($0.short): \($0.model)").tag("cloud:" + $0.rawValue) } }
+                    }
+                    let paid = CloudProvider.paid.filter { keysVersion >= 0 && $0.hasKey }
+                    if !paid.isEmpty {
+                        Section("سحابي مدفوع") { ForEach(paid) { Text("\($0.short): \($0.model)").tag("cloud:" + $0.rawValue) } }
+                    }
+                }
+                .onChange(of: agentPick) { old, v in
+                    if v.hasPrefix("cloud:"), !UserDefaults.standard.bool(forKey: "cloudConsent") { pendingPick = old; askConsent = true }
                 }
                 Text(agentPick.isEmpty
-                     ? "يستخدم المختار في صفحة النماذج: كرت الشاشة والتطبيق قدّام، والمعالج بالخلفية."
+                     ? "يستخدم المختار في صفحة النماذج: كرت الشاشة والتطبيق قدّام، والمعالج بالخلفية، أو النموذج السحابي لو مفعّل."
+                     : agentPick.hasPrefix("cloud:") ? "سحابي: نص الشاشة وصورتها في كل خطوة يروحون لخوادم الخدمة. يشتغل بالخلفية بس يحتاج إنترنت."
                      : (agentPick.hasPrefix("gpu:") ? "لو التطبيق بالخلفية (معالج بس) يرجع لنموذج المعالج المختار." : "يشتغل على المعالج حتى والتطبيق قدّام."))
                     .font(.footnote).foregroundStyle(.secondary)
+                NavigationLink("مفاتيح الخدمات") { CloudKeysView(onChange: { keysVersion += 1 }) }
                 Picker("أقصى عدد خطوات", selection: $maxSteps) {
                     ForEach([10, 20, 30], id: \.self) { Text("\($0)").tag($0) }
                 }
@@ -1140,6 +1185,21 @@ struct PhoneAgentView: View {
             }
         }
         .navigationTitle("الوكيل (تجريبي)")
+        .alert("الوكيل السحابي", isPresented: $askConsent) {
+            Button("موافق", role: .destructive) { UserDefaults.standard.set(true, forKey: "cloudConsent") }
+            Button("إلغاء", role: .cancel) { agentPick = pendingPick }
+        } message: {
+            Text("لما تختار نموذج سحابي، نص الشاشة (أسماء الأزرار والعناصر) وصورة الشاشة في كل خطوة يروحون لخوادم الخدمة اللي اخترتها، حسب سياسة خصوصيتها. لا تستخدمه على شاشات فيها معلومات حساسة. هالتنبيه يطلع مرة وحدة.")
+        }
+    }
+}
+
+/// مفاتيح الخدمات السحابية للوكيل (نفس مفاتيح صفحة النماذج)
+struct CloudKeysView: View {
+    var onChange: () -> Void
+    var body: some View {
+        Form { CloudSections(showActivate: false, onChange: onChange) }
+            .navigationTitle("مفاتيح الخدمات")
     }
 }
 
