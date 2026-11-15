@@ -122,6 +122,8 @@ final class PhoneAgent: ObservableObject {
         unsurface()
         AgentNotify.done(r)
         HostPairing.shared.keepAlive(false)
+        // Qwen يتحمّل عند الطلب ويتفضّى بعد المهمة (الذاكرة)
+        if Self.agentModel == "qwen" { Task { await LlamaEngine.qwen.unload() } }
         slog("agent: finish \(r)")
     }
 
@@ -284,7 +286,52 @@ final class PhoneAgent: ObservableObject {
     قواعد: لا تخترع أرقام عناصر غير موجودة. لو الهدف تحقق قل done. لو انحسبت نفس الخطوة مرتين بدون تغيير جرّب شي ثاني.
     """
 
+    /// نموذج الوكيل المختار: gemma (الحالي) أو qwen (Qwen3.5-4B على llama.cpp)
+    static var agentModel: String { UserDefaults.standard.string(forKey: "agentModel") ?? "gemma" }
+
+    /// GBNF: يجبر الرد يكون خطوة JSON وحدة أو {"actions":[…]} حتى ٣
+    static let grammar = #"""
+    root ::= act | multi
+    multi ::= "{\"actions\":[" act ("," act)? ("," act)? "]}"
+    act ::= tap | type | simple | swipe | open | url | search | done
+    tap ::= "{\"action\":\"tap\",\"id\":" [0-9] [0-9]? "}"
+    type ::= "{\"action\":\"type\",\"text\":" str "}"
+    simple ::= "{\"action\":\"" ("enter" | "back" | "home") "\"}"
+    swipe ::= "{\"action\":\"swipe\",\"dir\":\"" ("up" | "down" | "left" | "right") "\"}"
+    open ::= "{\"action\":\"open\",\"app\":" str "}"
+    url ::= "{\"action\":\"url\",\"url\":" str "}"
+    search ::= "{\"action\":\"search\",\"q\":" str "}"
+    done ::= "{\"action\":\"done\",\"summary\":" str "}"
+    str ::= "\"" [^"\\\x00-\x1F]{0,120} "\""
+    """#
+
+    /// يحمّل Qwen عند الطلب؛ يفضّي نموذج المعالج الثاني، والـMLX لو الذاكرة ضيقة
+    private func askQwen(_ user: String) async -> String {
+        guard GGUFSpec.qwen.isDownloaded else { say("⚠️ Qwen3.5-4B مو منزّل — نزّله من شاشة الوكيل"); return "" }
+        if !(await LlamaEngine.qwen.isLoaded) {
+            await LlamaEngine.shared.unload()
+            if RAM.availableMB < 3800 { await LLMService.shared.unload(); slog("agent: unloaded MLX for qwen (avail=\(RAM.availableMB)MB)") }
+        }
+        do {
+            return try await LlamaEngine.qwen.complete(system: Self.system, user: user, maxTokens: 160, grammar: Self.grammar)
+        } catch { slog("agent: qwen error \(error)"); say("⚠️ Qwen: \(error)"); return "" }
+    }
+
     private func ask(_ user: String, image: URL? = nil) async -> String {
+        let t0 = Date()
+        var model = "gemma-mlx"
+        defer { slog("agent: model=\(model) \(Int(Date().timeIntervalSince(t0) * 1000))ms") }
+        if Self.agentModel == "qwen" {
+            model = "qwen3.5-4b-cpu+gbnf"
+            return await askQwen(user)
+        }
+        // Gemma على المعالج (llama.cpp): نفس القيود
+        if LLMService.onCPU, image == nil, LlamaModelFile.isDownloaded {
+            model = "gemma-cpu+gbnf"
+            do { return try await LlamaEngine.shared.complete(system: Self.system, user: user, maxTokens: 160, grammar: Self.grammar) }
+            catch { slog("agent: gemma cpu error \(error)"); return "" }
+        }
+        // Gemma على كرت الشاشة (MLX): بدون قيود، تحليل صارم
         var out = ""
         do {
             let st = try await LLMService.shared.stream(system: Self.system, history: [], user: user, maxTokens: 160,
@@ -586,6 +633,7 @@ final class PhoneAgent: ObservableObject {
     /// صورة الشاشة مصغّرة مع أرقام العناصر مرسومة عليها: من البث لو شغّال، وإلا لقطة من خدمة الأدوات
     private func visionImage(_ els: [Element], lastFailed: Bool) async -> URL? {
         guard Self.see == .share else { return nil }
+        if Self.agentModel == "qwen" { slog("agent: vision skipped (qwen text-only)"); return nil }
         if LLMService.onCPU { slog("agent: vision skipped (cpu/llama.cpp, no mmproj) — text only"); return nil }
         guard await ModelManager.shared.ensureVision() else { slog("agent: vision unavailable"); return nil }
         guard let fr = await currentFrame() else { return nil }
@@ -984,6 +1032,8 @@ struct PhoneAgentView: View {
     @State private var see = PhoneAgent.see
     @AppStorage("agentMaxSteps") private var maxSteps = 10
     @State private var testOut = ""
+    @AppStorage("agentModel") private var agentModel = "gemma"
+    @ObservedObject private var qwenDL = LlamaDownloader.qwen
     @State private var shareLive = false
 
     var body: some View {
@@ -996,6 +1046,27 @@ struct PhoneAgentView: View {
                     }
                 } else {
                     Button("ابدأ") { agent.start(goal) }.disabled(goal.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                Picker("نموذج الوكيل", selection: $agentModel) {
+                    Text("Gemma 4 E2B").tag("gemma")
+                    Text("Qwen3.5-4B").tag("qwen")
+                }
+                if agentModel == "qwen" {
+                    if qwenDL.downloaded {
+                        HStack {
+                            Text("Qwen3.5-4B جاهز (\(GGUFSpec.qwen.sizeText))").font(.footnote)
+                            Spacer()
+                            Button("احذف", role: .destructive) { qwenDL.delete() }.font(.footnote)
+                        }
+                    } else if qwenDL.running {
+                        ProgressView(value: qwenDL.progress) { Text("ينزّل Qwen3.5-4B… \(Int(qwenDL.progress * 100))%").font(.footnote) }
+                        Button("إلغاء") { qwenDL.cancel() }
+                    } else {
+                        Button("نزّل Qwen3.5-4B (\(GGUFSpec.qwen.sizeText))") { qwenDL.start() }
+                        Text("المتوفر: \(ByteCountFormatter.string(fromByteCount: LlamaModelFile.freeBytes, countStyle: .file))").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if !qwenDL.message.isEmpty { Text(qwenDL.message).font(.footnote).foregroundStyle(.secondary) }
+                    Text("يشتغل على المعالج (حتى بالخلفية)، ورده مقيّد بصيغة الخطوات فما يطلع JSON خربان. أبطأ من Gemma لكن أذكى.").font(.footnote).foregroundStyle(.secondary)
                 }
                 Picker("أقصى عدد خطوات", selection: $maxSteps) {
                     ForEach([10, 20, 30], id: \.self) { Text("\($0)").tag($0) }
