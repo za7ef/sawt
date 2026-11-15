@@ -11,7 +11,7 @@ final class PhoneAgent: ObservableObject {
     static let shared = PhoneAgent()
 
     struct Step: Identifiable { let id = UUID(); let text: String }
-    struct Element { let kind: String; let label: String; let value: String; let frame: CGRect; let secure: Bool }
+    struct Element { var kind: String; let label: String; let value: String; let frame: CGRect; let secure: Bool }
 
     @Published var running = false
     @Published var goal = ""
@@ -486,13 +486,52 @@ final class PhoneAgent: ObservableObject {
         }
         let b = UIScreen.main.bounds
         els = els.filter { $0.frame.intersects(b) }
-        els = Array(els.prefix(40))
+        els = Self.rank(els, screen: b)
         // مشاركة الشاشة + المعالج (خلفية): ما فيه رؤية للنموذج، فنقرأ النص من الصورة ونضيفه كعناصر قابلة للضغط
         if Self.see == .share, LLMService.onCPU {
             let extra = await ocrElements(existing: els)
-            els += extra.prefix(max(0, 55 - els.count))
+            els += extra.prefix(max(0, 75 - els.count))
         }
         return (app, els)
+    }
+
+    /// عدد صفوف القوائم اللي انطوت في آخر قراءة
+    static var hiddenRows = 0
+
+    /// ترتيب العناصر قبل القص: خانات الكتابة/البحث أول، بعدين أشرطة فوق/تحت (تبويبات، أدوات، بحث آيفون ٢٦+)،
+    /// بعدين الأزرار، وآخر شي النصوص. صفوف القوائم الطويلة نخلي أول ٨ بس.
+    static func rank(_ input: [Element], screen b: CGRect, cap: Int = 60) -> [Element] {
+        var els = input.map { e -> Element in
+            var e = e
+            let t = (e.label + " " + e.value).lowercased()
+            if e.kind == "field" || e.kind == "search" || e.kind == "other" || e.kind == "button",
+               ["بحث", "ابحث", "search"].contains(where: { t.contains($0) }) && e.frame.height < 80 { e.kind = "search" }
+            return e
+        }
+        func isRow(_ e: Element) -> Bool {
+            e.frame.width > b.width * 0.8 && e.frame.height >= 40 && e.frame.height < 160 &&
+            e.frame.minY > b.height * 0.15 && e.frame.maxY < b.height * 0.88 && !["field", "search", "switch"].contains(e.kind)
+        }
+        var rows = 0
+        hiddenRows = 0
+        els = els.filter { e in
+            guard isRow(e) else { return true }
+            rows += 1
+            if rows > 8 { hiddenRows += 1; return false }
+            return true
+        }
+        func prio(_ e: Element) -> Int {
+            if e.kind == "field" || e.kind == "search" { return 0 }
+            let bar = e.frame.minY > b.height * 0.85 || e.frame.maxY < b.height * 0.15
+            if e.kind == "tabbar" || (bar && ["button", "link", "other", "image"].contains(e.kind)) { return 1 }
+            if ["button", "switch", "link"].contains(e.kind) { return 2 }
+            return 3
+        }
+        let picked = els.enumerated().sorted { (prio($0.element), $0.offset) < (prio($1.element), $1.offset) }.prefix(cap)
+        // نرجّع الترتيب الأصلي (ترتيب الشاشة) عشان الأرقام منطقية
+        let out = picked.sorted { $0.offset < $1.offset }.map { $0.element }
+        slog("agent: rank in=\(input.count) rows_hidden=\(hiddenRows) out=\(out.count) search=\(out.filter { $0.kind == "search" }.count) fields=\(out.filter { $0.kind == "field" }.count)")
+        return out
     }
 
     static func describe(app: String, _ els: [Element]) -> String {
@@ -505,6 +544,7 @@ final class PhoneAgent: ObservableObject {
             lines.append(l)
         }
         if els.isEmpty { lines.append("(ما فيه عناصر مقروءة)") }
+        if hiddenRows > 0 { lines.append("(+\(hiddenRows) صف ثاني في القائمة — اسحب up عشان تشوفها)") }
         return lines.joined(separator: "\n")
     }
 
