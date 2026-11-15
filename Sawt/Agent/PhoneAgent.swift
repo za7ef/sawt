@@ -132,8 +132,9 @@ final class PhoneAgent: ObservableObject {
         Self.useLive = lo.contains("\"ok\":true")
         slog("agent: live session \(Self.useLive ? "open" : "failed") \(Int(Date().timeIntervalSince(tl) * 1000))ms \(Self.useLive ? "" : String(lo.prefix(160)))")
         defer { Self.useLive = false; Task { _ = await Self.exec(.liveClose) } }
-        if await webShortcut() { return }
-        if await shortcut() { return }
+        let ready = UserDefaults.standard.bool(forKey: "agentShortcuts")
+        if ready, await webShortcut() { return }
+        if ready, await shortcut() { return }
         let pre = Self.mentionedApp(goal)
         if pre == nil, UIApplication.shared.applicationState == .active {
             // صوت قدّام: نطلع للرئيسية قبل أول قراءة (ما نقرأ ولا نلمس واجهة صوت)
@@ -144,7 +145,7 @@ final class PhoneAgent: ObservableObject {
         if let app = Self.mentionedApp(goal) {
             let t = Date()
             let o = await openApp(app)
-            say("1. افتح \(app)" + (o.ok ? "" : " ⚠️"))
+            say("1. ⚡ افتح \(app) (اختصار)" + (o.ok ? "" : " ⚠️"))
             slog("agent: timing pre-open action=\(Int(Date().timeIntervalSince(t) * 1000))ms")
             if o.ok, Self.isOnlyOpen(goal) { finish("✅ فتحت \(app)"); return }
         }
@@ -152,6 +153,7 @@ final class PhoneAgent: ObservableObject {
         var history: [String] = []
         var fails = 0
         var lastFailed = false
+        var verifying = false
         for n in 1...maxSteps {
             if Task.isCancelled { return }
             let tAX = Date()
@@ -175,7 +177,7 @@ final class PhoneAgent: ObservableObject {
             let user = """
             الهدف: \(goal)
             الخطوات السابقة: \(history.isEmpty ? "لا شيء" : history.suffix(6).joined(separator: " ← "))
-            الخطوة رقم \(n) من \(maxSteps).
+            الخطوة رقم \(n) من \(maxSteps).\(verifying ? "\nقلت إنك خلصت. تحقق من الشاشة الحالية: إذا الهدف متحقق فعلاً ويظهر على الشاشة رد done، وإلا رد الخطوة التالية." : "")
             الشاشة الحالية:
             \(screenText)
             """
@@ -191,6 +193,7 @@ final class PhoneAgent: ObservableObject {
             if Task.isCancelled { return }
             let llmMs = Int(Date().timeIntervalSince(tLLM) * 1000)
             slog("agent: raw step=\(n) «\(raw.prefix(300))»")
+            log.append(Step(text: "🤖 النموذج (\(llmMs)ms\(img == nil ? "" : "، مع صورة")): \(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))"))
             guard let first = action, let kind0 = first["action"] as? String else {
                 say("⚠️ رد غير مفهوم: \(raw.prefix(120))"); finish("النموذج ما رد بخطوة صالحة"); return
             }
@@ -204,11 +207,19 @@ final class PhoneAgent: ObservableObject {
                     history.append("رقم غلط \(action["id"] ?? "؟") — اختر رقم من القائمة"); lastFailed = true; break
                 }
                 let desc = Self.describeAction(action, els)
-                say("\(n). \(desc)")
+                say("\(n). 🤖 \(desc)")
                 if kind == "done" {
                     let sum = (action["summary"] as? String) ?? "خلصت"
+                    // لازم نتأكد من الشاشة: أول done نعيد القراءة ونسأله يتحقق
+                    if !verifying && n < maxSteps {
+                        verifying = true
+                        say("🔎 أتأكد من الشاشة قبل ما أقول خلصت")
+                        history.append("قال خلص (\(sum)) — يتحقق")
+                        break
+                    }
                     finish("✅ \(sum)"); return
                 }
+                verifying = false
                 if let why = Self.sensitive(action, els) {
                     let ok = await askConfirm("\(why)\n\(desc)\nأكمل؟")
                     if Task.isCancelled { return }
@@ -283,6 +294,25 @@ final class PhoneAgent: ObservableObject {
         return ["tap", "type", "enter", "swipe", "open", "back", "home", "done"].contains(k)
     }
 
+    /// أي تطبيق من الجدول مذكور في الهدف (بعد فعل أو بأي مكان ككلمة/كلمتين)
+    static func namedAppBundle(_ g: String) -> String? {
+        if let a = mentionedApp(g), let e = lookup(a) { return e.bundle }
+        let words = g.split(separator: " ").map { w -> String in
+            var x = String(w)
+            for p in ["و", "ل", "ب"] where lookup(x) == nil && x.hasPrefix(p) && x.count > 3 { x = String(x.dropFirst()) }
+            return x
+        }
+        for n in [2, 1] where words.count >= n {
+            for i in 0...(words.count - n) {
+                let c = words[i..<(i + n)].joined(separator: " ")
+                // كلمات عامة ما نعتبرها اسم تطبيق لحالها
+                if n == 1, ["قوقل", "جوجل", "google", "x", "اكس"].contains(c.lowercased()) { continue }
+                if let e = lookup(c), !e.bundle.isEmpty { return e.bundle }
+            }
+        }
+        return nil
+    }
+
     static func firstJSONArray(_ s: String) -> String {
         guard let a = s.firstIndex(of: "[") else { return "[]" }
         var depth = 0
@@ -310,11 +340,17 @@ final class PhoneAgent: ObservableObject {
             ("الساعه", "com.apple.mobiletimer"),
             ("Notes", "com.apple.mobilenotes"),
             ("سفاري", "com.apple.mobilesafari"),
+            ("البريد", "com.apple.mobilemail"),
         ]
-        return cases.map { c in
+        var out = cases.map { c in
             let got = lookup(c.0)?.bundle ?? "nil"
             return "\(got == c.1 ? "✅" : "❌") «\(c.0)» → \(got)"
         }
+        // هدف فيه تطبيق ثاني + «ابحث عن»: لازم ما يروح للويب
+        let g = "روح تطبيق البريد وأبحث عن رسائل قوقل"
+        let b = namedAppBundle(g) ?? "nil"
+        out.append("\(b == "com.apple.mobilemail" ? "✅" : "❌") هدف «\(g)» → تطبيق \(b) (بدون اختصار الويب)")
+        return out
     }
 
     /// بس لو الهدف يبدأ بـ«افتح/open/شغّل» + اسم تطبيق من الجدول بعده مباشرة
@@ -701,6 +737,11 @@ final class PhoneAgent: ObservableObject {
     /// اختصار الويب: «ابحث عن …» أو «ادخل موقع x.com» → نفتح الرابط مباشرة في سفاري (صوت لازم يكون قدّام)
     private func webShortcut() async -> Bool {
         let g = goal
+        // لو الهدف يذكر تطبيق غير المتصفح/قوقل، البحث يكون داخل التطبيق (النموذج يسويه)
+        let webApps: Set<String> = ["com.apple.mobilesafari", "com.google.chrome.ios", "com.google.GoogleMobile"]
+        if let b = Self.namedAppBundle(g), !webApps.contains(b) {
+            slog("agent: web shortcut skipped (app named: \(b))"); return false
+        }
         var url: URL?
         for k in ["ابحث عن", "أبحث عن", "إبحث عن", "وابحث عن", "ابحث في قوقل عن", "ابحث فيه عن", "دور على", "دوّر على", "search for", "google "] {
             if let r = g.range(of: k, options: .caseInsensitive) {
@@ -717,7 +758,7 @@ final class PhoneAgent: ObservableObject {
         }
         guard let url else { return false }
         guard UIApplication.shared.applicationState == .active else { slog("agent: web shortcut skipped (not foreground)"); return false }
-        say("⚡ أفتح \(url.absoluteString.removingPercentEncoding ?? url.absoluteString)")
+        say("⚡ اختصار (بدون النموذج): أفتح \(url.absoluteString.removingPercentEncoding ?? url.absoluteString)")
         let ok = await UIApplication.shared.open(url)
         slog("agent: web open \(url.absoluteString) ok=\(ok)")
         guard ok else { return false }
@@ -742,7 +783,7 @@ final class PhoneAgent: ObservableObject {
         guard wantsNote || (g.contains("الملاحظات") && text != nil) else { return false }
         say("⚡ اختصار: ملاحظة جديدة")
         let o = await openApp("notes")
-        say("1. افتح الملاحظات" + (o.ok ? "" : " ⚠️"))
+        say("1. ⚡ افتح الملاحظات" + (o.ok ? "" : " ⚠️"))
         guard o.ok, !Task.isCancelled else { return false }
         try? await Task.sleep(nanoseconds: 800_000_000)
         guard let scr = await readScreen() else { return false }
@@ -753,11 +794,11 @@ final class PhoneAgent: ObservableObject {
         let f = scr.1[i].frame
         let (x, y) = Self.norm(CGPoint(x: f.midX, y: f.midY))
         _ = await Self.exec(.tap(x, y))
-        say("2. اضغط «\(scr.1[i].label)»")
+        say("2. ⚡ اضغط «\(scr.1[i].label)»")
         guard let text else { finish("✅ فتحت ملاحظة جديدة"); return true }
         try? await Task.sleep(nanoseconds: 1_000_000_000)
         let r = await Self.typeText(text)
-        say("3. اكتب «\(text)»" + (r.contains("\"ok\":true") ? "" : " ⚠️"))
+        say("3. ⚡ اكتب «\(text)»" + (r.contains("\"ok\":true") ? "" : " ⚠️"))
         guard r.contains("\"ok\":true") else { return false }
         finish("✅ أنشأت ملاحظة وكتبت «\(text)»")
         return true
@@ -872,6 +913,7 @@ struct PhoneAgentView: View {
     @State private var see = PhoneAgent.see
     @AppStorage("agentMaxSteps") private var maxSteps = 10
     @State private var testOut = ""
+    @AppStorage("agentShortcuts") private var shortcuts = false
     @State private var shareLive = false
 
     var body: some View {
@@ -885,6 +927,7 @@ struct PhoneAgentView: View {
                 } else {
                     Button("ابدأ") { agent.start(goal) }.disabled(goal.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
+                Toggle("الخطوات الجاهزة (اختصارات بدون النموذج)", isOn: $shortcuts)
                 Picker("أقصى عدد خطوات", selection: $maxSteps) {
                     ForEach([10, 20, 30], id: \.self) { Text("\($0)").tag($0) }
                 }
