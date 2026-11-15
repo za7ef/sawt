@@ -157,8 +157,10 @@ async fn connect_rp(cfg: &Config, bytes: &[u8], steps: &mut Vec<Json>) -> Res<Se
     Ok(Session { adapter, rsd })
 }
 
-fn runtime() -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime")
+/// وقت تشغيل واحد يعيش طول عمر التطبيق (عشان الجلسة المفتوحة ومهامها تبقى شغالة بين النداءات)
+fn runtime() -> &'static tokio::runtime::Runtime {
+    static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    RT.get_or_init(|| tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("runtime"))
 }
 
 fn run(cfg_json: *const c_char, f: impl AsyncFnOnce(Config, &mut Vec<Json>) -> Res<Json>) -> *mut c_char {
@@ -618,4 +620,143 @@ pub extern "C" fn sawtctl_host_accept(cfg: *const c_char, timeout_s: u32, pin_cb
             Err(_) => { steps.push(json!({"step": "host_pair_timeout", "trace": trace})); Err("ما كمل الاقتران (ما انكتب الرمز؟)".into()) }
         }
     })
+}
+
+
+// ───────────── جلسة حيّة للوكيل ─────────────
+// نفتح النفق + RSD + بث الشاشة + HID + الكيبورد مرة وحدة، ونعيد استخدامها لكل خطوة.
+
+struct Live {
+    s: Session,
+    _inp: Input,
+    hid: Uhid,
+    kb: MainKeyboardService,
+}
+
+static LIVE: std::sync::Mutex<Option<Live>> = std::sync::Mutex::new(None);
+
+async fn live_open(cfg: &Config, steps: &mut Vec<Json>) -> Res<Live> {
+    let t0 = Instant::now();
+    let mut s = connect(cfg, steps).await?;
+    let inp = open_input(&mut s, steps).await?;
+    let mut hid = Uhid::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("hid: {e:?}"))?;
+    let kb = hid.create_main_keyboard().await.map_err(|e| format!("kbd create: {e:?}"))?;
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    steps.push(json!({"step": "live_open", "ms": t0.elapsed().as_millis() as u64}));
+    Ok(Live { s, _inp: inp, hid, kb })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sawtctl_live_open(cfg: *const c_char) -> *mut c_char {
+    run(cfg, async move |cfg, steps| {
+        if let Some(old) = LIVE.lock().unwrap().take() { drop(old) }
+        let l = live_open(&cfg, steps).await?;
+        *LIVE.lock().unwrap() = Some(l);
+        Ok(json!({"live": true}))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sawtctl_live_close() -> *mut c_char {
+    let l = LIVE.lock().unwrap().take();
+    if let Some(mut l) = l {
+        runtime().block_on(async {
+            let _ = l.hid.remove_main_keyboard(&mut l.kb).await;
+            let _ = tokio::time::timeout(Duration::from_secs(2), l._inp.client.stop_media_stream()).await;
+            for d in l._inp.drains.drain(..) { d.abort(); }
+        });
+    }
+    CString::new(json!({"ok": true}).to_string()).unwrap_or_default().into_raw()
+}
+
+/// خطوة على الجلسة الحية: {"op":"tap","x":..,"y":..} | drag | keys{what} | screen{wait} | launch{q}
+/// لو ما فيه جلسة نفتح وحدة. لو فشلت الخطوة نسكّر الجلسة (المرة الجاية تنفتح من جديد).
+#[unsafe(no_mangle)]
+pub extern "C" fn sawtctl_live(cfg: *const c_char, op: *const c_char) -> *mut c_char {
+    let op = cstr(op);
+    run(cfg, async move |cfg, steps| {
+        let o: Json = serde_json::from_str(&op).map_err(|e| format!("op: {e}"))?;
+        let taken = LIVE.lock().unwrap().take();
+        let mut l = match taken { Some(l) => l, None => live_open(&cfg, steps).await? };
+        let t0 = Instant::now();
+        let r = live_step(&mut l, &o, steps).await;
+        steps.push(json!({"step": "live_step", "ms": t0.elapsed().as_millis() as u64}));
+        // نسكّر الجلسة بس لو فشل الإدخال نفسه (لمس/كيبورد)؛ فشل القراءة أو الإطلاق ما يعني إن النفق خربان
+        let soft = matches!(o.get("op").and_then(|v| v.as_str()), Some("screen") | Some("launch"));
+        if r.is_ok() || soft { *LIVE.lock().unwrap() = Some(l) }
+        r
+    })
+}
+
+async fn live_step(l: &mut Live, o: &Json, steps: &mut Vec<Json>) -> Res<Json> {
+    let n = |k: &str| o.get(k).and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+    let st = |k: &str| o.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    match st("op").as_str() {
+        "tap" => {
+            let (x, y) = (n("x"), n("y"));
+            l.hid.send_touchscreen(TOUCHSCREEN_STATE_CONTACT, x, y, None).await.map_err(|e| format!("touch down: {e:?}"))?;
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            l.hid.send_touchscreen(TOUCHSCREEN_STATE_RELEASE, x, y, None).await.map_err(|e| format!("touch up: {e:?}"))?;
+            Ok(json!({"tapped": [x, y]}))
+        }
+        "drag" => {
+            l.hid.drag(n("x1"), n("y1"), n("x2"), n("y2"), 16, 12).await.map_err(|e| format!("drag: {e:?}"))?;
+            Ok(json!({"dragged": true}))
+        }
+        "keys" => {
+            let mut what = st("what");
+            if let Some(t) = what.strip_prefix("paste:").map(|x| x.to_string()) {
+                let mut pb = idevice::core_device::PasteboardServiceClient::connect_rsd(&mut l.s.adapter, &mut l.s.rsd).await.map_err(|e| format!("pasteboard: {e:?}"))?;
+                pb.set_text(&t, idevice::core_device::GENERAL_PASTEBOARD).await.map_err(|e| format!("pasteboard set: {e:?}"))?;
+                steps.push(json!({"step": "pasteboard_set", "chars": t.chars().count()}));
+                what = "paste".into();
+            }
+            match what.as_str() {
+                "home" => {
+                    let mut ind = IndigoHidClient::connect_rsd(&mut l.s.adapter, &mut l.s.rsd).await.map_err(|e| format!("indigo: {e:?}"))?;
+                    let e = |e| format!("key: {e:?}");
+                    ind.send_button(0x0C, 0x40, ButtonState::Down).await.map_err(e)?;
+                    tokio::time::sleep(Duration::from_millis(80)).await;
+                    ind.send_button(0x0C, 0x40, ButtonState::Up).await.map_err(e)?;
+                }
+                "paste" => kb_press(&mut l.hid, &mut l.kb, &[0xE3], 0x19, 40).await?,
+                "return" => kb_press(&mut l.hid, &mut l.kb, &[], 0x28, 30).await?,
+                "backspace" => kb_press(&mut l.hid, &mut l.kb, &[], 0x2A, 30).await?,
+                text => {
+                    for ch in text.chars() {
+                        let Some((u, shift)) = ascii_usage(ch) else { continue };
+                        let mods: &[u16] = if shift { &[0xE1] } else { &[] };
+                        kb_press(&mut l.hid, &mut l.kb, mods, u as u16, 12).await?;
+                    }
+                }
+            }
+            Ok(json!({"sent": what}))
+        }
+        "screen" => {
+            let w = n("wait").max(1500) as u64;
+            ax::elements(&mut l.s.adapter, &l.s.rsd, Duration::from_millis(w), steps).await
+        }
+        "launch" => {
+            let q = st("q");
+            let mut asvc = idevice::core_device::AppServiceClient::connect_rsd(&mut l.s.adapter, &mut l.s.rsd).await.map_err(|e| format!("appservice: {e:?}"))?;
+            let mut bundle = (q.contains('.') && !q.contains(' ')).then(|| q.clone());
+            if bundle.is_none() {
+                let apps = asvc.list_apps(false, true, false, false, true).await.map_err(|e| format!("list_apps: {e:?}"))?;
+                let norm = |x: &str| x.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+                let nq = norm(&q);
+                let mut best: Option<(u8, String)> = None;
+                for a in &apps {
+                    let na = norm(&a.name);
+                    if nq.is_empty() || na.is_empty() { continue }
+                    let sc = if na == nq { 3 } else if na.starts_with(&nq) || nq.starts_with(&na) { 2 } else if na.contains(&nq) || nq.contains(&na) { 1 } else { 0 };
+                    if sc > 0 && best.as_ref().map_or(true, |b| sc > b.0) { best = Some((sc, a.bundle_identifier.clone())) }
+                }
+                bundle = best.map(|b| b.1);
+            }
+            let b = bundle.ok_or_else(|| format!("ما لقيت تطبيق باسم «{q}»"))?;
+            let r = asvc.launch_application(b.clone(), &[], false, false, None, None, None).await.map_err(|e| format!("launch {b}: {e:?}"))?;
+            Ok(json!({"bundle": b, "pid": r.pid}))
+        }
+        other => Err(format!("op غير معروف: {other}")),
+    }
 }
