@@ -39,7 +39,22 @@ pub fn take() -> Vec<String> {
         Ok(mut v) => { let s = String::from_utf8_lossy(&v).to_string(); v.clear(); s }
         Err(_) => return vec![],
     };
-    let lines: Vec<String> = s.lines().map(|l| l.chars().take(300).collect()).collect();
+    let lines: Vec<String> = s.lines().map(|l| redact(l).chars().take(300).collect()).collect();
     let start = lines.len().saturating_sub(60);
     lines[start..].to_vec()
+}
+
+/// نخفي أي سلسلة طويلة شكلها مفتاح (hex/base64 ≥ 24 حرف) عشان ما تطلع في السجلات
+fn redact(l: &str) -> String {
+    let mut out = String::new();
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut String| {
+        if run.chars().count() >= 24 { out.push_str("<redacted>") } else { out.push_str(run) }
+        run.clear();
+    };
+    for c in l.chars() {
+        if c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=' { run.push(c) } else { flush(&mut run, &mut out); out.push(c) }
+    }
+    flush(&mut run, &mut out);
+    out
 }

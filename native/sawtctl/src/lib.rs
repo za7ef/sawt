@@ -414,11 +414,13 @@ pub extern "C" fn sawtctl_keys(cfg: *const c_char, what: *const c_char) -> *mut 
     run(cfg, async move |cfg, steps| {
         let mut s = connect(&cfg, steps).await?;
         let mut what = what;
+        let mut pbc = None;
         if let Some(t) = what.strip_prefix("paste:").map(|x| x.to_string()) {
             let mut pb = idevice::core_device::PasteboardServiceClient::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("pasteboard: {e:?}"))?;
             pb.set_text(&t, idevice::core_device::GENERAL_PASTEBOARD).await.map_err(|e| format!("pasteboard set: {e:?}"))?;
             steps.push(json!({"step": "pasteboard_set", "chars": t.chars().count()}));
             what = "paste".into();
+            pbc = Some(pb);
         }
         let inp = open_input(&mut s, steps).await?;
         let r: Res<()> = async {
@@ -437,7 +439,14 @@ pub extern "C" fn sawtctl_keys(cfg: *const c_char, what: *const c_char) -> *mut 
             tokio::time::sleep(Duration::from_millis(250)).await;
             let res: Res<()> = async {
                 match what.as_str() {
-                    "paste" => kb_press(&mut hid, &mut kb, &[0xE3], 0x19, 50).await?,
+                    "paste" => {
+                        kb_press(&mut hid, &mut kb, &[0xE3], 0x19, 50).await?;
+                        // نفضّي الحافظة بعد اللصق (ممكن فيها كلمة سر)
+                        if let Some(pb) = pbc.as_mut() {
+                            tokio::time::sleep(Duration::from_millis(400)).await;
+                            let _ = pb.set_text("", idevice::core_device::GENERAL_PASTEBOARD).await;
+                        }
+                    }
                     "return" => kb_press(&mut hid, &mut kb, &[], 0x28, 30).await?,
                     text => {
                         for ch in text.chars() {
@@ -604,7 +613,14 @@ pub extern "C" fn sawtctl_host_accept(cfg: *const c_char, timeout_s: u32, pin_cb
             if HOST_CANCEL.load(std::sync::atomic::Ordering::SeqCst) { return Err("انلغى".into()) }
             if Instant::now() > deadline { return Err("انتهى الوقت وما اتصل الجوال".into()) }
             match tokio::time::timeout(Duration::from_millis(300), listener.accept()).await {
-                Ok(Ok(x)) => break x,
+                Ok(Ok((st, p))) => {
+                    // بس الجوال نفسه (نفس العنوان أو loopback) — نرفض أي جهاز ثاني في الشبكة
+                    let local = st.local_addr().ok().map(|a| a.ip());
+                    if p.ip().is_loopback() || Some(p.ip()) == local { break (st, p) }
+                    steps.push(json!({"step": "host_reject_peer", "peer": p.ip().to_string()}));
+                    drop(st);
+                    continue
+                }
                 Ok(Err(e)) => return Err(format!("accept: {e}")),
                 Err(_) => continue,
             }
@@ -612,9 +628,19 @@ pub extern "C" fn sawtctl_host_accept(cfg: *const c_char, timeout_s: u32, pin_cb
         steps.push(json!({"step": "host_connected", "peer": peer.to_string()}));
         tlog::clear();
         let mut host = PairableHost::new(RpPairingSocket::new_device(stream), info);
-        let r = tokio::time::timeout(Duration::from_secs(180), host.accept(&mut rpf, |pin: String| async move {
+        let fut = tokio::time::timeout(Duration::from_secs(180), host.accept(&mut rpf, |pin: String| async move {
             if let (Some(cb), Ok(c)) = (pin_cb, CString::new(pin)) { cb(c.as_ptr()) }
-        })).await;
+        }));
+        let cancelled = async {
+            loop {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                if HOST_CANCEL.load(std::sync::atomic::Ordering::SeqCst) { break }
+            }
+        };
+        let r = tokio::select! {
+            r = fut => r,
+            _ = cancelled => { let _ = tlog::take(); return Err("انلغى".into()) }
+        };
         let trace = tlog::take();
         match r {
             Ok(Ok(peer_dev)) => {
