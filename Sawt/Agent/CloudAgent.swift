@@ -142,7 +142,7 @@ enum CloudAgent {
             if let img { content.append(["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\(img)", "detail": "low"]]) }
             body = ["model": model,
                     "messages": [["role": "system", "content": system], ["role": "user", "content": content]]]
-            if or { body["max_tokens"] = 2000 }   // بعض النماذج المجانية ما تدعم response_format
+            if or { body["max_tokens"] = 2000 }   // OpenRouter: بدون response_format (بعض المزوّدين ما يدعمونه ويرفضه التوجيه)
             else { body["response_format"] = ["type": "json_object"]; body["max_completion_tokens"] = 2000 }
         case .anthropic:
             req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
@@ -207,8 +207,15 @@ enum CloudAgent {
     /// رسالة واضحة بالعربي حسب الخطأ (بدون المفتاح طبعًا)
     static func errorText(_ p: CloudProvider, code: Int, json: [String: Any]?) -> String {
         let err = json?["error"] as? [String: Any]
-        let msg = (err?["message"] as? String ?? "").prefix(160)
+        var msgFull = err?["message"] as? String ?? ""
+        if msgFull.hasPrefix("{") || msgFull.hasPrefix("[") { msgFull = "" }   // رسالة فيها JSON خام: ما نعرضها
+        let msg = msgFull.replacingOccurrences(of: "\n", with: " ").prefix(160)
         let status = err?["status"] as? String ?? err?["type"] as? String ?? ""
+        // OpenRouter: ما فيه مزوّد يدعم خصائص الطلب (failed_routing_step / No endpoints found)
+        let rawAll = json.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        if p == .openrouter, rawAll.contains("failed_routing") || rawAll.contains("Request Feature Support") || rawAll.contains("No endpoints found") {
+            return "هالموديل ما يدعم الطلب — جرّب موديل ثاني"
+        }
         switch code {
         case 401, 403:
             if p.isGemini, msg.lowercased().contains("location") { return "Gemini مو متاح في منطقتك بهالمفتاح" }

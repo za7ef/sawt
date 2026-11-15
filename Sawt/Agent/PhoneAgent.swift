@@ -1096,6 +1096,9 @@ struct PhoneAgentView: View {
     @State private var see = PhoneAgent.see
     @AppStorage("agentMaxSteps") private var maxSteps = 10
     @State private var testOut = ""
+    @State private var xctOut = ""
+    @State private var xctRunning = false
+    @State private var xctWaiting = false
     @State private var shareLive = false
     @AppStorage("agentModelPick") private var agentPick = ""
     @State private var keysVersion = 0
@@ -1211,6 +1214,31 @@ struct PhoneAgentView: View {
                     testOut = r.joined(separator: "\n")
                 }
                 if !testOut.isEmpty { Text(testOut).font(.footnote.monospaced()).textSelection(.enabled) }
+            }
+            Section {
+                Button {
+                    guard !xctRunning else { return }
+                    xctRunning = true
+                    xctWaiting = false
+                    xctOut = ""
+                    slog("xct: probe tapped")
+                    Task { @MainActor in
+                        let lines = await XCTestProbe.run(onWaiting: { Task { @MainActor in xctWaiting = true } })
+                        xctOut = lines.joined(separator: "\n")
+                        xctWaiting = false
+                        xctRunning = false
+                    }
+                } label: {
+                    HStack {
+                        Text(xctRunning ? "جاري الاختبار…" : "اختبار XCTest (تجريبي)")
+                        if xctRunning { Spacer(); ProgressView() }
+                    }
+                }
+                .disabled(xctRunning)
+                if xctWaiting { Text("دورك: دخّل رمز الجوال لو طلبه iOS").foregroundStyle(.orange) }
+                if !xctOut.isEmpty { Text(xctOut).font(.footnote.monospaced()).textSelection(.enabled) }
+            } footer: {
+                Text("يجرب طريقة التحكم الجديدة: يحمّل أدوات الاختبار من صورة المطوّر ويقرأ الشاشة الرئيسية. ممكن يطلب iOS رمز الجوال لتفعيل الأتمتة.")
             }
             if !agent.log.isEmpty {
                 Section("الخطوات") {
