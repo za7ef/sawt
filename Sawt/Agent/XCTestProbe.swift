@@ -63,45 +63,123 @@ enum XCTestProbe {
         return Step(name: "classes", ok: missing.isEmpty, detail: missing.isEmpty ? "كلها موجودة" : "ناقص: " + missing.joined(separator: ", "))
     }
 
+    /// ينادي دالة ترجع كائن (بدون وسيط أو بوسيط كائن واحد) داخل @try/@catch.
+    /// يرجع (الكائن، نص الاستثناء لو صار)
+    private static func call(_ target: AnyObject, _ selName: String, _ arg: AnyObject? = nil) -> (AnyObject?, String?) {
+        let sel = NSSelectorFromString(selName)
+        guard target.responds(to: sel) else { return (nil, "\(selName) مو مدعوم") }
+        var result: AnyObject?
+        let exc = SawtTryCatch {
+            if let arg {
+                result = target.perform(sel, with: arg)?.takeUnretainedValue()
+            } else {
+                result = target.perform(sel)?.takeUnretainedValue()
+            }
+        }
+        return (result, exc)
+    }
+
+    /// جلسة الاختبار: XCUIApplication يطلب جلسة مع testmanagerd (اللي يفتحها Xcode عادة).
+    /// هنا نجرّب نجهّزها من داخل التطبيق: إعداد اختبار نشط + جلسة XCTRunnerDaemonSession.
+    /// تجريبي: ما نعرف إذا iOS يسمح لتطبيق عادي يكلّم testmanagerd بدون Xcode.
+    static func sessionSteps() -> [Step] {
+        var out: [Step] = []
+        // ١) إعداد الاختبار النشط
+        if let cfgCls = NSClassFromString("XCTestConfiguration") {
+            let (active, e1) = call(cfgCls as AnyObject, "activeTestConfiguration")
+            if let e1 { out.append(Step(name: "config", ok: false, detail: "activeTestConfiguration: " + e1)) }
+            else if active != nil { out.append(Step(name: "config", ok: true, detail: "موجود من قبل")) }
+            else {
+                // نسوي واحد جديد ونحط له التطبيق الهدف
+                let (fresh, e2) = call(cfgCls as AnyObject, "new")
+                if let fresh {
+                    var notes: [String] = []
+                    for (sel, val) in [("setTargetApplicationBundleID:", "com.apple.springboard" as NSString)] {
+                        let (_, e) = call(fresh, sel, val)
+                        notes.append(e == nil ? "\(sel) ✓" : "\(sel) ✗ \(e!)")
+                    }
+                    let (_, e3) = call(cfgCls as AnyObject, "setActiveTestConfiguration:", fresh)
+                    notes.append(e3 == nil ? "setActiveTestConfiguration ✓" : "setActiveTestConfiguration ✗ \(e3!)")
+                    out.append(Step(name: "config", ok: e3 == nil, detail: notes.joined(separator: "؛ ")))
+                } else {
+                    out.append(Step(name: "config", ok: false, detail: "ما قدر يسوي XCTestConfiguration: " + (e2 ?? "رجع فاضي")))
+                }
+            }
+        } else {
+            out.append(Step(name: "config", ok: false, detail: "XCTestConfiguration مو موجود"))
+        }
+        // ٢) جلسة testmanagerd
+        if let sessCls = NSClassFromString("XCTRunnerDaemonSession") {
+            let (sess, e) = call(sessCls as AnyObject, "sharedSession")
+            if let e { out.append(Step(name: "testmanagerd", ok: false, detail: "sharedSession: " + e)) }
+            else if let sess = sess as? NSObject {
+                var info: [String] = []
+                for key in ["daemonProtocolVersion", "daemonCapabilities"] {
+                    var v: Any?
+                    let ex = SawtTryCatch { v = sess.value(forKey: key) }
+                    info.append(ex == nil ? "\(key)=\(v.map { "\($0)" } ?? "nil")" : "\(key) ✗ \(ex!)")
+                }
+                out.append(Step(name: "testmanagerd", ok: true, detail: info.joined(separator: "؛ ")))
+            } else {
+                out.append(Step(name: "testmanagerd", ok: false, detail: "sharedSession رجع فاضي (غالبًا ما فيه اتصال)"))
+            }
+        } else {
+            out.append(Step(name: "testmanagerd", ok: false, detail: "XCTRunnerDaemonSession مو موجود"))
+        }
+        // ٣) الجهاز
+        if let devCls = NSClassFromString("XCUIDevice") {
+            let (dev, e) = call(devCls as AnyObject, "sharedDevice")
+            out.append(Step(name: "device", ok: e == nil && dev != nil, detail: e ?? (dev == nil ? "sharedDevice رجع فاضي" : "موجود")))
+        }
+        return out
+    }
+
     /// لقطة شجرة SpringBoard: يرجع عدد العناصر وأول التسميات
     /// (يشتغل على خيط خلفي؛ ممكن يطوّل لين يدخل المستخدم الرمز)
+    /// كل نداء لأطر XCTest داخل SawtTryCatch: أي استثناء يصير سطر ✗ بدل كراش
     static func snapshotSpringboard() -> Step {
-        guard let cls: AnyClass = NSClassFromString("XCUIApplication") else {
+        guard let cls = NSClassFromString("XCUIApplication") as? NSObject.Type else {
             return Step(name: "snapshot", ok: false, detail: "XCUIApplication مو موجود")
         }
-        // alloc + initWithBundleIdentifier: عن طريق تنفيذ الدوال مباشرة (نفس اللي يسويه الكومبايلر في ObjC)
-        let allocSel = NSSelectorFromString("alloc")
         let initSel = NSSelectorFromString("initWithBundleIdentifier:")
-        guard let allocMethod = class_getClassMethod(cls, allocSel) else {
-            return Step(name: "snapshot", ok: false, detail: "alloc مو موجود")
+        guard cls.instancesRespond(to: initSel) else {
+            return Step(name: "snapshot", ok: false, detail: "initWithBundleIdentifier: مو مدعوم")
         }
-        typealias AllocFn = @convention(c) (AnyClass, Selector) -> Unmanaged<AnyObject>
         typealias InitFn = @convention(c) (AnyObject, Selector, NSString) -> Unmanaged<AnyObject>?
-        // alloc يرجع +1 والـinit يستهلكه؛ ناخذه بدون retain عشان ما ينحرر مرتين
-        let raw = unsafeBitCast(method_getImplementation(allocMethod), to: AllocFn.self)(cls, allocSel).takeUnretainedValue()
         guard let initMethod = class_getInstanceMethod(cls, initSel) else {
-            return Step(name: "snapshot", ok: false, detail: "initWithBundleIdentifier: مو موجود")
+            return Step(name: "snapshot", ok: false, detail: "ما لقى تنفيذ initWithBundleIdentifier:")
         }
         let initFn = unsafeBitCast(method_getImplementation(initMethod), to: InitFn.self)
-        guard let app = initFn(raw, initSel, "com.apple.springboard" as NSString)?.takeRetainedValue() as? NSObject else {
-            return Step(name: "snapshot", ok: false, detail: "ما قدر يسوي XCUIApplication(springboard)")
+        var app: NSObject?
+        if let exc = SawtTryCatch({
+            // alloc يرجع +1 والـinit يستهلكه؛ ناخذه بدون retain عشان ما ينحرر مرتين
+            let raw: AnyObject = cls.perform(NSSelectorFromString("alloc")).takeUnretainedValue()
+            app = initFn(raw, initSel, "com.apple.springboard" as NSString)?.takeRetainedValue() as? NSObject
+        }) {
+            return Step(name: "init", ok: false, detail: exc)
+        }
+        guard let app else {
+            return Step(name: "init", ok: false, detail: "ما قدر يسوي XCUIApplication(springboard)")
         }
         let snapSel = NSSelectorFromString("snapshotWithError:")
-        guard app.responds(to: snapSel) else {
+        guard app.responds(to: snapSel), let imp = app.method(for: snapSel) else {
             return Step(name: "snapshot", ok: false, detail: "snapshotWithError: مو مدعوم")
         }
-        // نمرر مؤشر خطأ حقيقي عشان نعرف السبب لو رجع nil
-        var err: NSError?
         typealias SnapFn = @convention(c) (AnyObject, Selector, AutoreleasingUnsafeMutablePointer<NSError?>?) -> AnyObject?
-        guard let imp = app.method(for: snapSel) else {
-            return Step(name: "snapshot", ok: false, detail: "ما لقى تنفيذ snapshotWithError:")
-        }
         let fn = unsafeBitCast(imp, to: SnapFn.self)
-        let snap = fn(app, snapSel, &err)
+        var err: NSError?
+        var snap: AnyObject?
+        if let exc = SawtTryCatch({ snap = fn(app, snapSel, &err) }) {
+            return Step(name: "snapshot", ok: false, detail: exc)
+        }
         guard let snapObj = snap as? NSObject else {
             return Step(name: "snapshot", ok: false, detail: "رجع فاضي: " + (err.map { "\($0.domain) \($0.code) \($0.localizedDescription)" } ?? "بدون خطأ"))
         }
-        guard let dict = snapObj.value(forKey: "dictionaryRepresentation") as? [AnyHashable: Any] else {
+        var dictAny: Any?
+        if let exc = SawtTryCatch({ dictAny = snapObj.value(forKey: "dictionaryRepresentation") }) {
+            return Step(name: "snapshot", ok: false, detail: "dictionaryRepresentation: " + exc)
+        }
+        guard let dict = dictAny as? [AnyHashable: Any] else {
             return Step(name: "snapshot", ok: false, detail: "ما فيه dictionaryRepresentation")
         }
         var count = 0
@@ -136,6 +214,7 @@ enum XCTestProbe {
                     cont.resume(returning: lines)
                     return
                 }
+                sessionSteps().forEach { add($0, 0) }
                 // لو اللقطة طوّلت أكثر من ٥ ثواني غالبًا iOS يطلب الرمز
                 let waiting = DispatchWorkItem { slog("xct: snapshot slow → probably waiting for passcode"); onWaiting() }
                 DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: waiting)

@@ -51,6 +51,7 @@ targets:
         OTHER_LDFLAGS: ["-lc++"]
         LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks", "/System/Developer/usr/lib", "/System/Developer/Library/Frameworks", "/System/Developer/Library/PrivateFrameworks"]
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_OBJC_BRIDGING_HEADER: Sawt/Sawt-Bridging-Header.h
     dependencies:
       - target: SawtWidgets
         embed: true
