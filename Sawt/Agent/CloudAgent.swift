@@ -72,7 +72,7 @@ enum CloudProvider: String, CaseIterable, Identifiable {
     /// النماذج الافتراضية (من صفحات النماذج الرسمية وقائمة OpenRouter، نوفمبر ٢٠٢٦) — تقدر تغيّرها
     var defaultModel: String {
         switch self {
-        case .gemini: "gemini-3.8-flash"
+        case .gemini: "gemini-3.5-flash"
         case .openrouter: "google/gemma-4-31b-it:free"
         case .openai: "gpt-6.1-terra"
         case .anthropic: "claude-haiku-5-5"
@@ -101,6 +101,8 @@ enum CloudProvider: String, CaseIterable, Identifiable {
     var hasKey: Bool { key != nil }
     var model: String {
         let m = UserDefaults.standard.string(forKey: "cloudModel." + rawValue)?.trimmingCharacters(in: .whitespaces) ?? ""
+        // الافتراضي القديم (3.8 عليه ضغط كثير ويرجع 503) → الافتراضي الجديد
+        if self == .gemini, m == "gemini-3.8-flash" { UserDefaults.standard.removeObject(forKey: "cloudModel.gemini"); return defaultModel }
         return m.isEmpty ? defaultModel : m
     }
 }
@@ -109,11 +111,23 @@ enum CloudProvider: String, CaseIterable, Identifiable {
 enum CloudAgent {
     struct Failure: LocalizedError, CustomStringConvertible {
         let message: String
+        var code: Int = 0
         var description: String { message }
         var errorDescription: String? { message }
     }
 
+    /// موديل احتياطي لـGemini المجاني لو الأساسي عليه ضغط (503)
+    static let geminiFallback = "gemini-3.5-flash"
+
     static func ask(_ p: CloudProvider, system: String, user: String, image: URL?) async throws -> String {
+        do { return try await askOnce(p, model: p.model, system: system, user: user, image: image) }
+        catch let f as Failure where f.code == 503 && p.isGemini && p.model != geminiFallback {
+            slog("agent: gemini 503 → fallback \(geminiFallback)")
+            return try await askOnce(p, model: geminiFallback, system: system, user: user, image: image)
+        }
+    }
+
+    private static func askOnce(_ p: CloudProvider, model: String, system: String, user: String, image: URL?) async throws -> String {
         guard let key = p.key else { throw Failure(message: "ما فيه مفتاح لـ\(p.short) — حطه في «مفاتيح الخدمات»") }
         let img = image.flatMap { try? Data(contentsOf: $0) }?.base64EncodedString()
         var req: URLRequest
@@ -126,7 +140,7 @@ enum CloudAgent {
             if or { req.setValue("Sawt", forHTTPHeaderField: "X-Title") }
             var content: [[String: Any]] = [["type": "text", "text": user + (or ? "\n\nرد بسطر JSON واحد فقط." : "")]]
             if let img { content.append(["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\(img)", "detail": "low"]]) }
-            body = ["model": p.model,
+            body = ["model": model,
                     "messages": [["role": "system", "content": system], ["role": "user", "content": content]]]
             if or { body["max_tokens"] = 2000 }   // بعض النماذج المجانية ما تدعم response_format
             else { body["response_format"] = ["type": "json_object"]; body["max_completion_tokens"] = 2000 }
@@ -137,10 +151,10 @@ enum CloudAgent {
             var content: [[String: Any]] = []
             if let img { content.append(["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": img]]) }
             content.append(["type": "text", "text": user + "\n\nرد بسطر JSON واحد فقط بدون أي كلام ثاني."])
-            body = ["model": p.model, "max_tokens": 2000, "system": system,
+            body = ["model": model, "max_tokens": 2000, "system": system,
                     "messages": [["role": "user", "content": content]]]
         case .gemini, .geminiPaid:
-            let m = p.model.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? p.model
+            let m = model.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? model
             req = URLRequest(url: URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(m):generateContent")!)
             req.setValue(key, forHTTPHeaderField: "x-goog-api-key")
             var parts: [[String: Any]] = [["text": user]]
@@ -166,7 +180,7 @@ enum CloudAgent {
         }
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        guard code == 200 else { throw Failure(message: errorText(p, code: code, json: json)) }
+        guard code == 200 else { throw Failure(message: errorText(p, code: code, json: json), code: code) }
         guard let json else { throw Failure(message: "رد غير مفهوم من \(p.short)") }
 
         var text = ""
@@ -221,6 +235,9 @@ enum CloudAgent {
         case 402:
             if p == .openrouter { return "OpenRouter: النموذج مو مجاني أو الرصيد خلص — استخدم نموذج ينتهي بـ:free" }
             return "رصيد \(p.short) خلص"
+        case 503:
+            if p.isGemini { return "Gemini عليه ضغط الحين — جرّب بعد شوي أو غيّر الموديل" }
+            return "\(p.short) عليه ضغط الحين — جرّب بعد شوي"
         case 500...599:
             return "\(p.short) عنده مشكلة الحين (\(code)) — جرّب بعد شوي"
         default:
