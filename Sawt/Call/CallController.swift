@@ -288,7 +288,7 @@ final class CallController: ObservableObject {
             return
         }
         cancelReply(recordPartial: true)
-        let ok = await ModelManager.shared.ensureVision()
+        let ok = await ModelManager.shared.ensureVision(cloudOK: CloudLLM.useInCalls)
         await LLMService.shared.resetCallSession()   // النموذج تغيّر: الجلسة القديمة ما تصلح
         lastMemBlock = ""
         guard ok, state != .idle else {
