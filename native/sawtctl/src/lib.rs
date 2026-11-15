@@ -319,6 +319,7 @@ pub extern "C" fn sawtctl_tap(cfg: *const c_char, x: u16, y: u16) -> *mut c_char
         let mut hid = UniversalHidServiceClient::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("hid: {e:?}"))?;
         hid.tap(x, y).await.map_err(|e| format!("tap: {e:?}"))?;
         steps.push(json!({"step": "tap"}));
+        tokio::time::sleep(Duration::from_millis(500)).await;
         let mut client = st.client;
         let _ = client.stop_media_stream().await;
         drop((st.audio_udp, st.video_udp));
@@ -335,6 +336,7 @@ pub extern "C" fn sawtctl_drag(cfg: *const c_char, x1: u16, y1: u16, x2: u16, y2
         tokio::time::sleep(Duration::from_millis(300)).await;
         let mut hid = UniversalHidServiceClient::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("hid: {e:?}"))?;
         hid.drag(x1, y1, x2, y2, 30, 20).await.map_err(|e| format!("drag: {e:?}"))?;
+        tokio::time::sleep(Duration::from_millis(500)).await;
         let mut client = st.client;
         let _ = client.stop_media_stream().await;
         drop((st.audio_udp, st.video_udp));
@@ -350,6 +352,14 @@ pub extern "C" fn sawtctl_keys(cfg: *const c_char, what: *const c_char) -> *mut 
         let mut s = connect(&cfg, steps).await?;
         let st = stream::start_screen_media_stream(&mut s.adapter, &mut s.rsd, 1).await?;
         tokio::time::sleep(Duration::from_millis(300)).await;
+        // paste:<نص> → نحط النص في حافظة الجوال عبر pasteboardservice، بعدين Cmd+V
+        let mut what = what;
+        if let Some(t) = what.strip_prefix("paste:").map(|x| x.to_string()) {
+            let mut pb = idevice::core_device::PasteboardServiceClient::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("pasteboard: {e:?}"))?;
+            pb.set_text(&t, idevice::core_device::GENERAL_PASTEBOARD).await.map_err(|e| format!("pasteboard set: {e:?}"))?;
+            steps.push(json!({"step": "pasteboard_set", "chars": t.chars().count()}));
+            what = "paste".into();
+        }
         let mut ind = IndigoHidClient::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("indigo: {e:?}"))?;
         let e = |e| format!("key: {e:?}");
         match what.as_str() {
@@ -361,9 +371,11 @@ pub extern "C" fn sawtctl_keys(cfg: *const c_char, what: *const c_char) -> *mut 
             "paste" => {
                 // Cmd (Left GUI 0xE3) + V (0x19)
                 ind.send_keyboard(0xE3, ButtonState::Down).await.map_err(e)?;
+                tokio::time::sleep(Duration::from_millis(60)).await;
                 ind.send_keyboard(0x19, ButtonState::Down).await.map_err(e)?;
-                tokio::time::sleep(Duration::from_millis(40)).await;
+                tokio::time::sleep(Duration::from_millis(60)).await;
                 ind.send_keyboard(0x19, ButtonState::Up).await.map_err(e)?;
+                tokio::time::sleep(Duration::from_millis(60)).await;
                 ind.send_keyboard(0xE3, ButtonState::Up).await.map_err(e)?;
             }
             "return" => {
@@ -382,6 +394,7 @@ pub extern "C" fn sawtctl_keys(cfg: *const c_char, what: *const c_char) -> *mut 
             }
         }
         steps.push(json!({"step": "keys"}));
+        tokio::time::sleep(Duration::from_millis(500)).await;
         let mut client = st.client;
         let _ = client.stop_media_stream().await;
         drop((st.audio_udp, st.video_udp));
