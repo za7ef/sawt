@@ -61,6 +61,8 @@ final class PhoneAgent: ObservableObject {
         HostPairing.shared.keepAlive(true)
         let bg = UIApplication.shared.beginBackgroundTask(withName: "agent") { }
         defer { if bg != .invalid { UIApplication.shared.endBackgroundTask(bg) } }
+        if await shortcut() { return }
+        if Task.isCancelled { return }
         var history: [String] = []
         var fails = 0
         for n in 1...maxSteps {
@@ -128,6 +130,7 @@ final class PhoneAgent: ObservableObject {
     {"action":"back"}
     {"action":"home"}
     {"action":"done","summary":"وش سويت باختصار"}
+    في open اكتب اسم التطبيق بالإنجليزي إذا تعرفه (Notes, Settings, WhatsApp...).
     قواعد: لا تخترع أرقام عناصر غير موجودة. لو الهدف تحقق قل done. لو انحسبت نفس الخطوة مرتين بدون تغيير جرّب شي ثاني.
     """
 
@@ -201,90 +204,132 @@ final class PhoneAgent: ObservableObject {
         case "type": return "اكتب «\((a["text"] as? String ?? "").prefix(60))»"
         case "enter": return "إدخال"
         case "swipe": return "سحب \(a["dir"] as? String ?? "")"
-        case "open": return "افتح \(a["app"] as? String ?? "")"
-        case "back": return "رجوع"
-        case "home": return "الشاشة الرئيسية"
-        case "done": return "خلصت"
-        default: return k
-        }
-    }
-
-    static let riskyWords = ["send", "إرسال", "ارسال", "أرسل", "ارسل", "delete", "حذف", "احذف", "مسح", "remove", "pay", "ادفع",
-                             "دفع", "buy", "شراء", "اشتر", "purchase", "subscribe", "اشترك", "transfer", "تحويل", "حوّل",
-                             "call", "اتصال", "اتصل", "post", "نشر", "انشر", "confirm", "تأكيد"]
-
-    static func sensitive(_ a: [String: Any], _ els: [Element]) -> String? {
-        let k = a["action"] as? String ?? ""
-        if k == "tap", let i = a["id"] as? Int, els.indices.contains(i) {
-            let l = els[i].label.lowercased()
-            if l.split(separator: " ").count <= 4, riskyWords.contains(where: { l.contains($0) }) { return "خطوة حساسة (إرسال/حذف/دفع)." }
-        }
-        if k == "type", els.contains(where: { $0.secure }) { return "فيه خانة كلمة سر على الشاشة." }
-        if k == "enter" { return "زر الإدخال ممكن يرسل." }
-        return nil
-    }
-
-    // ───── التنفيذ ─────
-    private static func norm(_ p: CGPoint) -> (UInt16, UInt16) {
-        let b = UIScreen.main.bounds
-        let x = max(0, min(65535, p.x / b.width * 65535)), y = max(0, min(65535, p.y / b.height * 65535))
-        return (UInt16(x), UInt16(y))
-    }
-
-    private func perform(_ kind: String, _ a: [String: Any], _ els: [Element]) async -> (ok: Bool, info: String) {
-        func ok(_ r: String) -> (Bool, String) { (r.contains("\"ok\":true"), r) }
-        switch kind {
-        case "tap":
-            guard let i = a["id"] as? Int, els.indices.contains(i) else { return (false, "رقم عنصر غلط") }
-            let f = els[i].frame
-            let (x, y) = Self.norm(CGPoint(x: f.midX, y: f.midY))
-            return ok(await Self.exec(.tap(x, y)))
-        case "type":
-            let t = a["text"] as? String ?? ""
-            let ascii = t.unicodeScalars.allSatisfy { $0.isASCII && $0.value >= 32 }
-            return ok(await Self.exec(.keys(ascii ? t : "paste:" + t)))
-        case "enter":
-            return ok(await Self.exec(.keys("return")))
-        case "home":
-            return ok(await Self.exec(.keys("home")))
-        case "back":
-            // سحب من الحافة اليسار
-            let (x1, y) = Self.norm(CGPoint(x: 2, y: UIScreen.main.bounds.midY))
-            let (x2, _) = Self.norm(CGPoint(x: UIScreen.main.bounds.width * 0.75, y: 0))
-            return ok(await Self.exec(.drag(x1, y, x2, y)))
-        case "swipe":
-            let b = UIScreen.main.bounds
-            let c = CGPoint(x: b.midX, y: b.midY)
-            let dir = (a["dir"] as? String ?? "up").lowercased()
-            var p1 = c, p2 = c
-            switch dir {
-            case "down": p1.y = b.height * 0.3; p2.y = b.height * 0.75
-            case "left": p1.x = b.width * 0.85; p2.x = b.width * 0.15
-            case "right": p1.x = b.width * 0.15; p2.x = b.width * 0.85
-            default: p1.y = b.height * 0.75; p2.y = b.height * 0.3
-            }
-            let (x1, y1) = Self.norm(p1), (x2, y2) = Self.norm(p2)
-            return ok(await Self.exec(.drag(x1, y1, x2, y2)))
         case "open":
-            let app = a["app"] as? String ?? ""
+            let app = (a["app"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !app.isEmpty else { return (false, "اسم التطبيق فاضي") }
-            // الشاشة الرئيسية → سحب لتحت (بحث) → نكتب الاسم → إدخال
-            var r = await Self.exec(.keys("home"))
-            guard r.contains("\"ok\":true") else { return (false, r) }
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            let b = UIScreen.main.bounds
-            let (x, y1) = Self.norm(CGPoint(x: b.midX, y: b.height * 0.4)), (_, y2) = Self.norm(CGPoint(x: 0, y: b.height * 0.65))
-            r = await Self.exec(.drag(x, y1, x, y2))
-            try? await Task.sleep(nanoseconds: 900_000_000)
-            let ascii = app.unicodeScalars.allSatisfy { $0.isASCII }
-            r = await Self.exec(.keys(ascii ? app : "paste:" + app))
-            try? await Task.sleep(nanoseconds: 900_000_000)
-            r = await Self.exec(.keys("return"))
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-            return ok(r)
+            return await openApp(app)
         default:
             return (false, "خطوة غير معروفة")
         }
+    }
+
+    /// الإنجليزي حرف حرف؛ أي شي ثاني (عربي/رموز) دايمًا عن طريق الحافظة + Cmd+V
+    static func typeText(_ t: String) async -> String {
+        let ascii = t.unicodeScalars.allSatisfy { $0.isASCII && $0.value >= 32 && $0.value < 127 }
+        let hex = t.unicodeScalars.prefix(24).map { String(format: "%04X", $0.value) }.joined(separator: " ")
+        slog("agent: type via=\(ascii ? "keys" : "paste") text=«\(t)» u=[\(hex)]")
+        return await exec(.keys(ascii ? t : "paste:" + t))
+    }
+
+    /// جدول التطبيقات الشائعة: الاسم (عربي/إنجليزي) → معرّف الحزمة + الاسم الإنجليزي
+    static let apps: [(names: [String], bundle: String, en: String)] = [
+        (["الملاحظات", "ملاحظات", "notes"], "com.apple.mobilenotes", "Notes"),
+        (["الإعدادات", "الاعدادات", "اعدادات", "إعدادات", "settings"], "com.apple.Preferences", "Settings"),
+        (["الكاميرا", "كاميرا", "camera"], "com.apple.camera", "Camera"),
+        (["الصور", "صور", "photos"], "com.apple.mobileslideshow", "Photos"),
+        (["واتساب", "واتس", "الواتس", "whatsapp"], "net.whatsapp.WhatsApp", "WhatsApp"),
+        (["واتساب للأعمال", "واتس أعمال", "whatsapp business"], "net.whatsapp.WhatsAppSMB", "WhatsApp Business"),
+        (["يوتيوب", "اليوتيوب", "youtube"], "com.google.ios.youtube", "YouTube"),
+        (["سفاري", "المتصفح", "safari"], "com.apple.mobilesafari", "Safari"),
+        (["الرسائل", "رسائل", "messages", "imessage"], "com.apple.MobileSMS", "Messages"),
+        (["الساعة", "ساعة", "المنبه", "منبه", "clock", "alarm"], "com.apple.mobiletimer", "Clock"),
+        (["التقويم", "تقويم", "calendar"], "com.apple.mobilecal", "Calendar"),
+        (["الخرائط", "خرائط", "maps"], "com.apple.Maps", "Maps"),
+        (["قوقل ماب", "خرائط قوقل", "google maps"], "com.google.Maps", "Google Maps"),
+        (["متجر التطبيقات", "اب ستور", "آب ستور", "app store"], "com.apple.AppStore", "App Store"),
+        (["الهاتف", "هاتف", "phone"], "com.apple.mobilephone", "Phone"),
+        (["جهات الاتصال", "الأسماء", "contacts"], "com.apple.MobileAddressBook", "Contacts"),
+        (["البريد", "الايميل", "الإيميل", "mail"], "com.apple.mobilemail", "Mail"),
+        (["جيميل", "gmail"], "com.google.Gmail", "Gmail"),
+        (["التذكيرات", "تذكيرات", "reminders"], "com.apple.reminders", "Reminders"),
+        (["الحاسبة", "حاسبة", "calculator"], "com.apple.calculator", "Calculator"),
+        (["الملفات", "ملفات", "files"], "com.apple.DocumentsApp", "Files"),
+        (["الطقس", "طقس", "weather"], "com.apple.weather", "Weather"),
+        (["الموسيقى", "ميوزك", "music"], "com.apple.Music", "Music"),
+        (["الصحة", "health"], "com.apple.Health", "Health"),
+        (["المحفظة", "wallet"], "com.apple.Passbook", "Wallet"),
+        (["فيس تايم", "facetime"], "com.apple.facetime", "FaceTime"),
+        (["تيك توك", "تيكتوك", "tiktok"], "com.zhiliaoapp.musically", "TikTok"),
+        (["سناب", "سناب شات", "snapchat"], "com.toyopagroup.picaboo", "Snapchat"),
+        (["انستقرام", "انستا", "instagram"], "com.burbn.instagram", "Instagram"),
+        (["تويتر", "اكس", "إكس", "x", "twitter"], "com.atebits.Tweetie2", "X"),
+        (["تلقرام", "تيليجرام", "telegram"], "ph.telegra.Telegraph", "Telegram"),
+        (["كرنشي رول", "crunchyroll"], "com.crunchyroll.iphone", "Crunchyroll"),
+        (["صوت", "sawt"], "", "Sawt"),
+    ]
+
+    static func lookup(_ name: String) -> (bundle: String, en: String)? {
+        let n = name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "تطبيق ", with: "").replacingOccurrences(of: "برنامج ", with: "")
+        for e in apps where e.names.contains(where: { n == $0 }) { return (e.bundle, e.en) }
+        for e in apps where e.names.contains(where: { $0.count >= 3 && (n.contains($0) || $0.contains(n)) }) { return (e.bundle, e.en) }
+        return nil
+    }
+
+    /// جدول → إطلاق بالمعرّف؛ بعدها مطابقة من التطبيقات المثبتة؛ آخر شي البحث بالاسم الإنجليزي
+    func openApp(_ name: String) async -> (ok: Bool, info: String) {
+        let hit = Self.lookup(name)
+        slog("agent: open «\(name)» → \(hit?.bundle ?? "?")")
+        if let hit, !hit.bundle.isEmpty {
+            let r = await Self.exec(.launch(hit.bundle))
+            if r.contains("\"ok\":true") { try? await Task.sleep(nanoseconds: 1_200_000_000); return (true, r) }
+            say("⚠️ إطلاق \(hit.bundle): \(r.prefix(120))")
+        }
+        let q = hit?.en ?? name
+        let r = await Self.exec(.launch(q))
+        if r.contains("\"ok\":true") { try? await Task.sleep(nanoseconds: 1_200_000_000); return (true, r) }
+        say("⚠️ مطابقة الاسم: \(r.prefix(120))")
+        // آخر حل: البحث — بالإنجليزي بس
+        guard q.unicodeScalars.allSatisfy({ $0.isASCII }) else { return (false, "ما عرفت التطبيق «\(name)»") }
+        _ = await Self.exec(.keys("home"))
+        try? await Task.sleep(nanoseconds: 700_000_000)
+        let b = UIScreen.main.bounds
+        let (x, y1) = Self.norm(CGPoint(x: b.midX, y: b.height * 0.4)), (_, y2) = Self.norm(CGPoint(x: 0, y: b.height * 0.65))
+        _ = await Self.exec(.drag(x, y1, x, y2))
+        try? await Task.sleep(nanoseconds: 900_000_000)
+        _ = await Self.typeText(q)
+        try? await Task.sleep(nanoseconds: 700_000_000)
+        let r2 = await Self.exec(.keys("return"))
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        return (r2.contains("\"ok\":true"), r2)
+    }
+
+    /// اختصار بدون النموذج: «افتح الملاحظات وأنشئ ملاحظة جديدة واكتب ...»
+    /// يرجع true إذا خلص المهمة
+    private func shortcut() async -> Bool {
+        let g = goal
+        let wantsNote = ["ملاحظة جديدة", "ملاحظه جديده", "new note", "أنشئ ملاحظة", "انشئ ملاحظة", "سو ملاحظة", "سوّ ملاحظة"].contains { g.lowercased().contains($0) }
+        let text: String? = {
+            for k in ["واكتب فيها", "واكتب", "اكتب فيها", "اكتب", "and type", "type", "write"] {
+                if let r = g.range(of: k, options: .caseInsensitive) {
+                    let t = g[r.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: " :«»\"'،,"))
+                    return t.isEmpty ? nil : t
+                }
+            }
+            return nil
+        }()
+        guard wantsNote || (g.contains("الملاحظات") && text != nil) else { return false }
+        say("⚡ اختصار: ملاحظة جديدة")
+        let o = await openApp("notes")
+        say("1. افتح الملاحظات" + (o.ok ? "" : " ⚠️"))
+        guard o.ok, !Task.isCancelled else { return false }
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        guard let scr = await readScreen() else { return false }
+        let keys = ["new note", "ملاحظة جديدة", "compose", "إنشاء", "create note"]
+        guard let i = scr.1.firstIndex(where: { e in keys.contains { e.label.lowercased().contains($0) } }) else {
+            say("ما لقيت زر ملاحظة جديدة — أكمل بالنموذج"); return false
+        }
+        let f = scr.1[i].frame
+        let (x, y) = Self.norm(CGPoint(x: f.midX, y: f.midY))
+        _ = await Self.exec(.tap(x, y))
+        say("2. اضغط «\(scr.1[i].label)»")
+        guard let text else { finish("✅ فتحت ملاحظة جديدة"); return true }
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        let r = await Self.typeText(text)
+        say("3. اكتب «\(text)»" + (r.contains("\"ok\":true") ? "" : " ⚠️"))
+        guard r.contains("\"ok\":true") else { return false }
+        finish("✅ أنشأت ملاحظة وكتبت «\(text)»")
+        return true
     }
 
     /// ينفذ أمر sawtctl بنفس إعداد الاتصال حق شاشة الاختبار
