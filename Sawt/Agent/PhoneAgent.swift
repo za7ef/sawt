@@ -84,6 +84,7 @@ final class PhoneAgent: ObservableObject {
     func start(_ goal: String) -> String? {
         let g = goal.trimmingCharacters(in: .whitespacesAndNewlines)
         var why: String?
+        AgentNotify.setup()   // لو الإشعارات انمسحت/ما انضبطت أول مرة
         if g.isEmpty { why = "الهدف فاضي" }
         else if running { why = "الوكيل شغّال على مهمة ثانية — قل «وقف» أول" }
         else if !(PhoneControl.available && PhoneControl.hasPairing) { why = "التحكم بالجوال مو جاهز (اقتران/الأداة)" }
@@ -651,6 +652,10 @@ final class PhoneAgent: ObservableObject {
             if l.split(separator: " ").count <= 4, Self.hasWord(l) { return "خطوة حساسة (إرسال/حذف/دفع)." }
         }
         if k == "type", els.contains(where: { $0.secure }) { return "فيه خانة كلمة سر على الشاشة." }
+        // روابط تتصل/ترسل مباشرة (tel/sms/mailto/facetime…) مو تصفح
+        if k == "url", let u = (a["url"] as? String)?.lowercased(), !u.hasPrefix("http://"), !u.hasPrefix("https://") {
+            return "الرابط يفتح اتصال/رسالة/تطبيق مباشرة."
+        }
         // بحث: مفتاح الكيبورد «Search» ما يرسل، فما نوقف الوكيل ونسأل عن كل بحث
         if k == "enter" { return Self.searchKey ? nil : "زر الإدخال ممكن يرسل." }
         return nil
@@ -1169,7 +1174,8 @@ enum PhoneAgentTrigger {
         return toks.contains { stops.contains($0) }
     }
     static let chatPrefixes = ["/جوال", "/agent", "جوال:", "نفذ على الجوال", "نفّذ على الجوال"]
-    static let voicePrefixes = ["على الجوال", "نفذ على الجوال", "نفّذ على الجوال", "يا صوت نفذ", "يا صوت نفّذ", "on the phone"]
+    // «على الجوال» لحالها كانت تشتغل مع أسئلة عادية («على الجوال وش أحسن…»)؛ لازم فعل أمر
+    static let voicePrefixes = ["نفذ على الجوال", "نفّذ على الجوال", "سو على الجوال", "سوّ على الجوال", "يا صوت نفذ", "يا صوت نفّذ", "do on the phone", "on the phone do"]
     static func goal(_ t: String, voice: Bool = false) -> String? {
         let s = t.trimmingCharacters(in: .whitespacesAndNewlines)
         for p in (voice ? voicePrefixes : chatPrefixes) where s.lowercased().hasPrefix(p.lowercased()) {

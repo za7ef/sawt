@@ -37,7 +37,7 @@ final class ScreenShare: @unchecked Sendable {
                 slog("share: listener \(st)")
                 switch st {
                 case .ready: self.backoff = 1
-                case .failed:
+                case .failed, .waiting:   // waiting: المنفذ مشغول/الشبكة مو جاهزة — نفس المعاملة
                     // نعيد بمهلة تتضاعف (١، ٢، ٤… لين ٣٠ ثانية)
                     l.cancel()
                     let d = self.backoff; self.backoff = min(self.backoff * 2, 30)
