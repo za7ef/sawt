@@ -221,6 +221,11 @@ final class ChatStore: ObservableObject {
             append(bubble)
             let conv = currentID
             Task { @MainActor in
+                // لو الوكيل مشغول ما نسرق فقاعة المهمة الحالية
+                if PhoneAgent.shared.running {
+                    self.updateText(bubble.id, in: conv, "🤖 ما بديت: الوكيل شغّال على مهمة ثانية — قل «وقف» أول", save: true)
+                    return
+                }
                 PhoneAgent.shared.chatTarget = (conv, bubble.id)
                 PhoneAgent.shared.start(g)
             }
