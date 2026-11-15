@@ -14,6 +14,12 @@ FOUNDATION_EXPORT NSString * _Nullable SawtXCTEnableAutomation(void);
 /// ينادى من خيط خلفي (ينتظر الرد بحد timeout). يرجع nil لو انقبل الحدث، وإلا السبب.
 FOUNDATION_EXPORT NSString * _Nullable SawtXCTSynthesize(NSArray<NSValue *> *points, double duration, double timeout);
 
+/// وش مصدر عميل الوصول اللي انلقى (للسجل)
+FOUNDATION_EXPORT NSString *SawtXCTAXSource(void);
+
+/// معرّف الحزمة لرقم عملية عبر daemonProxy (_XCT_requestBundleIDForPID:reply:). nil لو ما عرف
+FOUNDATION_EXPORT NSString * _Nullable SawtXCTBundleForPID(int pid, double timeout);
+
 /// التطبيقات النشطة من عميل الوصول حق XCTest: مصفوفة قواميس {pid, bundle (لو معروف)}.
 FOUNDATION_EXPORT NSArray<NSDictionary<NSString *, id> *> *SawtXCTActiveApps(void);
 

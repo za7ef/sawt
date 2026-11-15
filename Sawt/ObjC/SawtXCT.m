@@ -117,11 +117,69 @@ NSString * _Nullable SawtXCTSynthesize(NSArray<NSValue *> *points, double durati
 
 // MARK: - قراءة الشاشة عبر عميل الوصول
 
+/// مصدر عميل الوصول اللي لقيناه (للسجل)
+static NSString *gSawtAXSource = @"ما انلقى";
+
+/// عميل الوصول: من XCUIDevice.sharedDevice.accessibilityInterface (الطريقة الحالية)، وإلا XCAXClient_iOS.sharedClient
 static id SawtAXClient(void) {
-    Class cls = NSClassFromString(@"XCAXClient_iOS");
-    SEL s = NSSelectorFromString(@"sharedClient");
-    if (!cls || ![cls respondsToSelector:s]) return nil;
-    return ((id (*)(id, SEL))objc_msgSend)(cls, s);
+    @try {
+        Class dev = NSClassFromString(@"XCUIDevice");
+        SEL shared = NSSelectorFromString(@"sharedDevice");
+        if (dev && [dev respondsToSelector:shared]) {
+            id device = ((id (*)(id, SEL))objc_msgSend)(dev, shared);
+            for (NSString *name in @[@"accessibilityInterface", @"_accessibilityInterface"]) {
+                SEL s = NSSelectorFromString(name);
+                if (device && [device respondsToSelector:s]) {
+                    id ax = ((id (*)(id, SEL))objc_msgSend)(device, s);
+                    if (ax) { gSawtAXSource = [NSString stringWithFormat:@"XCUIDevice.%@ (%@)", name, NSStringFromClass([ax class])]; return ax; }
+                }
+            }
+        }
+        Class cls = NSClassFromString(@"XCAXClient_iOS");
+        SEL s = NSSelectorFromString(@"sharedClient");
+        if (cls && [cls respondsToSelector:s]) {
+            id ax = ((id (*)(id, SEL))objc_msgSend)(cls, s);
+            if (ax) { gSawtAXSource = @"XCAXClient_iOS.sharedClient"; return ax; }
+        }
+    } @catch (__unused NSException *e) {}
+    gSawtAXSource = @"ما انلقى (لا accessibilityInterface ولا XCAXClient_iOS)";
+    return nil;
+}
+
+NSString *SawtXCTAXSource(void) {
+    (void)SawtAXClient();
+    return gSawtAXSource;
+}
+
+/// رقم العملية من عنصر الوصول (الدالة ترجع int أو long long حسب الإصدار)
+static int SawtPid(id element) {
+    SEL s = NSSelectorFromString(@"processIdentifier");
+    @try {
+        if (!element || ![element respondsToSelector:s]) return 0;
+        const char *type = [element methodSignatureForSelector:s].methodReturnType;
+        if (type && strcmp(type, @encode(int)) == 0) return ((int (*)(id, SEL))objc_msgSend)(element, s);
+        return (int)((long long (*)(id, SEL))objc_msgSend)(element, s);
+    } @catch (__unused NSException *e) { return 0; }
+}
+
+NSString * _Nullable SawtXCTBundleForPID(int pid, double timeout) {
+    @try {
+        NSString *why = nil;
+        id session = SawtSharedSession(&why);
+        SEL proxySel = NSSelectorFromString(@"daemonProxy");
+        id proxy = (session && [session respondsToSelector:proxySel]) ? ((id (*)(id, SEL))objc_msgSend)(session, proxySel) : nil;
+        SEL s = NSSelectorFromString(@"_XCT_requestBundleIDForPID:reply:");
+        if (!proxy || !SawtHas(proxy, s)) return nil;
+        __block NSString *bundle = nil;
+        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+        void (^reply)(NSString *, NSError *) = ^(NSString *value, __unused NSError *error) {
+            if ([value isKindOfClass:NSString.class]) bundle = value;
+            dispatch_semaphore_signal(sem);
+        };
+        ((void (*)(id, SEL, int, id))objc_msgSend)(proxy, s, pid, reply);
+        dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeout * NSEC_PER_SEC)));
+        return bundle.length ? bundle : nil;
+    } @catch (__unused NSException *e) { return nil; }
 }
 
 static id SawtKVC(id obj, NSString *key) {
@@ -139,10 +197,11 @@ NSArray<NSDictionary<NSString *, id> *> *SawtXCTActiveApps(void) {
     NSMutableArray *out = [NSMutableArray array];
     @try {
         for (id e in SawtActiveElements(SawtAXClient())) {
-            NSNumber *pid = SawtKVC(e, @"processIdentifier");
-            if (![pid isKindOfClass:NSNumber.class]) continue;
+            int p = SawtPid(e);
+            if (p <= 0) continue;
             NSString *bundle = SawtKVC(e, @"bundleIdentifier") ?: SawtKVC(e, @"bundleID");
-            NSMutableDictionary *d = [NSMutableDictionary dictionaryWithObject:pid forKey:@"pid"];
+            if (![bundle isKindOfClass:NSString.class] || !bundle.length) bundle = SawtXCTBundleForPID(p, 1.0);
+            NSMutableDictionary *d = [NSMutableDictionary dictionaryWithObject:@(p) forKey:@"pid"];
             if ([bundle isKindOfClass:NSString.class] && bundle.length) d[@"bundle"] = bundle;
             [out addObject:d];
         }
@@ -166,7 +225,7 @@ static id SawtWithin(double seconds, BOOL *timedOut, id (^work)(void)) {
 
 NSString * _Nullable SawtXCTLoadAccessibility(double timeout) {
     id client = SawtAXClient();
-    if (!client) return @"XCAXClient_iOS مو موجود";
+    if (!client) return gSawtAXSource;
     SEL s = NSSelectorFromString(@"loadAccessibility:");
     if (![client respondsToSelector:s]) return @"loadAccessibility: مو مدعوم";
     BOOL late = NO;
@@ -224,11 +283,10 @@ NSObject * _Nullable SawtXCTAXRead(int pid, NSInteger maxDepth, NSInteger maxChi
             }
         }
         id client = SawtAXClient();
-        if (!client) { if (why) *why = @"XCAXClient_iOS مو موجود"; return nil; }
+        if (!client) { if (why) *why = gSawtAXSource; return nil; }
         id element = nil;
         for (id e in SawtActiveElements(client)) {
-            NSNumber *p = SawtKVC(e, @"processIdentifier");
-            if ([p isKindOfClass:NSNumber.class] && p.intValue == pid) { element = e; break; }
+            if (SawtPid(e) == pid) { element = e; break; }
         }
         if (!element) { if (why) *why = @"التطبيق مو ضمن النشطة"; return nil; }
         SEL req = NSSelectorFromString(@"requestSnapshotForElement:attributes:parameters:error:");

@@ -176,7 +176,7 @@ enum XCTBackend {
             prepared = true
             generation += 1
             let gen = generation
-            axLoaded = SawtXCTLoadAccessibility(4).map { "✗ " + $0 } ?? "محمّل"
+            axLoaded = (SawtXCTLoadAccessibility(4).map { "✗ " + $0 } ?? "محمّل") + " عبر " + SawtXCTAXSource()
             let watched = SawtXCTWatchSession {
                 // الجلسة انقطعت: نعلّمها، والمراقب يعيد بناءها لو وضع الأتمتة شغّال
                 guard gen == generation else { return }
@@ -246,17 +246,7 @@ enum XCTBackend {
 
     /// أرقام عمليات التطبيقات النشطة (اللي قدّام) من عميل الوصول حق XCTest
     private static func activePIDs() -> [Int32] {
-        guard let cls = NSClassFromString("XCAXClient_iOS") else { return [] }
-        var pids: [Int32] = []
-        let exc = SawtTryCatch {
-            guard let client = send0(cls as AnyObject, "sharedClient"),
-                  let list = send0(client, "activeApplications") as? [NSObject] else { return }
-            for e in list {
-                if let n = kvc(e, "processIdentifier") as? NSNumber { pids.append(n.int32Value) }
-            }
-        }
-        if let exc { slog("xct: activeApplications \(exc)") }
-        return pids
+        SawtXCTActiveApps().compactMap { ($0["pid"] as? NSNumber)?.int32Value }
     }
 
     /// التطبيق اللي قدّام: نفضّل أي تطبيق غير SpringBoard
