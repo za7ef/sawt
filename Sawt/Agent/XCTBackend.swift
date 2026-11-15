@@ -8,6 +8,13 @@ import ObjectiveC
 /// (بدون بث الشاشة). كل نداء لأطر XCTest يصير على الخيط الرئيسي (شرط XCTest) عن طريق main.sync
 /// من خيط خلفي، فما فيه deadlock، وكل نداء داخل SawtTryCatch عشان أي استثناء يصير خطأ بدل كراش.
 /// الجلسة (تحميل الأطر + التفويض + الإعداد) تنجهز مرة وحدة بكل تشغيل للتطبيق، وكائنات التطبيقات تنحفظ.
+/// أول واحد ينادي claim() ياخذها (للحد الزمني: النتيجة أو انتهاء الوقت، مو الاثنين)
+final class XCTOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func claim() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true }
+}
+
 enum XCTBackend {
     /// عنصر من الشجرة بعد التصفية (الوكيل يحوّله لعنصره)
     struct Node: Sendable { let kind: String; let label: String; let value: String; let frame: CGRect; let secure: Bool }
@@ -35,11 +42,52 @@ enum XCTBackend {
         }
     }
 
+    /// مثل onMain بس بحد زمني: لو الخيط الرئيسي ما خلّص خلال المدة نرجع nil (العمل نفسه يكمّل بس ما ننتظره)
+    private static func onMainTimed<T: Sendable>(_ seconds: Double, _ work: @escaping @Sendable () -> T) async -> T? {
+        let once = XCTOnce()
+        return await withCheckedContinuation { (cont: CheckedContinuation<T?, Never>) in
+            DispatchQueue.main.async {
+                let r = work()
+                if once.claim() { cont.resume(returning: r) }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
+                if once.claim() { cont.resume(returning: nil) }
+            }
+        }
+    }
+
+    /// يوقف انتظار "هدوء التطبيق" حق XCTest (نفس فكرة WebDriverAgent): بدونه XCTest ممكن ينتظر للأبد
+    /// لو التطبيق فيه حركة مستمرة أو خيطه الرئيسي مشغول (مثل صوت نفسه وقت الاختبار). يرجع وش انعطّل
+    nonisolated(unsafe) private static var quiescenceOff: String?
+    /// حالة وضع الأتمتة بعد آخر تجهيز
+    nonisolated(unsafe) static var automation: String = "؟"
+    private static func disableQuiescence() -> String {
+        if let q = quiescenceOff { return q }
+        guard let cls = NSClassFromString("XCUIApplicationProcess") else { quiescenceOff = "XCUIApplicationProcess مو موجود"; return quiescenceOff! }
+        var done: [String] = []
+        let s1 = NSSelectorFromString("waitForQuiescenceIncludingAnimationsIdle:")
+        if let m = class_getInstanceMethod(cls, s1) {
+            let blk: @convention(block) (AnyObject, Bool) -> Void = { _, _ in }
+            method_setImplementation(m, imp_implementationWithBlock(blk))
+            done.append("idle")
+        }
+        let s2 = NSSelectorFromString("waitForQuiescenceIncludingAnimationsIdle:isPreEvent:")
+        if let m = class_getInstanceMethod(cls, s2) {
+            let blk: @convention(block) (AnyObject, Bool, Bool) -> Void = { _, _, _ in }
+            method_setImplementation(m, imp_implementationWithBlock(blk))
+            done.append("idle+preEvent")
+        }
+        quiescenceOff = done.isEmpty ? "ما لقيت دوال الانتظار" : "انعطّل: " + done.joined(separator: "، ")
+        slog("xct: quiescence \(quiescenceOff!)")
+        return quiescenceOff!
+    }
+
     // MARK: - تجهيز الجلسة
 
     /// يحمّل الأطر ويفوّض العملية ويجهّز إعداد الاختبار (مرة وحدة). يرجع nil لو جاهز، وإلا سبب الفشل
-    static func prepare(cfg: String) async -> String? {
-        if prepared { return nil }
+    static func prepare(cfg: String, force: Bool = false, onChecks: (@Sendable ([XCTestProbe.Check]) -> Void)? = nil) async -> String? {
+        if prepared && !force { return nil }
+        if force { prepared = false }
         if preparing { return "التجهيز شغّال" }
         preparing = true
         defer { preparing = false }
@@ -53,11 +101,23 @@ enum XCTBackend {
                 let cs = XCTestProbe.classesStep()
                 guard cs.ok else { cont.resume(returning: cs.detail); return }
                 var checks = XCTestProbe.localChecks()
+                onChecks?(checks)
                 let auth = XCTestProbe.authorizeSelf(cfg: cfg, checks: &checks)
+                onChecks?(checks)
                 guard auth.ok else { cont.resume(returning: "التفويض: " + auth.detail); return }
-                let session: [XCTestProbe.Step] = DispatchQueue.main.sync { XCTestProbe.sessionSteps() }
+                let session: [XCTestProbe.Step] = DispatchQueue.main.sync { () -> [XCTestProbe.Step] in
+                    _ = disableQuiescence()
+                    return XCTestProbe.sessionSteps()
+                }
                 if let c = session.first(where: { $0.name == "config" }), !c.ok {
                     cont.resume(returning: "الإعداد: " + c.detail); return
+                }
+                // وضع الأتمتة: enableAutomationModeWithError: وحده (ممكن يطلب رمز الجوال)
+                if let e = SawtXCTEnableAutomation() {
+                    automation = "✗ " + e
+                    slog("xct: enableAutomation failed: \(e)")
+                } else {
+                    automation = "مفعّل"
                 }
                 cont.resume(returning: nil)
             }
@@ -294,22 +354,36 @@ enum XCTBackend {
         return "{\"ok\":true,\"via\":\"xct\",\"ms\":\(ms)}"
     }
 
-    /// لمسة على نقطة بالنقاط (إحداثيات الشاشة)
+    /// يرسل حدث لمس مركّب عبر daemonProxy من خيط خلفي (بدون الخيط الرئيسي وبدون انتظار الهدوء). nil = انقبل
+    private static func synth(_ pts: [CGPoint], duration: Double, timeout: Double) async -> String? {
+        await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                cont.resume(returning: SawtXCTSynthesize(pts.map { NSValue(cgPoint: $0) }, duration, timeout))
+            }
+        }
+    }
+
+    /// لمسة على نقطة بالنقاط (إحداثيات الشاشة): الحدث المركّب أول، ولو ما انقبل نجرّب XCUICoordinate
     static func tap(_ p: CGPoint) async -> String {
-        await onMain { () -> String in
-            let t = Date()
+        let t = Date()
+        guard let e = await synth([p], duration: 0.05, timeout: 5) else { return result(nil, "tap(synth) \(Int(p.x)),\(Int(p.y))", t) }
+        slog("xct: synth tap failed: \(e) → coordinate")
+        let r: String? = await onMainTimed(10) { () -> String in
             var err: String?
             if let exc = SawtTryCatch({
                 if let c = coordinate(p) { err = callVoid(c, "tap") } else { err = "ما قدر يسوي إحداثية" }
             }) { err = exc }
-            return result(err, "tap \(Int(p.x)),\(Int(p.y))", t)
+            return result(err.map { "synth: \(e)؛ coordinate: \($0)" }, "tap(coordinate) \(Int(p.x)),\(Int(p.y))", t)
         }
+        return r ?? result("synth: \(e)؛ coordinate: انتهى الوقت", "tap", t)
     }
 
     /// سحب من نقطة لنقطة
     static func drag(_ a: CGPoint, _ b: CGPoint) async -> String {
-        await onMain { () -> String in
-            let t = Date()
+        let t = Date()
+        guard let e = await synth([a, b], duration: 0.3, timeout: 5) else { return result(nil, "drag(synth) \(Int(a.x)),\(Int(a.y))→\(Int(b.x)),\(Int(b.y))", t) }
+        slog("xct: synth drag failed: \(e) → coordinate")
+        let r: String? = await onMainTimed(10) { () -> String in
             var err: String?
             if let exc = SawtTryCatch({
                 guard let c1 = coordinate(a), let c2 = coordinate(b) else { err = "ما قدر يسوي إحداثية"; return }
@@ -318,8 +392,9 @@ enum XCTBackend {
                 typealias DragFn = @convention(c) (AnyObject, Selector, Double, AnyObject) -> Void
                 unsafeBitCast(imp, to: DragFn.self)(c1, sel, 0.05, c2)
             }) { err = exc }
-            return result(err, "drag \(Int(a.x)),\(Int(a.y))→\(Int(b.x)),\(Int(b.y))", t)
+            return result(err.map { "synth: \(e)؛ coordinate: \($0)" }, "drag(coordinate)", t)
         }
+        return r ?? result("synth: \(e)؛ coordinate: انتهى الوقت", "drag", t)
     }
 
     /// زر الهوم
@@ -374,21 +449,31 @@ enum XCTBackend {
 
     // MARK: - اختبار الضغط
 
-    /// يجهّز الجلسة، يقيس لقطة SpringBoard (ساخنة)، يعرف اللي قدّام، ويلمس الهدف. يرجع سطور السجل
-    static func tapTest(cfg: String, target: CGPoint, screen: CGSize) async -> [String] {
-        var lines: [String] = []
-        func add(_ ok: Bool, _ name: String, _ ms: Int, _ d: String) {
-            let l = "\(ok ? "✓" : "✗") \(name) (\(ms)ms): \(d)"
-            slog("xct: tapTest \(l)"); lines.append(l)
+    /// يجهّز الجلسة من جديد (تفويض جديد كل مرة)، يقيس لقطة SpringBoard، يعرف اللي قدّام، ويلمس الهدف.
+    /// كل خطوة لها حد زمني وتنكتب في السجل أول ما تبدأ وأول ما تخلص (onLine)، فلو علّقت نعرف وين.
+    /// يرجع false لو وقف بسبب خطأ أو انتهاء وقت.
+    static func tapTest(cfg: String, target: CGPoint, screen: CGSize,
+                        onLine: @escaping @Sendable (String) -> Void,
+                        onChecks: @escaping @Sendable ([XCTestProbe.Check]) -> Void) async -> Bool {
+        func add(_ ok: Bool, _ name: String, _ t: Date, _ d: String) {
+            let l = "\(ok ? "✓" : "✗") \(name) (\(Int(Date().timeIntervalSince(t) * 1000))ms): \(d)"
+            slog("xct: tapTest \(l)"); onLine(l)
         }
+        func start(_ name: String) { slog("xct: tapTest start \(name)"); onLine("… \(name): بدأ") }
+
+        // ١) التجهيز مع تفويض جديد (الجلسة القديمة ممكن تنرفض: XCTDaemonErrorDomain 41)
         var t = Date()
-        let wasReady = prepared
-        if let e = await prepare(cfg: cfg) { add(false, "prepare", Int(Date().timeIntervalSince(t) * 1000), e); return lines }
-        add(true, "prepare", Int(Date().timeIntervalSince(t) * 1000), wasReady ? "جاهزة من قبل" : "جاهزة")
-        // لقطة SpringBoard مرتين: الأولى ممكن تطوّل، الثانية تقيس السرعة الفعلية
+        start("prepare")
+        let prep: String?? = await withTimeout(90) { await prepare(cfg: cfg, force: true, onChecks: onChecks) }
+        guard let prepRes = prep else { add(false, "prepare", t, "انتهى الوقت (٩٠ ثانية)؛ غالبًا الاتصال المحلي أو رمز الجوال"); return false }
+        if let e = prepRes { add(false, "prepare", t, e); return false }
+        add(true, "prepare", t, "تفويض جديد؛ وضع الأتمتة: \(automation)؛ انتظار الهدوء: \(quiescenceOff ?? "؟")")
+
+        // ٢) لقطة SpringBoard مرتين: الأولى ممكن تطوّل، الثانية تقيس السرعة الفعلية
         for i in 1...2 {
             t = Date()
-            let s: (Bool, String) = await onMain { () -> (Bool, String) in
+            start("snapshot\(i)")
+            let s: (Bool, String)? = await onMainTimed(20) { () -> (Bool, String) in
                 guard let sb = app(bundle: "com.apple.springboard") else { return (false, "XCUIApplication") }
                 let (snap, err) = snapshot(sb)
                 guard let snap else { return (false, err ?? "؟") }
@@ -396,18 +481,39 @@ enum XCTBackend {
                 let sample = fl.nodes.prefix(6).map { "\($0.kind):\($0.label.prefix(20))" }.joined(separator: "، ")
                 return (true, "\(fl.raw) عقدة، \(fl.nodes.count) عنصر؛ \(sample)")
             }
-            add(s.0, "snapshot\(i)", Int(Date().timeIntervalSince(t) * 1000), s.1)
+            guard let s else { add(false, "snapshot\(i)", t, "انتهى الوقت (٢٠ ثانية)"); return false }
+            add(s.0, "snapshot\(i)", t, s.1)
+            if !s.0 { return false }
         }
+
+        // ٣) التطبيق اللي قدّام
         t = Date()
-        let front: String = await onMain { () -> String in
+        start("front")
+        let front: String? = await onMainTimed(10) { () -> String in
             let pids = activePIDs()
             guard let f = frontApp() else { return "ما عرف (\(pids.count) نشط)" }
             return "\(f.2) pid \(f.1)؛ نشط: \(pids.count)"
         }
-        add(!front.hasPrefix("ما"), "front", Int(Date().timeIntervalSince(t) * 1000), front)
+        if let front { add(!front.hasPrefix("ما"), "front", t, front) } else { add(false, "front", t, "انتهى الوقت (١٠ ثواني)") }
+
+        // ٤) اللمس (حدث مركّب عبر daemonProxy، ولو ما انقبل XCUICoordinate بحد زمني)
         t = Date()
-        let r = await tap(target)
-        add(r.contains("\"ok\":true"), "tap", Int(Date().timeIntervalSince(t) * 1000), "(\(Int(target.x)), \(Int(target.y))) " + r)
-        return lines
+        start("tap")
+        let r: String? = await withTimeout(25) { await tap(target) }
+        guard let r else { add(false, "tap", t, "انتهى الوقت (٢٥ ثانية)"); return false }
+        let ok = r.contains("\"ok\":true")
+        add(ok, "tap", t, "(\(Int(target.x)), \(Int(target.y))) " + r)
+        return ok
+    }
+
+    /// ينتظر عمل async بحد زمني. nil = انتهى الوقت
+    private static func withTimeout<T: Sendable>(_ seconds: Double, _ work: @escaping @Sendable () async -> T) async -> T? {
+        await withTaskGroup(of: T?.self) { g in
+            g.addTask { await work() }
+            g.addTask { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)); return nil }
+            let first = await g.next() ?? nil
+            g.cancelAll()
+            return first
+        }
     }
 }

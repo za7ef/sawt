@@ -1299,26 +1299,33 @@ struct PhoneAgentView: View {
                     slog("xct: tap test tapped")
                     Task { @MainActor in
                         let before = tapHits
+                        tapOut = "… الاتصال: بدأ"
                         let cfg = await XCTestProbe.connectionConfig()
                         let target = CGPoint(x: targetFrame.midX, y: targetFrame.midY)
-                        var lines = await XCTBackend.tapTest(cfg: cfg, target: target, screen: UIScreen.main.bounds.size)
-                        // اللمسة توصل للواجهة بعد ما يرجع الخيط الرئيسي: ننتظر شوي ونشيك العدّاد
-                        try? await Task.sleep(nanoseconds: 1_200_000_000)
-                        let hit = tapHits > before
-                        let l = "\(hit ? "✓" : "✗") target: " + (hit ? "الهدف انضغط (\(before) → \(tapHits))" : "العدّاد ما تغيّر")
-                        slog("xct: tapTest \(l)")
-                        lines.append(l)
-                        tapOut = lines.joined(separator: "\n")
+                        // كل سطر يطلع أول ما تبدأ الخطوة وأول ما تخلص، فلو علّقت نعرف وين
+                        let ok = await XCTBackend.tapTest(
+                            cfg: cfg, target: target, screen: UIScreen.main.bounds.size,
+                            onLine: { l in Task { @MainActor in tapOut += (tapOut.isEmpty ? "" : "\n") + l } },
+                            onChecks: { c in Task { @MainActor in xctChecks = c } })
+                        if ok {
+                            // اللمسة توصل للواجهة بعد شوي: ننتظر ونشيك العدّاد
+                            try? await Task.sleep(nanoseconds: 1_200_000_000)
+                            let hit = tapHits > before
+                            let l = "\(hit ? "✓" : "✗") target: " + (hit ? "الهدف انضغط (\(before) → \(tapHits))" : "العدّاد ما تغيّر")
+                            slog("xct: tapTest \(l)")
+                            tapOut += "\n" + l
+                        }
                         tapRunning = false
                     }
                 } label: {
-                    HStack {
-                        Text(tapRunning ? "جاري اختبار الضغط…" : "اختبار الضغط")
-                        if tapRunning { Spacer(); ProgressView() }
-                    }
+                    // بدون مؤشر دوّار: الحركة المستمرة تخلي XCTest ينتظر هدوء التطبيق
+                    Text(tapRunning ? "جاري اختبار الضغط… (السجل تحت)" : "اختبار الضغط")
                 }
                 .disabled(tapRunning || xctRunning)
-                if !tapOut.isEmpty { Text(tapOut).font(.footnote.monospaced()).textSelection(.enabled) }
+                if !tapOut.isEmpty {
+                    Text(tapOut).font(.footnote.monospaced()).textSelection(.enabled)
+                    Button("نسخ السجل") { UIPasteboard.general.string = tapOut }
+                }
             } footer: {
                 Text("«اختبار الضغط»: يجهّز الجلسة، يقيس سرعة قراءة الشاشة، ويخلي XCTest يلمس زر «هدف الضغط»؛ لو العدّاد زاد يعني اللمس شغّال.\nيجرب طريقة التحكم الجديدة: يطلب من testmanagerd عبر الاتصال المحلي يفوّض صوت لاختبار الواجهة، بعدين يحمّل أدوات الاختبار ويقرأ الشاشة الرئيسية. ممكن يطلب iOS رمز الجوال لتفعيل الأتمتة.")
             }
