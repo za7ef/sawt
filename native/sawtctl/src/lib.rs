@@ -459,6 +459,15 @@ pub extern "C" fn sawtctl_ax(cfg: *const c_char, wait_ms: u32) -> *mut c_char {
     })
 }
 
+/// عناصر الشاشة الظاهرة مع إطاراتها (للوكيل)
+#[unsafe(no_mangle)]
+pub extern "C" fn sawtctl_screen(cfg: *const c_char, wait_ms: u32) -> *mut c_char {
+    run(cfg, async move |cfg, steps| {
+        let mut s = connect(&cfg, steps).await?;
+        ax::elements(&mut s.adapter, &s.rsd, Duration::from_millis(wait_ms.max(1500) as u64), steps).await
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn sawtctl_free(p: *mut c_char) {
     if !p.is_null() {
