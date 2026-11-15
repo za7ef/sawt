@@ -12,6 +12,8 @@ import Security
 @_silgen_name("sawtctl_keys") private func c_keys(_ cfg: UnsafePointer<CChar>, _ what: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("sawtctl_ax") private func c_ax(_ cfg: UnsafePointer<CChar>, _ waitMs: UInt32) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("sawtctl_pair") private func c_pair(_ cfg: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
+@_silgen_name("sawtctl_screen") private func c_screen(_ cfg: UnsafePointer<CChar>, _ waitMs: UInt32) -> UnsafeMutablePointer<CChar>?
+@_silgen_name("sawtctl_drag") private func c_drag(_ cfg: UnsafePointer<CChar>, _ x1: UInt16, _ y1: UInt16, _ x2: UInt16, _ y2: UInt16) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("sawtctl_free") private func c_free(_ p: UnsafeMutablePointer<CChar>?)
 #endif
 
@@ -179,7 +181,7 @@ enum PhoneControl {
         return String(decoding: data, as: UTF8.self)
     }
 
-    enum Op: Sendable { case probe, pair, ax(UInt32), tap(UInt16, UInt16), keys(String) }
+    enum Op: Sendable { case probe, pair, ax(UInt32), tap(UInt16, UInt16), keys(String), screen(UInt32), drag(UInt16, UInt16, UInt16, UInt16) }
 
     nonisolated(unsafe) static var lastRPHost = ""
 
@@ -242,6 +244,8 @@ enum PhoneControl {
                 case .ax(let ms): return c_ax(c, ms)
                 case .tap(let x, let y): return c_tap(c, x, y)
                 case .keys(let w): return w.withCString { c_keys(c, $0) }
+                case .screen(let ms): return c_screen(c, ms)
+                case .drag(let a, let b, let x, let y): return c_drag(c, a, b, x, y)
                 }
             }
             guard let p else { return "{\"ok\":false,\"error\":\"null\"}" }
@@ -274,6 +278,10 @@ struct PhoneControlView: View {
 
     var body: some View {
         Form {
+            Section {
+                NavigationLink { PhoneAgentView() } label: { Label("الوكيل (تجريبي)", systemImage: "wand.and.stars") }
+                    .disabled(!hasPairing)
+            }
             Section {
                 LabeledContent("الأداة", value: PhoneControl.available ? "مبنية" : "غير مبنية")
                 LabeledContent("ملف الاقتران", value: hasPairing ? "موجود" : "ناقص")
