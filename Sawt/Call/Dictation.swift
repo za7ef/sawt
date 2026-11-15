@@ -10,16 +10,20 @@ final class Dictation: ObservableObject {
     @Published var error: String?
     private var buffer: [Float] = []
     private let lock = NSLock()
+    private var starting = false
 
     func start() {
-        guard !isRecording else { return }
+        // «starting» يمنع تشغيلين قبل ما يصير isRecording صح
+        guard !isRecording, !starting, !isBusy else { return }
         if let why = AppleSTT.blockedReason { error = why; return }
         Speaker.shared.stop()
         if AudioIO.shared.isRunning {
             if AudioIO.shared.ownedByCall { error = "المايك مشغول بالمكالمة."; return }
             Speaker.shared.stop()
         }
+        starting = true
         Task {
+            defer { starting = false }
             guard await AVAudioApplicationShim.requestRecord() else {
                 error = "اسمح للتطبيق يستخدم المايك من الإعدادات."
                 return
@@ -52,9 +56,14 @@ final class Dictation: ObservableObject {
         lock.lock(); let audio = buffer; buffer.removeAll(); lock.unlock()
         let l = AppSettings.shared.language
         Task {
-            let r = try? await SpeechRecognizer.shared.transcribe(audio, language: l == "auto" ? nil : l)
-            isBusy = false
-            if let t = r?.text, !t.isEmpty { done(t) }
+            defer { isBusy = false }
+            do {
+                let r = try await SpeechRecognizer.shared.transcribe(audio, language: l == "auto" ? nil : l)
+                if !r.text.isEmpty { done(r.text) } else { error = "ما سمعت شي واضح، جرّب مرة ثانية." }
+            } catch {
+                slog("dictation transcribe failed \(error)")
+                self.error = "ما قدرت أحوّل الصوت لنص: \(error.localizedDescription)"
+            }
         }
     }
 }

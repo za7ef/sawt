@@ -129,7 +129,7 @@ final class CallController: ObservableObject {
         if activityObservers.isEmpty {
             let nc = NotificationCenter.default
             activityObservers.append(nc.addObserver(forName: Notification.Name("sawt.toggleMute"), object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { if let self, self.state != .idle { self.muted.toggle(); slog("activity: mute=\(self.muted)") } }
+                MainActor.assumeIsolated { if let self, self.state != .idle { self.toggleMute(); slog("activity: mute=\(self.muted)") } }
             })
             activityObservers.append(nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { if let self, self.pausedBG { self.pausedBG = false; self.syncActivity(from: self.state) } }
@@ -166,7 +166,6 @@ final class CallController: ObservableObject {
                 self.error = "الذاكرة قليلة لهالنموذج في المكالمة (باقي \(avail)MB). إذا انقفل التطبيق، جرّب Qwen3.5 2B."
             }
             guard self.state == .starting else { return }
-            CallController.isActive = true
             MemoryStore.shared.cancel()
             self.proc.sync {
                 self.vad = VoiceDetector()
@@ -195,8 +194,11 @@ final class CallController: ObservableObject {
             } catch {
                 self.error = "ما قدرت أشغّل المايك: \(error.localizedDescription)"
                 self.state = .idle
+                CallController.isActive = false
                 return
             }
+            // بعد ما يشتغل الصوت فعلًا
+            CallController.isActive = true
             self.state = .listening
             slog("call: started, stt=\(AppSettings.shared.sttID) llm=\(AppSettings.shared.llmID)")
             // 15 مرة بالثانية تكفي للرسوم، وأخف على البطارية والحرارة
@@ -232,6 +234,7 @@ final class CallController: ObservableObject {
         notice = nil
         Task { @MainActor in CallCamera.shared.stop() }
         CallController.isActive = false
+        NamaaEngine.shared.release()   // لو فيه حجز معلّق
         // استخراج الذاكرة بعد المكالمة
         var pairs: [(user: String, assistant: String)] = []
         var lastUser: String?
