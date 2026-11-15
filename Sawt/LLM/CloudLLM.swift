@@ -196,7 +196,8 @@ enum CloudLLM {
             for (mt, b) in imgs { content.append(["type": "image_url", "image_url": ["url": "data:\(mt);base64,\(b)"]]) }
             msgs.append(["role": "user", "content": content])
             body = ["model": model, "messages": msgs, "stream": true]
-            body[or ? "max_tokens" : "max_completion_tokens"] = or ? tokens : tokens * 3
+            // OpenRouter: بس الأساسيات (التوجيه يرفض لو طلبنا خاصية ما يدعمها المزوّد)
+            if !or { body["max_completion_tokens"] = tokens * 3 }
         case .anthropic:
             req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
             req.setValue(key, forHTTPHeaderField: "x-api-key")
