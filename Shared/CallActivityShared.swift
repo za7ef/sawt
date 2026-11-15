@@ -38,6 +38,8 @@ struct EndCallIntent: LiveActivityIntent {
     init() {}
     func perform() async throws -> some IntentResult {
         await MainActor.run { NotificationCenter.default.post(name: Notification.Name("sawt.endCall"), object: nil) }
+        // ننهي النشاط بنفسنا حتى لو المكالمة مو موجودة
+        await CallActivityAttributes.endAll()
         return .result()
     }
 }
@@ -49,5 +51,14 @@ struct ToggleMuteIntent: LiveActivityIntent {
     func perform() async throws -> some IntentResult {
         await MainActor.run { NotificationCenter.default.post(name: Notification.Name("sawt.toggleMute"), object: nil) }
         return .result()
+    }
+}
+
+extension CallActivityAttributes {
+    /// ينهي كل أنشطة المكالمة (حتى اليتيمة من تشغيل سابق)
+    static func endAll() async {
+        for a in Activity<CallActivityAttributes>.activities {
+            await a.end(nil, dismissalPolicy: .immediate)
+        }
     }
 }
