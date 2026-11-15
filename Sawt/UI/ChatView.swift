@@ -10,6 +10,8 @@ struct ChatView: View {
 
     @State private var draft = ""
     @State private var cloudTick = 0
+    @State private var pendingCloud: CloudProvider?
+    @State private var askCloudConsent = false
     /// يزيد مع كل إرسال: نتيجة إملاء صوتي متأخرة من قبل الإرسال ما ترجع تنكتب
     @State private var sendGen = 0
     @State private var voiceMode = false
@@ -90,11 +92,34 @@ struct ChatView: View {
             Spacer()
 
             Menu {
-                ForEach(Catalog.llms.filter { models.downloaded.contains($0.id) || $0.id == settings.llmID }) { m in
-                    Button {
-                        models.activate(m)
-                    } label: {
-                        if m.id == settings.llmID { Label(m.title, systemImage: "checkmark") } else { Text(m.title) }
+                let _ = cloudTick
+                let cloud = CloudLLM.active
+                let onCPU = cloud == nil && ComputeMode.current == "cpu"
+                Section("كرت الشاشة") {
+                    ForEach(Catalog.llms.filter { models.downloaded.contains($0.id) || $0.id == settings.llmID }) { m in
+                        Button { pickGPU(m) } label: {
+                            if cloud == nil, !onCPU, m.id == settings.llmID { Label(m.title, systemImage: "checkmark") } else { Text(m.title) }
+                        }
+                    }
+                }
+                let cpus = GGUFSpec.all.filter { $0.isDownloaded }
+                if !cpus.isEmpty {
+                    Section("المعالج") {
+                        ForEach(cpus) { s in
+                            Button { pickCPU(s) } label: {
+                                if onCPU, s.id == GGUFSpec.active.id { Label(s.name, systemImage: "checkmark") } else { Text(s.name) }
+                            }
+                        }
+                    }
+                }
+                let clouds = CloudProvider.allCases.filter { $0.hasKey }
+                if !clouds.isEmpty {
+                    Section("سحابي") {
+                        ForEach(clouds) { c in
+                            Button { pickCloud(c) } label: {
+                                if cloud == c { Label("\(c.short) · \(c.model)", systemImage: "checkmark") } else { Text("\(c.short) · \(c.model)") }
+                            }
+                        }
                     }
                 }
                 Divider()
@@ -102,7 +127,7 @@ struct ChatView: View {
             } label: {
                 HStack(spacing: 6) {
                     Text("صوت").fontWeight(.bold)
-                    Text(settings.llm.title).foregroundStyle(.secondary)
+                    Text(activeTitle).foregroundStyle(.secondary).lineLimit(1)
                     statusDot
                     Image(systemName: "chevron.down").font(.caption.weight(.bold)).foregroundStyle(.secondary)
                 }
@@ -110,6 +135,16 @@ struct ChatView: View {
                 .glassEffect(.regular.interactive(), in: .capsule)
             }
             .buttonStyle(.plain)
+            .alert("النماذج السحابية", isPresented: $askCloudConsent) {
+                Button("موافق") {
+                    UserDefaults.standard.set(true, forKey: "cloudConsent")
+                    if let c = pendingCloud { CloudLLM.setActive(c) }
+                    pendingCloud = nil; cloudTick += 1
+                }
+                Button("إلغاء", role: .cancel) { pendingCloud = nil }
+            } message: {
+                Text("النموذج السحابي يرسل لخوادم الخدمة اللي اخترتها: رسايلك والمحادثة السابقة والصور المرفقة (وفي الوكيل نص الشاشة وصورتها)، حسب سياسة خصوصيتها. الطبقات المجانية ممكن تستخدم البيانات لتحسين خدماتها. هالتنبيه يطلع مرة وحدة.")
+            }
 
             Spacer()
 
@@ -123,6 +158,36 @@ struct ChatView: View {
         .padding(.horizontal, 14)
         .padding(.top, 4)
         .padding(.bottom, 6)
+    }
+
+    private var activeTitle: String {
+        let _ = cloudTick
+        if let c = CloudLLM.active { return c.short }
+        if ComputeMode.current == "cpu" { return GGUFSpec.active.name }
+        return settings.llm.title
+    }
+
+    /// كرت الشاشة: نطفي السحابي، ونرجع الإعداد لكرت الشاشة لو كان «المعالج» («تلقائي» يبقى)
+    private func pickGPU(_ m: LLMOption) {
+        CloudLLM.setActive(nil)
+        if ComputeMode.current == "cpu" { UserDefaults.standard.set("gpu", forKey: "llmDevice"); slog("chat: menu → gpu") }
+        models.activate(m)
+        cloudTick += 1
+    }
+
+    /// المعالج: نطفي السحابي، ونختار نموذج المعالج ونحوّل الإعداد للمعالج
+    private func pickCPU(_ s: GGUFSpec) {
+        CloudLLM.setActive(nil)
+        GGUFSpec.setActive(s)
+        UserDefaults.standard.set("cpu", forKey: "llmDevice")
+        slog("chat: menu → cpu \(s.id)")
+        cloudTick += 1
+    }
+
+    /// سحابي: تنبيه الخصوصية أول مرة
+    private func pickCloud(_ c: CloudProvider) {
+        if CloudLLM.consent { CloudLLM.setActive(c); cloudTick += 1 }
+        else { pendingCloud = c; askCloudConsent = true }
     }
 
     @ViewBuilder private var statusDot: some View {
@@ -395,7 +460,9 @@ struct EmptyState: View {
                 .scaleEffect(appear ? 1 : 0.6)
                 .opacity(appear ? 1 : 0)
             Text("وش في بالك؟").font(.title2.weight(.semibold))
-            Text("النموذج يشتغل على جوالك، والإنترنت مقفول إلا إذا شغّلته")
+            let _ = cloudTick
+            Text(CloudLLM.active.map { "النموذج السحابي: \($0.short) — رسايلك تروح لسيرفراته" }
+                 ?? "النموذج يشتغل على جوالك، والإنترنت مقفول إلا إذا شغّلته")
                 .font(.subheadline).foregroundStyle(.secondary)
             Button(action: startVoice) {
                 Label("ابدأ مكالمة صوتية", systemImage: "waveform")
