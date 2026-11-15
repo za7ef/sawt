@@ -51,6 +51,7 @@ final class HostPairing: NSObject, ObservableObject, NetServiceDelegate {
             Log.shared("hostpair accept: \(res.prefix(6000))")
             UIPasteboard.general.string = res
             if res.contains("\"paired\":true") {
+                PhoneControl.pairingWritten()
                 finish("تم الاقتران ✅ انحفظ ملف جديد. جرّب «فحص الاتصال».")
             } else {
                 finish("ما تم الاقتران: \(res.prefix(800))")

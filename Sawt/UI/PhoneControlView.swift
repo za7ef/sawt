@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import Network
+import Security
 
 // تجربة «تحكم بالجوال»: يتصل بخدمات المطوّر في نفس الجوال (عبر LocalDevVPN على 10.7.0.1)
 // بملف الاقتران، ويقرأ شجرة الوصول ويرسل لمسة/كتابة. للاختبار فقط قبل بناء الوكيل.
@@ -28,7 +29,82 @@ enum PhoneControl {
             .appendingPathComponent("pairing.plist")
     }
 
-    static var hasPairing: Bool { FileManager.default.fileExists(atPath: pairingURL.path) }
+    static var hasPairing: Bool {
+        ensurePairing()
+        return FileManager.default.fileExists(atPath: pairingURL.path)
+    }
+
+    // نسخة احتياطية في Keychain: لو اختفى الملف نرجّعه بنفس البايتات بالضبط
+    private static let kcService = "sawt.pairing"
+    private static let kcAccount = "rp_pairing_file"
+
+    static func keychainLoad() -> Data? {
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: kcService,
+                                kSecAttrAccount as String: kcAccount, kSecReturnData as String: true,
+                                kSecMatchLimit as String: kSecMatchLimitOne]
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess else { return nil }
+        return out as? Data
+    }
+
+    static func keychainStore(_ d: Data) {
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: kcService,
+                                kSecAttrAccount as String: kcAccount]
+        let attrs: [String: Any] = [kSecValueData as String: d,
+                                    kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+        let st = SecItemUpdate(q as CFDictionary, attrs as CFDictionary)
+        if st == errSecItemNotFound {
+            var add = q; attrs.forEach { add[$0.key] = $0.value }
+            let a = SecItemAdd(add as CFDictionary, nil)
+            Log.shared("phonectl keychain: add \(a)")
+        } else {
+            Log.shared("phonectl keychain: update \(st)")
+        }
+    }
+
+    /// بصمة المفتاح العام (أول ٤ بايت) — بدون أسرار
+    static func fingerprint(_ d: Data) -> String {
+        guard let o = try? PropertyListSerialization.propertyList(from: d, options: [], format: nil) as? [String: Any],
+              let pk = o["public_key"] as? Data else { return "?" }
+        return pk.prefix(4).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func writePairing(_ d: Data) throws {
+        let dest = pairingURL
+        try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try d.write(to: dest, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        var u = dest
+        var rv = URLResourceValues(); rv.isExcludedFromBackup = true
+        try? u.setResourceValues(rv)
+    }
+
+    /// الملف هو المصدر. لو ناقص نرجعه من Keychain، ولو موجود ونسخة Keychain تختلف نحدّثها.
+    static func ensurePairing() {
+        let path = pairingURL.path
+        if let d = try? Data(contentsOf: pairingURL) {
+            if keychainLoad() != d { keychainStore(d) }
+            Log.shared("phonectl pairing load: \(path) fp=\(fingerprint(d)) size=\(d.count)")
+        } else if let k = keychainLoad() {
+            do {
+                try writePairing(k)
+                Log.shared("phonectl pairing restored from keychain: \(path) fp=\(fingerprint(k))")
+            } catch {
+                Log.shared("phonectl pairing restore failed: \(error.localizedDescription)")
+            }
+        } else {
+            Log.shared("phonectl pairing: none at \(path)")
+        }
+    }
+
+    /// يُستدعى بعد ما يكتب Rust ملف اقتران جديد (اقتران ناجح فقط)
+    static func pairingWritten() {
+        guard let d = try? Data(contentsOf: pairingURL) else { Log.shared("phonectl pairing: written but unreadable"); return }
+        var u = pairingURL
+        var rv = URLResourceValues(); rv.isExcludedFromBackup = true
+        try? u.setResourceValues(rv)
+        keychainStore(d)
+        Log.shared("phonectl pairing saved: \(pairingURL.path) fp=\(fingerprint(d))")
+    }
 
     /// ينظّف البيانات (BOM، مسافات، base64) ويحوّلها لـplist XML موحّد
     static func normalize(_ raw: Data) -> (data: Data?, info: String) {
@@ -67,10 +143,9 @@ enum PhoneControl {
         Log.shared("phonectl pairing: \(info)")
         guard let norm else { return "الملف مو plist صالح — \(info)" }
         do {
-            let dest = pairingURL
-            try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try norm.write(to: dest, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-            return "تم حفظ ملف الاقتران — \(info)"
+            try writePairing(norm)
+            keychainStore(norm)
+            return "تم حفظ ملف الاقتران — \(info) fp=\(fingerprint(norm))"
         } catch {
             return "فشل الحفظ: \(error.localizedDescription)"
         }
@@ -78,10 +153,11 @@ enum PhoneControl {
 
     /// معلومات الملف المحفوظ (بدون أسرار) — ونعيد توحيده لو انحفظ بنسخة قديمة
     static func storedInfo() -> String {
+        ensurePairing()
         guard let d = try? Data(contentsOf: pairingURL) else { return "لا يوجد ملف" }
-        let (norm, info) = normalize(d)
-        if let norm, norm != d { try? norm.write(to: pairingURL, options: .atomic) }
-        return info
+        // ما نعيد كتابة الملف هنا أبدًا — نقرأ بس
+        let (_, info) = normalize(d)
+        return info + " fp=\(fingerprint(d))"
     }
 
     static func importFile(_ url: URL) -> String {
@@ -381,7 +457,10 @@ struct PhoneControlView: View {
             if info.contains("kind=RemotePairing") || label == "pair" { rp = await PhoneControl.discoverRPPort() }
             Log.shared("phonectl rp port: \(rp.port) \(rp.info)")
             var r = await PhoneControl.run(op, host: h, rpPort: rp.port, rpHost: PhoneControl.lastRPHost)
-            if label == "pair" { r = "new pairing: \(PhoneControl.storedInfo())\n" + r }
+            if label == "pair" {
+                if r.contains("\"paired\":true") { PhoneControl.pairingWritten() }
+                r = "new pairing: \(PhoneControl.storedInfo())\n" + r
+            }
             r = "pairing: \(info)\nrp: \(rp.port) \(rp.info)\n" + r
             if let after {
                 try? await Task.sleep(nanoseconds: 400_000_000)
