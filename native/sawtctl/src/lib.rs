@@ -491,6 +491,22 @@ pub extern "C" fn sawtctl_launch(cfg: *const c_char, query: *const c_char) -> *m
     })
 }
 
+/// لقطة شاشة (PNG) عبر خدمة الأدوات، تنحفظ في المسار المعطى
+#[unsafe(no_mangle)]
+pub extern "C" fn sawtctl_shot(cfg: *const c_char, path: *const c_char) -> *mut c_char {
+    let out = unsafe { std::ffi::CStr::from_ptr(path) }.to_string_lossy().to_string();
+    run(cfg, async move |cfg, steps| {
+        let mut s = connect(&cfg, steps).await?;
+        let mut rs = idevice::dvt::remote_server::RemoteServerClient::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("dtservicehub: {e:?}"))?;
+        rs.read_message(0).await.map_err(|e| format!("dtservicehub read: {e:?}"))?;
+        let mut sc = idevice::dvt::screenshot::ScreenshotClient::new(&mut rs).await.map_err(|e| format!("screenshot: {e:?}"))?;
+        let png = sc.take_screenshot().await.map_err(|e| format!("take_screenshot: {e:?}"))?;
+        std::fs::write(&out, &png).map_err(|e| format!("write: {e}"))?;
+        steps.push(json!({"step": "shot", "bytes": png.len()}));
+        Ok(json!({"path": out, "bytes": png.len()}))
+    })
+}
+
 /// عناصر الشاشة الظاهرة مع إطاراتها (للوكيل)
 #[unsafe(no_mangle)]
 pub extern "C" fn sawtctl_screen(cfg: *const c_char, wait_ms: u32) -> *mut c_char {
