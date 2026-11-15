@@ -24,6 +24,9 @@ final class SampleHandler: RPBroadcastSampleHandler {
             guard let self else { return }
             switch st {
             case .ready: self.ready = true
+            case .waiting:
+                // التطبيق مو مستمع: نلغي ونعيد (الإلغاء يوصلنا لـ.cancelled تحت)
+                c.cancel()
             case .failed, .cancelled:
                 self.ready = false
                 // التطبيق ممكن مو مستمع الحين: نعيد بعد ثانيتين
