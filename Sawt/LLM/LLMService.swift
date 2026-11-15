@@ -63,6 +63,7 @@ actor LLMService {
     }
 
     func warmup(system: String) async {
+        if CloudLLM.active != nil { return }
         guard let id = loadedID, warmedID != id else { return }
         warmedID = id
         let t0 = Date()
@@ -84,6 +85,7 @@ actor LLMService {
     /// تسخين صامت: يحمّل الأوزان ويولّد رمز واحد على تعليمات المحادثة
     /// (كرت الشاشة: يجمّع كيرنلات Metal؛ المعالج: يعبّي كاش البداية في llama)
     func warmUp(reason: String) async {
+        if CloudLLM.active != nil { return }   // السحابي ما يحتاج تسخين
         let dev = ComputeMode.device(for: ComputeMode.current) ?? "gpu"
         if let w = lastWarm, w.device == dev, Date().timeIntervalSince(w.at) < 120 { return }
         if dev == "gpu" && !AppPhase.active { return }   // Metal ممنوع في الخلفية
@@ -168,6 +170,12 @@ actor LLMService {
     func stream(system: String, history: [Chat.Message], user: String, maxTokens: Int = 400, reuse: Bool = false,
                 images: [URL] = [], think: Bool = false,
                 onThink: (@Sendable (String) -> Void)? = nil) throws -> AsyncThrowingStream<String, Error> {
+        // نموذج سحابي مفعّل من صفحة النماذج (اختياري)
+        if let c = CloudLLM.forThisReply(forcedDevice: ComputeMode.forced) {
+            slog("llm: cloud → \(c.rawValue):\(c.model) images=\(images.count)")
+            callSession = nil; callTurns = 0
+            return CloudLLM.stream(c, system: system, history: history, user: user, maxTokens: maxTokens, images: images)
+        }
         // المعالج = llama.cpp (MLX على المعالج ما يطلع شي في iOS)
         if ComputeMode.device(for: ComputeMode.forced ?? ComputeMode.current) == "cpu" {
             slog("llm: cpu → llama.cpp (mlx loaded=\(container != nil) avail=\(RAM.availableMB)MB)")
