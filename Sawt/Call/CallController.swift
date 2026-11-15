@@ -778,9 +778,11 @@ final class CallController: ObservableObject {
                     if Task.isCancelled || myID != self.replyID { return }
                 }
                 slog.stage("call:llm")
-                let stream = try await LLMService.shared.stream(system: system, history: hist, user: userText, maxTokens: think ? 900 : 450,
-                                                                reuse: frame == nil && !think,
-                                                                images: frame.map { [$0] } ?? [], think: think)
+                let stream = try await CloudLLM.$inCall.withValue(true) {
+                    try await LLMService.shared.stream(system: system, history: hist, user: userText, maxTokens: think ? 900 : 450,
+                                                       reuse: frame == nil && !think,
+                                                       images: frame.map { [$0] } ?? [], think: think)
+                }
                 for try await chunk in stream {
                     if Task.isCancelled || myID != self.replyID { break }
                     if namaaHeld { NamaaEngine.shared.release(); namaaHeld = false }
