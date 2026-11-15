@@ -20,7 +20,11 @@ final class ScreenShare: @unchecked Sendable {
     }
     var live: Bool { latest != nil }
 
-    func start() {
+    private var backoff: Double = 1
+    /// يشتغل على طابور الشبكة (ما فيه سباق على listener)
+    func start() { q.async { self.startOnQueue() } }
+
+    private func startOnQueue() {
         guard listener == nil else { return }
         do {
             let p = NWParameters.tcp
@@ -29,11 +33,16 @@ final class ScreenShare: @unchecked Sendable {
             let l = try NWListener(using: p)
             l.newConnectionHandler = { [weak self] c in self?.accept(c) }
             l.stateUpdateHandler = { [weak self] st in
+                guard let self else { return }
                 slog("share: listener \(st)")
-                if case .failed = st {
-                    // نعيد تشغيل المستمع بعد ثانية
+                switch st {
+                case .ready: self.backoff = 1
+                case .failed:
+                    // نعيد بمهلة تتضاعف (١، ٢، ٤… لين ٣٠ ثانية)
                     l.cancel()
-                    self?.q.asyncAfter(deadline: .now() + 1) { self?.listener = nil; self?.start() }
+                    let d = self.backoff; self.backoff = min(self.backoff * 2, 30)
+                    self.q.asyncAfter(deadline: .now() + d) { self.listener = nil; self.startOnQueue() }
+                default: break
                 }
             }
             l.start(queue: q)

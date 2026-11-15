@@ -21,6 +21,7 @@ final class PhoneAgent: ObservableObject {
 
     private var task: Task<Void, Never>?
     private var lastFront = ""
+    private var overflowed = false
     private var confirmToken: UUID?
     private var firstRead = true
     private var isSelf: Bool { lastFront == Bundle.main.bundleIdentifier || lastFront.hasPrefix("com.za7ef.sawt") }
@@ -86,9 +87,11 @@ final class PhoneAgent: ObservableObject {
         if g.isEmpty { why = "الهدف فاضي" }
         else if running { why = "الوكيل شغّال على مهمة ثانية — قل «وقف» أول" }
         else if !(PhoneControl.available && PhoneControl.hasPairing) { why = "التحكم بالجوال مو جاهز (اقتران/الأداة)" }
+        else if Self.agentModel == "qwen", !GGUFSpec.qwen.isDownloaded { why = "Qwen غير منزّل — نزّله من شاشة الوكيل أو اختر Gemma" }
         if let why {
             slog("agent: start refused: \(why)")
-            if let t = chatTarget { ChatStore.shared.updateText(t.msg, in: t.conv, "🤖 ما بديت: " + why, save: true); chatTarget = nil }
+            // لو شغّال ما نلمس فقاعة المهمة الحالية
+            if !running, let t = chatTarget { ChatStore.shared.updateText(t.msg, in: t.conv, "🤖 ما بديت: " + why, save: true); chatTarget = nil }
             return why
         }
         self.goal = g; log = []; lastResult = ""; running = true; stepNo = 0; firstRead = true
@@ -129,11 +132,12 @@ final class PhoneAgent: ObservableObject {
 
     private func say(_ s: String) {
         log.append(Step(text: s)); slog("agent: \(s.prefix(300))")
-        if running { stepNo += s.first?.isNumber == true ? 1 : 0; surface(s); updateBubble() }
+        if running { surface(s); updateBubble() }
     }
 
     // ───── الحلقة ─────
     private func loop() async {
+        if Task.isCancelled { return }
         if Self.see == .share { ScreenShare.shared.start() }
         let bg = BGTask("agent")
         defer { bg.end() }
@@ -166,6 +170,7 @@ final class PhoneAgent: ObservableObject {
             }
             fails = 0
             n += 1
+            stepNo = n
             var (app, els) = scr
             if isSelf {
                 // ما نلمس واجهة صوت نفسها أبدًا: نطلع للرئيسية ونعيد القراءة
@@ -177,8 +182,9 @@ final class PhoneAgent: ObservableObject {
             }
             let axMs = Int(Date().timeIntervalSince(tAX) * 1000)
             let tLLM = Date()
-            let screenText = Self.describe(app: app, els)
-            let user = """
+            var limit = els.count
+            var screenText = Self.describe(app: app, els)
+            var user = """
             الهدف: \(goal)
             الخطوات السابقة: \(history.isEmpty ? "لا شيء" : history.suffix(6).joined(separator: " ← "))
             الخطوة رقم \(n) من \(maxSteps).\(verifying ? "\nقلت إنك خلصت. تحقق من الشاشة الحالية: إذا الهدف متحقق فعلاً ويظهر على الشاشة رد done، وإلا رد الخطوة التالية." : "")
@@ -189,10 +195,29 @@ final class PhoneAgent: ObservableObject {
             var action: [String: Any]?
             let img = await visionImage(els, lastFailed: lastFailed)
             let userV = img == nil ? user : user + "\n\n[مرفقة صورة الشاشة. الأرقام المرسومة على المربعات هي نفس أرقام العناصر.]"
-            for attempt in 0..<2 {
-                raw = await ask(userV + (attempt == 1 ? "\n\nردك السابق ما كان JSON صالح. رد بسطر JSON واحد فقط." : ""), image: img)
+            var userQ = userV
+            var attempt = 0
+            overflowed = false
+            while attempt < 2 {
+                raw = await ask(userQ + (attempt == 1 ? "\n\nردك السابق ما كان JSON صالح. رد بسطر JSON واحد فقط." : ""), image: img)
+                // السياق ما كفى: نقص قائمة العناصر (60→40→25) ونعيد بدل ما ننهي
+                if raw.isEmpty, overflowed, let next = [40, 25].first(where: { $0 < limit }) {
+                    overflowed = false
+                    limit = next
+                    // نعيد الترتيب بسقف أصغر (مو prefix): خانة البحث والأشرطة تجي آخر القائمة وتنقص لو قصينا من الآخر
+                    let oldCount = els.count, prevHidden = Self.hiddenRows
+                    els = Self.rank(els, screen: UIScreen.main.bounds, cap: limit)
+                    Self.hiddenRows += prevHidden + max(0, oldCount - els.count - Self.hiddenRows)
+                    screenText = Self.describe(app: app, els)
+                    user = user.components(separatedBy: "الشاشة الحالية:\n")[0] + "الشاشة الحالية:\n" + screenText
+                    userQ = user
+                    slog("agent: context overflow — retry with \(limit) elements")
+                    continue
+                }
+                attempt += 1
                 action = Self.parse(raw)
                 if action != nil { break }
+                if raw.isEmpty, Self.agentModel == "qwen" { break }   // خطأ تحميل/ذاكرة: ما نعيد
             }
             if Task.isCancelled { return }
             let llmMs = Int(Date().timeIntervalSince(tLLM) * 1000)
@@ -283,6 +308,7 @@ final class PhoneAgent: ObservableObject {
     لو واضح تقدر ترجع حتى ٣ خطوات مرة وحدة: {"actions":[{"action":"tap","id":N},{"action":"type","text":"..."}]}
     إذا التطبيق المطلوب مو قدّام، أول خطوة open باسمه.
     في open اكتب اسم التطبيق بالإنجليزي إذا تعرفه (Notes, Settings, WhatsApp...).
+    للبحث داخل تطبيق (بريد، رسائل، ملاحظات...): اضغط عنصر search، بعدين type بالكلمة، بعدين enter. لا تفتح رسالة أو عنصر من القائمة إلا لو الهدف تقرأه. لو فتحت شاشة غلط اضغط back.
     قواعد: لا تخترع أرقام عناصر غير موجودة. لو الهدف تحقق قل done. لو انحسبت نفس الخطوة مرتين بدون تغيير جرّب شي ثاني.
     """
 
@@ -302,7 +328,7 @@ final class PhoneAgent: ObservableObject {
     url ::= "{\"action\":\"url\",\"url\":" str "}"
     search ::= "{\"action\":\"search\",\"q\":" str "}"
     done ::= "{\"action\":\"done\",\"summary\":" str "}"
-    str ::= "\"" [^"\\\x00-\x1F]{0,120} "\""
+    str ::= "\"" ( [^"\\\x00-\x1F] | "\\" ["\\/nt] )* "\""
     """#
 
     /// يحمّل Qwen عند الطلب؛ يفضّي نموذج المعالج الثاني، والـMLX لو الذاكرة ضيقة
@@ -310,11 +336,19 @@ final class PhoneAgent: ObservableObject {
         guard GGUFSpec.qwen.isDownloaded else { say("⚠️ Qwen3.5-4B مو منزّل — نزّله من شاشة الوكيل"); return "" }
         if !(await LlamaEngine.qwen.isLoaded) {
             await LlamaEngine.shared.unload()
-            if RAM.availableMB < 3800 { await LLMService.shared.unload(); slog("agent: unloaded MLX for qwen (avail=\(RAM.availableMB)MB)") }
+            // ما نفضّي نموذج الدردشة/المكالمة (MLX) — لو الذاكرة ما تكفي نقول بوضوح
+            if RAM.availableMB < 3000 {
+                say("⚠️ الذاكرة ما تكفي لـQwen (\(RAM.availableMB)MB متوفر) — سكّر المكالمة أو اختر Gemma")
+                return ""
+            }
         }
         do {
-            return try await LlamaEngine.qwen.complete(system: Self.system, user: user, maxTokens: 160, grammar: Self.grammar)
-        } catch { slog("agent: qwen error \(error)"); say("⚠️ Qwen: \(error)"); return "" }
+            return try await LlamaEngine.qwen.complete(system: Self.system, user: user, maxTokens: 256, grammar: Self.grammar)
+        } catch {
+            slog("agent: qwen error \(error)")
+            if "\(error)".contains("أطول من سياق") { overflowed = true; return "" }
+            say("⚠️ Qwen: \(error)"); return ""
+        }
     }
 
     private func ask(_ user: String, image: URL? = nil) async -> String {
@@ -328,13 +362,17 @@ final class PhoneAgent: ObservableObject {
         // Gemma على المعالج (llama.cpp): نفس القيود
         if LLMService.onCPU, image == nil, LlamaModelFile.isDownloaded {
             model = "gemma-cpu+gbnf"
-            do { return try await LlamaEngine.shared.complete(system: Self.system, user: user, maxTokens: 160, grammar: Self.grammar) }
-            catch { slog("agent: gemma cpu error \(error)"); return "" }
+            do { return try await LlamaEngine.shared.complete(system: Self.system, user: user, maxTokens: 256, grammar: Self.grammar) }
+            catch {
+                slog("agent: gemma cpu error \(error)")
+                if "\(error)".contains("أطول من سياق") { overflowed = true }
+                return ""
+            }
         }
         // Gemma على كرت الشاشة (MLX): بدون قيود، تحليل صارم
         var out = ""
         do {
-            let st = try await LLMService.shared.stream(system: Self.system, history: [], user: user, maxTokens: 160,
+            let st = try await LLMService.shared.stream(system: Self.system, history: [], user: user, maxTokens: 256,
                                                         images: image.map { [$0] } ?? [])
             for try await c in st {
                 out += c
@@ -356,6 +394,24 @@ final class PhoneAgent: ObservableObject {
     static func valid(_ o: [String: Any]) -> Bool {
         guard let k = o["action"] as? String else { return false }
         return ["tap", "type", "enter", "swipe", "open", "url", "search", "back", "home", "done"].contains(k)
+    }
+
+    /// بس لو الهدف يبدأ بـ«افتح/open/شغّل» + اسم تطبيق من الجدول بعده مباشرة
+    static func mentionedApp(_ g: String) -> String? {
+        let t = g.trimmingCharacters(in: .whitespacesAndNewlines)
+        let verbs = ["روح على", "روح الى", "روح إلى", "روح ل", "روح", "ادخل على", "ادخل", "أدخل", "اذهب الى", "اذهب إلى", "افتح", "إفتح", "open", "go to", "شغّل", "شغل"]
+        guard let v = verbs.first(where: { t.lowercased().hasPrefix($0) }) else { return nil }
+        let rest = t.dropFirst(v.count).trimmingCharacters(in: .whitespaces)
+        let words = rest.split(separator: " ").map(String.init)
+        // نجرب أول كلمة، وأول كلمتين، وأول ثلاث (أسماء مثل «واتساب للأعمال»)، والأطول يفوز
+        for n in stride(from: min(3, words.count), through: 1, by: -1) {
+            var cand = words.prefix(n).joined(separator: " ")
+            for p in ["و", "ل", "على"] where lookup(cand) == nil && cand.hasPrefix(p) && cand.count > p.count + 2 {
+                cand = String(cand.dropFirst(p.count))
+            }
+            if let e = lookup(cand), !e.bundle.isEmpty { return cand }
+        }
+        return nil
     }
 
     /// أي تطبيق من الجدول مذكور في الهدف (بعد فعل أو بأي مكان ككلمة/كلمتين)
@@ -417,27 +473,6 @@ final class PhoneAgent: ObservableObject {
         return out
     }
 
-    /// بس لو الهدف يبدأ بـ«افتح/open/شغّل» + اسم تطبيق من الجدول بعده مباشرة
-    static func mentionedApp(_ g: String) -> String? {
-        let t = g.trimmingCharacters(in: .whitespacesAndNewlines)
-        let verbs = ["روح على", "روح الى", "روح إلى", "روح ل", "روح", "ادخل على", "ادخل", "أدخل", "اذهب الى", "اذهب إلى", "افتح", "إفتح", "open", "go to", "شغّل", "شغل"]
-        guard let v = verbs.first(where: { t.lowercased().hasPrefix($0) }) else { return nil }
-        let rest = t.dropFirst(v.count).trimmingCharacters(in: .whitespaces)
-        let words = rest.split(separator: " ").map(String.init)
-        // نجرب أول كلمة، وأول كلمتين، وأول ثلاث (أسماء مثل «واتساب للأعمال»)، والأطول يفوز
-        for n in stride(from: min(3, words.count), through: 1, by: -1) {
-            var cand = words.prefix(n).joined(separator: " ")
-            for p in ["و", "ل", "على"] where lookup(cand) == nil && cand.hasPrefix(p) && cand.count > p.count + 2 {
-                cand = String(cand.dropFirst(p.count))
-            }
-            if let e = lookup(cand), !e.bundle.isEmpty { return cand }
-        }
-        return nil
-    }
-    static func isOnlyOpen(_ g: String) -> Bool {
-        let w = g.split(separator: " ")
-        return w.count <= 3 && (g.hasPrefix("افتح") || g.lowercased().hasPrefix("open") || g.hasPrefix("شغل") || g.hasPrefix("شغّل"))
-    }
 
     static func parse(_ s: String) -> [String: Any]? {
         guard let a = s.firstIndex(of: "{") else { return nil }
@@ -460,6 +495,7 @@ final class PhoneAgent: ObservableObject {
     private func readScreen() async -> (String, [Element])? {
         let r = await Self.exec(.screen(firstRead ? 8000 : 5000))
         firstRead = false
+        Self.searchKey = false; Self.hiddenRows = 0   // مسار OCR ما يعرف الكيبورد ولا الصفوف المخفية
         guard let d = try? JSONSerialization.jsonObject(with: Data(r.utf8)) as? [String: Any],
               d["ok"] as? Bool == true else {
             slog("agent: ax failed \(r.prefix(300)) — ocr fallback")
@@ -486,6 +522,8 @@ final class PhoneAgent: ObservableObject {
         }
         let b = UIScreen.main.bounds
         els = els.filter { $0.frame.intersects(b) }
+        // مفتاح الإدخال في الكيبورد مكتوب عليه Search/بحث؟ (نفحصه قبل القص لأن الكيبورد يجي آخر الشجرة)
+        Self.searchKey = els.contains { $0.kind == "key" && ["search", "بحث", "ابحث"].contains($0.label.lowercased().trimmingCharacters(in: .whitespaces)) }
         els = Self.rank(els, screen: b)
         // مشاركة الشاشة + المعالج (خلفية): ما فيه رؤية للنموذج، فنقرأ النص من الصورة ونضيفه كعناصر قابلة للضغط
         if Self.see == .share, LLMService.onCPU {
@@ -497,6 +535,8 @@ final class PhoneAgent: ObservableObject {
 
     /// عدد صفوف القوائم اللي انطوت في آخر قراءة
     static var hiddenRows = 0
+    /// الكيبورد ظاهر ومفتاح الإدخال فيه «بحث» (الإدخال حينها ما يرسل شي)
+    static var searchKey = false
 
     /// ترتيب العناصر قبل القص: خانات الكتابة/البحث أول، بعدين أشرطة فوق/تحت (تبويبات، أدوات، بحث آيفون ٢٦+)،
     /// بعدين الأزرار، وآخر شي النصوص. صفوف القوائم الطويلة نخلي أول ٨ بس.
@@ -510,7 +550,7 @@ final class PhoneAgent: ObservableObject {
         }
         func isRow(_ e: Element) -> Bool {
             e.frame.width > b.width * 0.8 && e.frame.height >= 40 && e.frame.height < 160 &&
-            e.frame.minY > b.height * 0.15 && e.frame.maxY < b.height * 0.88 && !["field", "search", "switch"].contains(e.kind)
+            e.frame.minY > b.height * 0.15 && e.frame.maxY < b.height * 0.88 && !["field", "search", "switch", "button", "link"].contains(e.kind)
         }
         var rows = 0
         hiddenRows = 0
@@ -567,31 +607,52 @@ final class PhoneAgent: ObservableObject {
         }
     }
 
-    static let riskyWords = ["send", "إرسال", "ارسال", "أرسل", "ارسل", "delete", "حذف", "احذف", "مسح", "remove", "pay", "ادفع",
-                             "دفع", "buy", "شراء", "اشتر", "purchase", "subscribe", "اشترك", "transfer", "تحويل", "حوّل",
-                             "call", "اتصال", "اتصل", "post", "نشر", "انشر", "confirm", "تأكيد"]
+    /// إنجليزي: بداية الكلمة (send→sending, pay→payments) ؛ عربي: الجذر داخل الكلمة (يرسل/ترسل/إرسال)
+    static let riskyEN = ["send", "delete", "remove", "pay", "buy", "purchase", "subscribe", "transfer", "call", "post",
+                          "confirm", "order", "checkout", "submit", "share", "reply", "reset", "erase", "install", "uninstall",
+                          "logout", "signout", "sign out", "log out", "unsubscribe", "accept", "approve"]
+    static let riskyAR = ["رسل", "حذف", "مسح", "دفع", "شراء", "اشتر", "اشترك", "تحويل", "اتصل", "اتصال", "نشر",
+                          "تأكيد", "أكد", "اكد", "طلب", "شارك", "مشارك", "رد", "تثبيت", "ثبت", "تسجيل الخروج", "خروج", "إعادة تعيين", "قبول"]
 
-    /// تطابق كلمات كاملة (مو جزء من كلمة: Display ما فيها pay، Recall ما فيها call)، مع سوابق عربية (و/ف/ب/ال)
-    static func hasWord(_ text: String, _ words: [String]) -> Bool {
-        let toks = text.lowercased().components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }
-        let ws = Set(words.map { $0.lowercased() })
-        for t in toks {
-            var forms = [t]
-            for p in ["و", "ف", "ب", "ال", "وال", "بال"] where t.hasPrefix(p) && t.count > p.count + 1 { forms.append(String(t.dropFirst(p.count))) }
-            if forms.contains(where: { ws.contains($0) }) { return true }
+    /// صيغ محددة بس (مو أي بادئة): send/sends/sending/sent… عشان Sender/Shared/Postcards ما تنحسب
+    static func inflections(_ w: String) -> Set<String> {
+        var f: Set<String> = [w, w + "s", w + "es", w + "ing", w + "ed", w + "d", w + "ment", w + "ments"]
+        if w.hasSuffix("e") { let b = String(w.dropLast()); f.insert(b + "ing") }
+        // y بعد ساكن: reply → replies / replied
+        if w.hasSuffix("y"), w.count >= 3, !"aeiou".contains(w[w.index(w.endIndex, offsetBy: -2)]) {
+            let b = String(w.dropLast()); f.insert(b + "ies"); f.insert(b + "ied")
         }
-        // عبارات من كلمتين
-        return words.contains { $0.contains(" ") && text.lowercased().contains($0.lowercased()) }
+        if let l = w.last, w.count >= 4, !"aeiouy".contains(l) { f.insert(w + String(l) + "ed"); f.insert(w + String(l) + "ing") }
+        let irregular: [String: [String]] = ["send": ["sent"], "pay": ["paid"], "buy": ["bought"], "post": ["posted"]]
+        irregular[w]?.forEach { f.insert($0) }
+        f.remove(w + "d") ; if w.hasSuffix("e") { f.insert(w + "d") }
+        return f
+    }
+
+    static func hasWord(_ text: String, _ words: [String] = []) -> Bool {
+        let low = text.lowercased()
+        let toks = low.components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }
+        for t in toks {
+            if t.unicodeScalars.first.map({ $0.value < 0x0600 }) == true {
+                if riskyEN.contains(where: { !$0.contains(" ") && Self.inflections($0).contains(t) }) { return true }
+            } else {
+                // «رد» قصيرة: بس كلمة كاملة (رد/الرد/ورد)، الباقي جذر داخل الكلمة
+                if ["رد", "الرد", "ورد"].contains(t) { return true }
+                if riskyAR.contains(where: { $0.count >= 3 && !$0.contains(" ") && t.contains($0) }) { return true }
+            }
+        }
+        return (riskyEN + riskyAR).contains { $0.contains(" ") && low.contains($0) }
     }
 
     static func sensitive(_ a: [String: Any], _ els: [Element]) -> String? {
         let k = a["action"] as? String ?? ""
         if k == "tap", let i = a["id"] as? Int, els.indices.contains(i) {
             let l = els[i].label.lowercased()
-            if l.split(separator: " ").count <= 4, Self.hasWord(l, riskyWords) { return "خطوة حساسة (إرسال/حذف/دفع)." }
+            if l.split(separator: " ").count <= 4, Self.hasWord(l) { return "خطوة حساسة (إرسال/حذف/دفع)." }
         }
         if k == "type", els.contains(where: { $0.secure }) { return "فيه خانة كلمة سر على الشاشة." }
-        if k == "enter" { return "زر الإدخال ممكن يرسل." }
+        // بحث: مفتاح الكيبورد «Search» ما يرسل، فما نوقف الوكيل ونسأل عن كل بحث
+        if k == "enter" { return Self.searchKey ? nil : "زر الإدخال ممكن يرسل." }
         return nil
     }
 
@@ -698,7 +759,7 @@ final class PhoneAgent: ObservableObject {
                 tag.draw(at: CGPoint(x: bg.minX + 2, y: bg.minY), withAttributes: attrs)
             }
         }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("agent-shot-\(UUID().uuidString.prefix(6)).jpg")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("agent-vision.jpg")   // نفس الملف كل مرة (ما يتكدّس)
         guard let d = out.jpegData(compressionQuality: 0.8), (try? d.write(to: url)) != nil else { return nil }
         slog("agent: vision on (\(mode)) \(Int(size.width))x\(Int(size.height)) \(d.count / 1024)KB els=\(els.count)")
         return url
@@ -893,75 +954,7 @@ final class PhoneAgent: ObservableObject {
         return (r.contains("\"ok\":true"), r)
     }
 
-    /// اختصار الويب: «ابحث عن …» أو «ادخل موقع x.com» → نفتح الرابط مباشرة في سفاري (صوت لازم يكون قدّام)
-    private func webShortcut() async -> Bool {
-        let g = goal
-        // لو الهدف يذكر تطبيق غير المتصفح/قوقل، البحث يكون داخل التطبيق (النموذج يسويه)
-        let webApps: Set<String> = ["com.apple.mobilesafari", "com.google.chrome.ios", "com.google.GoogleMobile"]
-        if let b = Self.namedAppBundle(g), !webApps.contains(b) {
-            slog("agent: web shortcut skipped (app named: \(b))"); return false
-        }
-        var url: URL?
-        for k in ["ابحث عن", "أبحث عن", "إبحث عن", "وابحث عن", "ابحث في قوقل عن", "ابحث فيه عن", "دور على", "دوّر على", "search for", "google "] {
-            if let r = g.range(of: k, options: .caseInsensitive) {
-                let q = g[r.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: " :«»\"'،,."))
-                if !q.isEmpty, let e = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
-                    url = URL(string: "https://www.google.com/search?q=\(e)")
-                }
-                break
-            }
-        }
-        if url == nil, let m = g.range(of: #"[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)+(/\S*)?"#, options: .regularExpression) {
-            let host = String(g[m])
-            url = URL(string: host.lowercased().hasPrefix("http") ? host : "https://\(host)")
-        }
-        guard let url else { return false }
-        guard UIApplication.shared.applicationState == .active else { slog("agent: web shortcut skipped (not foreground)"); return false }
-        say("⚡ اختصار (بدون النموذج): أفتح \(url.absoluteString.removingPercentEncoding ?? url.absoluteString)")
-        let ok = await UIApplication.shared.open(url)
-        slog("agent: web open \(url.absoluteString) ok=\(ok)")
-        guard ok else { return false }
-        finish("✅ فتحت \(url.host ?? "") في المتصفح")
-        return true
-    }
 
-    /// اختصار بدون النموذج: «افتح الملاحظات وأنشئ ملاحظة جديدة واكتب ...»
-    /// يرجع true إذا خلص المهمة
-    private func shortcut() async -> Bool {
-        let g = goal
-        let wantsNote = ["ملاحظة جديدة", "ملاحظه جديده", "new note", "أنشئ ملاحظة", "انشئ ملاحظة", "سو ملاحظة", "سوّ ملاحظة"].contains { g.lowercased().contains($0) }
-        let text: String? = {
-            for k in ["واكتب فيها", "واكتب", "اكتب فيها", "اكتب", "and type", "type", "write"] {
-                if let r = g.range(of: k, options: .caseInsensitive) {
-                    let t = g[r.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: " :«»\"'،,"))
-                    return t.isEmpty ? nil : t
-                }
-            }
-            return nil
-        }()
-        guard wantsNote || (g.contains("الملاحظات") && text != nil) else { return false }
-        say("⚡ اختصار: ملاحظة جديدة")
-        let o = await openApp("notes")
-        say("1. ⚡ افتح الملاحظات" + (o.ok ? "" : " ⚠️"))
-        guard o.ok, !Task.isCancelled else { return false }
-        try? await Task.sleep(nanoseconds: 800_000_000)
-        guard let scr = await readScreen() else { return false }
-        let keys = ["new note", "ملاحظة جديدة", "compose", "إنشاء", "create note"]
-        guard let i = scr.1.firstIndex(where: { e in keys.contains { e.label.lowercased().contains($0) } }) else {
-            say("ما لقيت زر ملاحظة جديدة — أكمل بالنموذج"); return false
-        }
-        let f = scr.1[i].frame
-        let (x, y) = Self.norm(CGPoint(x: f.midX, y: f.midY))
-        _ = await Self.exec(.tap(x, y))
-        say("2. ⚡ اضغط «\(scr.1[i].label)»")
-        guard let text else { finish("✅ فتحت ملاحظة جديدة"); return true }
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
-        let r = await Self.typeText(text)
-        say("3. ⚡ اكتب «\(text)»" + (r.contains("\"ok\":true") ? "" : " ⚠️"))
-        guard r.contains("\"ok\":true") else { return false }
-        finish("✅ أنشأت ملاحظة وكتبت «\(text)»")
-        return true
-    }
 
     /// ينفذ أمر sawtctl بنفس إعداد الاتصال حق شاشة الاختبار
     static func exec(_ op: PhoneControl.Op) async -> String {
@@ -1164,13 +1157,16 @@ struct PhoneAgentView: View {
 /// يكتشف أوامر الوكيل في الدردشة أو المكالمة
 enum PhoneAgentTrigger {
     static func isStop(_ t: String) -> Bool {
-        let s = t.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let toks = s.components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }
+        // نشيل التشكيل والترقيم والمسافات الزايدة قبل المقارنة
+        let bare = t.lowercased().unicodeScalars.filter { !(0x064B...0x0652).contains($0.value) && $0.value != 0x0640 }
+        let toks = String(String.UnicodeScalarView(bare)).components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }
+        let s = toks.joined(separator: " ")
         guard !toks.isEmpty, toks.count <= 3 else { return false }
         // كلمة كاملة بس (مو «موقف» ولا «stopwatch»)
-        let stops: Set<String> = ["وقف", "وقّف", "اوقف", "أوقف", "توقف", "وقفه", "وقفها", "stop", "خلاص"]
-        if s == "بس خلاص" || s == "stop it" { return true }
-        return toks.contains { stops.contains($0) } && !(toks.count == 1 && toks[0] == "خلاص")
+        // «خلاص» لحالها ما توقف (خلاص فهمت / طيب خلاص)؛ بس «بس خلاص» كأمر كامل
+        let stops: Set<String> = ["وقف", "اوقف", "أوقف", "توقف", "وقفه", "وقفها", "stop"]
+        if ["بس خلاص", "stop it", "كفاية", "كفايه", "بس كفاية", "بس كفايه"].contains(s) { return true }
+        return toks.contains { stops.contains($0) }
     }
     static let chatPrefixes = ["/جوال", "/agent", "جوال:", "نفذ على الجوال", "نفّذ على الجوال"]
     static let voicePrefixes = ["على الجوال", "نفذ على الجوال", "نفّذ على الجوال", "يا صوت نفذ", "يا صوت نفّذ", "on the phone"]
@@ -1192,7 +1188,8 @@ final class BGTask {
     init(_ name: String) {
         id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
             slog("bg: \(name) expired")
-            Task { @MainActor in self?.end() }
+            // لازم ننهيه قبل ما يرجع المعالج (يشتغل على الخيط الرئيسي)
+            MainActor.assumeIsolated { self?.end() }
         }
     }
     func end() {
