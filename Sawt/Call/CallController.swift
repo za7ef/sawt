@@ -740,7 +740,10 @@ final class CallController: ObservableObject {
                 defer { if namaaHeld { NamaaEngine.shared.release() } }
                 if !(await LLMService.shared.hasCallSession) { self.lastMemBlock = "" }
                 var userText = (mem.isEmpty || mem == self.lastMemBlock) ? text : "[\(mem)]\n\n\(text)"
-                if let g = PhoneAgentTrigger.goal(text, voice: true) {
+                if PhoneAgentTrigger.isStop(text), await MainActor.run(body: { PhoneAgent.shared.running }) {
+                    await MainActor.run { PhoneAgent.shared.stop() }
+                    userText = "[المستخدم طلب إيقاف الوكيل وانوقف الحين. رد بكلمة قصيرة: وقفت.]\n" + text
+                } else if let g = PhoneAgentTrigger.goal(text, voice: true) {
                     await MainActor.run { PhoneAgent.shared.start(g) }
                     userText = "[المستخدم طلب تنفيذ مهمة على الجوال وبدأ الوكيل ينفذها الحين. رد بجملة قصيرة جدًا إنك بديت.]\n" + text
                 }
