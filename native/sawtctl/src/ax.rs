@@ -316,6 +316,22 @@ impl Tree {
         "other"
     }
 
+    fn flatten_all(&self) -> Json {
+        let mut out = Vec::new();
+        for n in self.nodes.values() {
+            if out.len() >= 300 { break }
+            let Some(f) = n.frame else { continue };
+            if f[2] < 2.0 || f[3] < 2.0 { continue }
+            let k = self.kind(n);
+            let has_text = n.label.as_deref().map_or(false, |s| !s.trim().is_empty()) || n.value.is_some() || n.ph.is_some();
+            if !has_text && !matches!(k, "button" | "field" | "search" | "switch") { continue }
+            out.push(json!({"k": k, "l": n.label, "v": n.value, "p": n.ph,
+                            "f": [f[0].round(), f[1].round(), f[2].round(), f[3].round()], "foc": false,
+                            "sec": n.traits & (1 << 20) != 0}));
+        }
+        json!({"app": null, "elements": out})
+    }
+
     /// قائمة مسطّحة بالعناصر الظاهرة اللي لها نص أو قابلة للضغط
     fn flatten(&self) -> Json {
         let mut out = Vec::new();
@@ -351,6 +367,7 @@ pub async fn elements(adapter: &mut AdapterHandle, rsd: &RsdHandshake, wait: Dur
     let t0 = Instant::now();
     let deadline = tokio::time::Instant::now() + wait;
     let mut tries = 0;
+    let mut best = Tree::default();
     // الاشتراك اللي ينسوى والشاشة تتحرك أحيانًا ما يرد؛ نعيد كل ثانيتين
     while tokio::time::Instant::now() < deadline {
         tries += 1;
@@ -377,6 +394,7 @@ pub async fn elements(adapter: &mut AdapterHandle, rsd: &RsdHandshake, wait: Dur
             if tree.ready() { done = true; break }
         }
         let _ = send(&mut sock, 3, "clientNeedsAccessibility:", Some(false.into()), false).await;
+        if !done && tree.nodes.len() > best.nodes.len() { best = tree; continue }
         if done {
             let mut j = tree.flatten();
             j["ms"] = json!(t0.elapsed().as_millis() as u64);
@@ -384,6 +402,22 @@ pub async fn elements(adapter: &mut AdapterHandle, rsd: &RsdHandshake, wait: Dur
             steps.push(json!({"step": "ax_tree", "nodes": tree.nodes.len(), "tries": tries}));
             return Ok(j);
         }
+    }
+    // ما اكتملت: نرجع أفضل جزء وصلنا لو فيه عناصر (بدون جذر التطبيق)
+    if best.nodes.len() > 1 {
+        if best.roots.is_empty() { best.roots = best.nodes.keys().cloned().take(1).collect() }
+        let mut j = best.flatten();
+        if j["elements"].as_array().map_or(true, |a| a.is_empty()) {
+            // بدون روابط الأبناء: نسطّح كل العقد مباشرة
+            let ids: Vec<u64> = best.nodes.keys().cloned().collect();
+            best.roots = vec![];
+            for id in ids { best.roots.push(id) }
+            j = best.flatten_all();
+        }
+        j["partial"] = json!(true);
+        j["tries"] = json!(tries);
+        steps.push(json!({"step": "ax_partial", "nodes": best.nodes.len()}));
+        return Ok(j);
     }
     Err(format!("ما وصلت شجرة الشاشة خلال {}ms ({} محاولات)", wait.as_millis(), tries))
 }
