@@ -214,6 +214,8 @@ final class ChatStore: ObservableObject {
         var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty || !attachments.isEmpty, !isGenerating else { return }
         if t.isEmpty { t = attachments.contains { $0.kind == .image } ? "وش تشوف في الصورة؟" : "لخّص لي الملف باختصار." }
+        // أمر للوكيل: "/جوال افتح الملاحظات..." أو "جوال: ..."
+        if let g = PhoneAgentTrigger.goal(t) { Task { @MainActor in PhoneAgent.shared.start(g) }; return }
         let earlier = (current?.messages ?? []).flatMap { $0.attachments ?? [] }
         // تفكير عميق يطفي إذا الجوال حار (يطول ويسخّن أكثر)
         let mode = thinkMode
