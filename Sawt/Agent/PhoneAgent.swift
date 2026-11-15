@@ -351,7 +351,10 @@ final class PhoneAgent: ObservableObject {
     أنت وكيل يتحكم بجوال iPhone نيابة عن المستخدم. كل مرة تشوف وصف الشاشة كقائمة عناصر مرقّمة، وتختار خطوة وحدة بس.
     رد بسطر JSON واحد فقط بدون أي كلام ثاني، بأحد هذي الأشكال:
     {"action":"tap","id":N}   (N = رقم العنصر المطلوب من القائمة بالضبط، مو مثال)
-    {"action":"type","text":"النص"}   (يكتب في الخانة المفتوحة؛ اضغط على الخانة أول لو ما كانت مفتوحة)
+    {"action":"type","text":"النص"}   (يكتب في الخانة المفتوحة)
+    {"action":"type","id":N,"text":"النص"}   (يضغط الخانة N ويكتب فيها بخطوة وحدة)
+    {"action":"longpress","id":N}     (ضغط مطوّل على العنصر، مثل قائمة الخيارات)
+    {"action":"wait","s":2}           (ينتظر ١-٣ ثواني لو الشاشة لسا تحمّل)
     {"action":"enter"}               (زر الإدخال/إرسال في الكيبورد)
     {"action":"swipe","dir":"up"}     (up يمرر لتحت المحتوى، down لفوق، left، right)
     {"action":"open","app":"اسم التطبيق"}   (يروح للرئيسية ويبحث عن التطبيق ويفتحه)
@@ -371,7 +374,10 @@ final class PhoneAgent: ObservableObject {
     static let grammar = #"""
     root ::= act | multi
     multi ::= "{\"actions\":[" act ("," act)? ("," act)? "]}"
-    act ::= tap | type | simple | swipe | open | url | search | done
+    act ::= tap | type | typeat | longpress | wait | simple | swipe | open | url | search | done
+    typeat ::= "{\"action\":\"type\",\"id\":" [0-9] [0-9]? ",\"text\":" str "}"
+    longpress ::= "{\"action\":\"longpress\",\"id\":" [0-9] [0-9]? "}"
+    wait ::= "{\"action\":\"wait\",\"s\":" [1-3] "}"
     tap ::= "{\"action\":\"tap\",\"id\":" [0-9] [0-9]? "}"
     type ::= "{\"action\":\"type\",\"text\":" str "}"
     simple ::= "{\"action\":\"" ("enter" | "back" | "home") "\"}"
@@ -459,7 +465,7 @@ final class PhoneAgent: ObservableObject {
     }
     static func valid(_ o: [String: Any]) -> Bool {
         guard let k = o["action"] as? String else { return false }
-        return ["tap", "type", "enter", "swipe", "open", "url", "search", "back", "home", "done"].contains(k)
+        return ["tap", "type", "longpress", "wait", "enter", "swipe", "open", "url", "search", "back", "home", "done"].contains(k)
     }
 
     /// بس لو الهدف يبدأ بـ«افتح/open/شغّل» + اسم تطبيق من الجدول بعده مباشرة
@@ -553,7 +559,7 @@ final class PhoneAgent: ObservableObject {
         guard let o = try? JSONSerialization.jsonObject(with: Data(j.utf8)) as? [String: Any] else { return nil }
         if let arr = o["actions"] as? [[String: Any]], let f = arr.first(where: { valid($0) }) { return f }
         guard let k = o["action"] as? String,
-              ["tap", "type", "enter", "swipe", "open", "url", "search", "back", "home", "done"].contains(k) else { return nil }
+              ["tap", "type", "longpress", "wait", "enter", "swipe", "open", "url", "search", "back", "home", "done"].contains(k) else { return nil }
         return o
     }
 
@@ -677,7 +683,11 @@ final class PhoneAgent: ObservableObject {
         case "tap":
             let i = (a["id"] as? Int) ?? -1
             return "اضغط [\(i)] \(els.indices.contains(i) ? els[i].label : "؟")"
-        case "type": return "اكتب «\((a["text"] as? String ?? "").prefix(60))»"
+        case "type": return "اكتب «\((a["text"] as? String ?? "").prefix(60))»" + ((a["id"] as? Int).map { " في [\($0)]" } ?? "")
+        case "longpress":
+            let i = (a["id"] as? Int) ?? -1
+            return "ضغط مطوّل [\(i)] \(els.indices.contains(i) ? els[i].label : "؟")"
+        case "wait": return "انتظار \((a["s"] as? Int) ?? 1) ث"
         case "enter": return "إدخال"
         case "swipe": return "سحب \(a["dir"] as? String ?? "")"
         case "open": return "افتح \(a["app"] as? String ?? "")"
@@ -760,7 +770,25 @@ final class PhoneAgent: ObservableObject {
             return ok(await Self.exec(.tap(x, y)))
         case "type":
             let t = a["text"] as? String ?? ""
+            // مع رقم عنصر: نضغطه أول (خطوة وحدة بدل ثنتين)
+            if let i = a["id"] as? Int {
+                guard els.indices.contains(i) else { return (false, "رقم عنصر غلط") }
+                let f = els[i].frame
+                let (x, y) = Self.norm(CGPoint(x: f.midX, y: f.midY))
+                let r = ok(await Self.exec(.tap(x, y)))
+                if !r.0 { return r }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
             return ok(await Self.typeText(t))
+        case "longpress":
+            guard let i = a["id"] as? Int, els.indices.contains(i) else { return (false, "رقم عنصر غلط") }
+            guard Self.see == .xct else { return (false, "الضغط المطوّل يحتاج طريقة XCTest") }
+            let f = els[i].frame
+            return ok(await XCTBackend.longPress(CGPoint(x: f.midX, y: f.midY)))
+        case "wait":
+            let sec = min(3, max(1, (a["s"] as? Int) ?? 1))
+            try? await Task.sleep(nanoseconds: UInt64(sec) * 1_000_000_000)
+            return (true, "waited \(sec)s")
         case "enter":
             return ok(await Self.exec(.keys("return")))
         case "home":
@@ -829,6 +857,10 @@ final class PhoneAgent: ObservableObject {
         let cloud = Self.cloud != nil
         // السحابي يشوف الصور دائمًا (لقطة لو البث طافي)؛ المحلي بس في وضع مشاركة الشاشة
         guard cloud || Self.see == .share else { return nil }
+        // XCTest: النص يكفي غالبًا؛ الصورة بس لو آخر خطوة فشلت أو ما فيه عناصر، أو لو الخيار «صورة كل خطوة» شغّال
+        if Self.see == .xct && !UserDefaults.standard.bool(forKey: "agentAlwaysShot") && !lastFailed && !els.isEmpty {
+            slog("agent: vision skipped (xct text enough)"); return nil
+        }
         if !cloud, Self.cpuSpecForStep() != nil { slog("agent: vision skipped (cpu/llama.cpp, no mmproj) — text only"); return nil }
         if !cloud { guard await ModelManager.shared.ensureVision() else { slog("agent: vision unavailable"); return nil } }
         guard let fr = await currentFrame() else { return nil }
@@ -1032,6 +1064,12 @@ final class PhoneAgent: ObservableObject {
     /// يفتح رابط: لو صوت قدّام نفتحه مباشرة، وإلا من سبوتلايت (لصق الرابط + إدخال)
     func openURL(_ u: URL) async -> (ok: Bool, info: String) {
         slog("agent: open url \(u.absoluteString)")
+        // XCTest: نفتح الرابط مباشرة (XCUIDevice.system openURL) بخطوة وحدة؛ لو مو مدعوم نكمل بسبوتلايت (كله عبر XCTest)
+        if Self.see == .xct {
+            let r = await XCTBackend.openURL(u)
+            if r.contains("\"ok\":true") { try? await Task.sleep(nanoseconds: 1_000_000_000); return (true, r) }
+            slog("agent: xct openURL failed, spotlight via xct: \(r.prefix(160))")
+        }
         if UIApplication.shared.applicationState == .active, await UIApplication.shared.open(u) {
             try? await Task.sleep(nanoseconds: 1_000_000_000); return (true, "opened")
         }
@@ -1351,6 +1389,9 @@ struct PhoneAgentView: View {
                         try? await Task.sleep(nanoseconds: 2_000_000_000)
                     }
                 }
+                Toggle("صورة الشاشة كل خطوة (أبطأ)", isOn: Binding(
+                    get: { UserDefaults.standard.bool(forKey: "agentAlwaysShot") },
+                    set: { UserDefaults.standard.set($0, forKey: "agentAlwaysShot") }))
                 // اختبار الضغط: XCTest يلمس الهدف هذا، ولو العدّاد زاد يعني اللمس وصل فعلًا
                 Button("🎯 هدف الضغط: \(tapHits)") { tapHits += 1 }
                     .buttonStyle(.bordered)

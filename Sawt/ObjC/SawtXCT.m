@@ -425,3 +425,24 @@ NSString * _Nullable SawtXCTTypeText(NSString *text, NSInteger speed, double tim
         return [NSString stringWithFormat:@"%@: %@", e.name, e.reason ?: @""];
     }
 }
+
+
+NSString * _Nullable SawtXCTOpenURL(NSURL *url) {
+    @try {
+        Class dev = NSClassFromString(@"XCUIDevice");
+        SEL shared = NSSelectorFromString(@"sharedDevice");
+        if (!dev || ![dev respondsToSelector:shared]) return @"XCUIDevice مو موجود";
+        id device = ((id (*)(id, SEL))objc_msgSend)(dev, shared);
+        SEL sysSel = NSSelectorFromString(@"system");
+        if (![device respondsToSelector:sysSel]) return @"XCUIDevice.system مو مدعوم";
+        id sys = ((id (*)(id, SEL))objc_msgSend)(device, sysSel);
+        SEL open = NSSelectorFromString(@"openURL:error:");
+        if (!sys || ![sys respondsToSelector:open]) return @"openURL:error: مو مدعوم";
+        NSError *err = nil;
+        BOOL ok = ((BOOL (*)(id, SEL, id, NSError **))objc_msgSend)(sys, open, url, &err);
+        if (ok) return nil;
+        return err ? [NSString stringWithFormat:@"%@ %ld %@", err.domain, (long)err.code, err.localizedDescription] : @"رجع NO";
+    } @catch (NSException *e) {
+        return [NSString stringWithFormat:@"%@: %@", e.name, e.reason ?: @""];
+    }
+}

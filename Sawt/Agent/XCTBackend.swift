@@ -639,6 +639,25 @@ enum XCTBackend {
         return result(err.map { "الكتابة المركّبة فشلت: \($0)" }, "\(what) \(text.count) حرف", t)
     }
 
+    /// ضغط مطوّل (ثانية) بحدث مركّب
+    static func longPress(_ p: CGPoint) async -> String {
+        let t = Date()
+        if !prepared { return result("جلسة XCTest مو جاهزة", "longpress", t) }
+        let err = await synth([p], duration: 1.0, timeout: 6)
+        if isAuthLost(err) { markAuthLost("ضغط مطوّل") }
+        return result(err.map { "الضغط المطوّل فشل: \($0)" }, "longpress \(Int(p.x)),\(Int(p.y))", t)
+    }
+
+    /// يفتح رابط مباشرة عبر XCUIDevice.sharedDevice.system openURL:error: (iOS 16.4+)
+    static func openURL(_ u: URL) async -> String {
+        let t = Date()
+        if !prepared { return result("جلسة XCTest مو جاهزة", "openURL", t) }
+        let err: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTOpenURL(u)) }
+        }
+        return result(err, "openURL", t)
+    }
+
     /// سحب من نقطة لنقطة بحدث مركّب (نفس قواعد اللمس)
     static func drag(_ a: CGPoint, _ b: CGPoint) async -> String {
         let t = Date()

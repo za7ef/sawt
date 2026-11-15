@@ -20,6 +20,9 @@ FOUNDATION_EXPORT NSString *SawtXCTDisableAutomation(void);
 /// يكتب نص في الحقل اللي عليه التركيز بحدث كتابة مركّب (XCPointerEventPath initForTextInput). "\n" = إدخال. nil = نجح
 FOUNDATION_EXPORT NSString * _Nullable SawtXCTTypeText(NSString *text, NSInteger speed, double timeout);
 
+/// يفتح رابط عبر XCUIDevice.sharedDevice.system openURL:error:. nil = نجح
+FOUNDATION_EXPORT NSString * _Nullable SawtXCTOpenURL(NSURL *url);
+
 /// وش مصدر عميل الوصول اللي انلقى (للسجل)
 FOUNDATION_EXPORT NSString *SawtXCTAXSource(void);
 
