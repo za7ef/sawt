@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import UserNotifications
+import ActivityKit
 
 /// الوكيل: يقرأ الشاشة → النموذج المحلي يختار خطوة وحدة (JSON) → ننفذها → نعيد. حد أقصى ١٠ خطوات.
 /// أي إرسال/حذف/دفع/كلمة سر يوقف ويطلب تأكيد.
@@ -18,6 +19,38 @@ final class PhoneAgent: ObservableObject {
     @Published var lastResult = ""
 
     private var task: Task<Void, Never>?
+    private var activity: Activity<AgentActivityAttributes>?
+    private var stepNo = 0
+    private var obs: NSObjectProtocol?
+
+    private init() {
+        obs = NotificationCenter.default.addObserver(forName: Notification.Name("sawt.stopAgent"), object: nil, queue: .main) { _ in
+            Task { @MainActor in PhoneAgent.shared.stop() }
+        }
+        AgentNotify.setup()
+    }
+
+    /// يحدّث النشاط المباشر والإشعار الثابت بالخطوة الحالية
+    private func surface(_ step: String, waiting: Bool = false) {
+        let st = AgentActivityAttributes.ContentState(step: step, n: stepNo, waiting: waiting)
+        if let activity {
+            Task { await activity.update(ActivityContent(state: st, staleDate: nil)) }
+        } else if ActivityAuthorizationInfo().areActivitiesEnabled {
+            activity = try? Activity.request(attributes: AgentActivityAttributes(goal: String(goal.prefix(60))),
+                                             content: ActivityContent(state: st, staleDate: nil))
+            slog("agent: activity \(activity == nil ? "failed" : "started")")
+        }
+        AgentNotify.progress(goal: goal, step: step)
+    }
+
+    private func unsurface() {
+        let a = activity; activity = nil
+        Task {
+            await a?.end(nil, dismissalPolicy: .immediate)
+            for x in Activity<AgentActivityAttributes>.activities { await x.end(nil, dismissalPolicy: .immediate) }
+        }
+        AgentNotify.clear()
+    }
     private var confirmCont: CheckedContinuation<Bool, Never>?
     let maxSteps = 10
 
@@ -28,8 +61,9 @@ final class PhoneAgent: ObservableObject {
         guard PhoneControl.available, PhoneControl.hasPairing else {
             lastResult = "التحكم بالجوال مو جاهز (اقتران/الأداة)"; return
         }
-        self.goal = g; log = []; lastResult = ""; running = true
+        self.goal = g; log = []; lastResult = ""; running = true; stepNo = 0
         say("الهدف: \(g)")
+        surface("يبدأ…")
         task = Task { await self.loop() }
     }
 
@@ -46,25 +80,31 @@ final class PhoneAgent: ObservableObject {
     }
 
     private func finish(_ r: String) {
+        guard running else { return }
         running = false; lastResult = r
+        unsurface()
+        AgentNotify.done(r)
         HostPairing.shared.keepAlive(false)
         slog("agent: finish \(r)")
     }
 
     private func say(_ s: String) {
         log.append(Step(text: s)); slog("agent: \(s.prefix(300))")
+        if running { stepNo += s.first?.isNumber == true ? 1 : 0; surface(s) }
     }
 
     // ───── الحلقة ─────
     private func loop() async {
         // يبقى صاحي لما نطلع لتطبيقات ثانية
         HostPairing.shared.keepAlive(true)
+        if Self.see == .share { ScreenShare.shared.start() }
         let bg = UIApplication.shared.beginBackgroundTask(withName: "agent") { }
         defer { if bg != .invalid { UIApplication.shared.endBackgroundTask(bg) } }
         if await shortcut() { return }
         if Task.isCancelled { return }
         var history: [String] = []
         var fails = 0
+        var lastFailed = false
         for n in 1...maxSteps {
             if Task.isCancelled { return }
             guard let scr = await readScreen() else {
@@ -83,8 +123,10 @@ final class PhoneAgent: ObservableObject {
             """
             var raw = ""
             var action: [String: Any]?
+            let img = await visionImage(els, lastFailed: lastFailed)
+            let userV = img == nil ? user : user + "\n\n[مرفقة صورة الشاشة. الأرقام المرسومة على المربعات هي نفس أرقام العناصر.]"
             for attempt in 0..<2 {
-                raw = await ask(user + (attempt == 1 ? "\n\nردك السابق ما كان JSON صالح. رد بسطر JSON واحد فقط." : ""))
+                raw = await ask(userV + (attempt == 1 ? "\n\nردك السابق ما كان JSON صالح. رد بسطر JSON واحد فقط." : ""), image: img)
                 action = Self.parse(raw)
                 if action != nil { break }
             }
@@ -105,6 +147,7 @@ final class PhoneAgent: ObservableObject {
             }
             let r = await perform(kind, action, els)
             history.append(desc + (r.ok ? "" : " (فشل: \(r.info.prefix(60)))"))
+            lastFailed = !r.ok
             if !r.ok { say("⚠️ \(r.info.prefix(160))") }
             try? await Task.sleep(nanoseconds: 900_000_000)
         }
@@ -114,6 +157,7 @@ final class PhoneAgent: ObservableObject {
     private func askConfirm(_ q: String) async -> Bool {
         say("❓ \(q)")
         confirm = q
+        surface("ينتظر تأكيدك", waiting: true)
         AgentNotify.agentConfirm(q)
         return await withCheckedContinuation { c in confirmCont = c }
     }
@@ -134,10 +178,11 @@ final class PhoneAgent: ObservableObject {
     قواعد: لا تخترع أرقام عناصر غير موجودة. لو الهدف تحقق قل done. لو انحسبت نفس الخطوة مرتين بدون تغيير جرّب شي ثاني.
     """
 
-    private func ask(_ user: String) async -> String {
+    private func ask(_ user: String, image: URL? = nil) async -> String {
         var out = ""
         do {
-            let st = try await LLMService.shared.stream(system: Self.system, history: [], user: user, maxTokens: 80)
+            let st = try await LLMService.shared.stream(system: Self.system, history: [], user: user, maxTokens: 80,
+                                                        images: image.map { [$0] } ?? [])
             for try await c in st {
                 out += c
                 if out.contains("}") , Self.parse(out) != nil { break }
@@ -204,6 +249,69 @@ final class PhoneAgent: ObservableObject {
         case "type": return "اكتب «\((a["text"] as? String ?? "").prefix(60))»"
         case "enter": return "إدخال"
         case "swipe": return "سحب \(a["dir"] as? String ?? "")"
+        case "open": return "افتح \(a["app"] as? String ?? "")"
+        case "back": return "رجوع"
+        case "home": return "الشاشة الرئيسية"
+        case "done": return "خلصت"
+        default: return k
+        }
+    }
+
+    static let riskyWords = ["send", "إرسال", "ارسال", "أرسل", "ارسل", "delete", "حذف", "احذف", "مسح", "remove", "pay", "ادفع",
+                             "دفع", "buy", "شراء", "اشتر", "purchase", "subscribe", "اشترك", "transfer", "تحويل", "حوّل",
+                             "call", "اتصال", "اتصل", "post", "نشر", "انشر", "confirm", "تأكيد"]
+
+    static func sensitive(_ a: [String: Any], _ els: [Element]) -> String? {
+        let k = a["action"] as? String ?? ""
+        if k == "tap", let i = a["id"] as? Int, els.indices.contains(i) {
+            let l = els[i].label.lowercased()
+            if l.split(separator: " ").count <= 4, riskyWords.contains(where: { l.contains($0) }) { return "خطوة حساسة (إرسال/حذف/دفع)." }
+        }
+        if k == "type", els.contains(where: { $0.secure }) { return "فيه خانة كلمة سر على الشاشة." }
+        if k == "enter" { return "زر الإدخال ممكن يرسل." }
+        return nil
+    }
+
+    // ───── التنفيذ ─────
+    private static func norm(_ p: CGPoint) -> (UInt16, UInt16) {
+        let b = UIScreen.main.bounds
+        let x = max(0, min(65535, p.x / b.width * 65535)), y = max(0, min(65535, p.y / b.height * 65535))
+        return (UInt16(x), UInt16(y))
+    }
+
+    private func perform(_ kind: String, _ a: [String: Any], _ els: [Element]) async -> (ok: Bool, info: String) {
+        func ok(_ r: String) -> (Bool, String) { (r.contains("\"ok\":true"), r) }
+        switch kind {
+        case "tap":
+            guard let i = a["id"] as? Int, els.indices.contains(i) else { return (false, "رقم عنصر غلط") }
+            let f = els[i].frame
+            let (x, y) = Self.norm(CGPoint(x: f.midX, y: f.midY))
+            return ok(await Self.exec(.tap(x, y)))
+        case "type":
+            let t = a["text"] as? String ?? ""
+            return ok(await Self.typeText(t))
+        case "enter":
+            return ok(await Self.exec(.keys("return")))
+        case "home":
+            return ok(await Self.exec(.keys("home")))
+        case "back":
+            // سحب من الحافة اليسار
+            let (x1, y) = Self.norm(CGPoint(x: 2, y: UIScreen.main.bounds.midY))
+            let (x2, _) = Self.norm(CGPoint(x: UIScreen.main.bounds.width * 0.75, y: 0))
+            return ok(await Self.exec(.drag(x1, y, x2, y)))
+        case "swipe":
+            let b = UIScreen.main.bounds
+            let c = CGPoint(x: b.midX, y: b.midY)
+            let dir = (a["dir"] as? String ?? "up").lowercased()
+            var p1 = c, p2 = c
+            switch dir {
+            case "down": p1.y = b.height * 0.3; p2.y = b.height * 0.75
+            case "left": p1.x = b.width * 0.85; p2.x = b.width * 0.15
+            case "right": p1.x = b.width * 0.15; p2.x = b.width * 0.85
+            default: p1.y = b.height * 0.75; p2.y = b.height * 0.3
+            }
+            let (x1, y1) = Self.norm(p1), (x2, y2) = Self.norm(p2)
+            return ok(await Self.exec(.drag(x1, y1, x2, y2)))
         case "open":
             let app = (a["app"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !app.isEmpty else { return (false, "اسم التطبيق فاضي") }
@@ -211,6 +319,57 @@ final class PhoneAgent: ObservableObject {
         default:
             return (false, "خطوة غير معروفة")
         }
+    }
+
+    // ───── النظر ─────
+    /// طريقة رؤية الشاشة: قراءة النصوص (الافتراضي) أو مشاركة الشاشة (صورة + أرقام العناصر)
+    enum See: String, CaseIterable { case ax, share
+        var title: String { self == .ax ? "قراءة النصوص" : "مشاركة الشاشة" }
+    }
+    static var see: See {
+        get { See(rawValue: UserDefaults.standard.string(forKey: "agentSee") ?? "") ?? .ax }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "agentSee") }
+    }
+
+    /// صورة الشاشة مصغّرة مع أرقام العناصر مرسومة عليها: من البث لو شغّال، وإلا لقطة من خدمة الأدوات
+    private func visionImage(_ els: [Element], lastFailed: Bool) async -> URL? {
+        guard Self.see == .share else { return nil }
+        if LLMService.onCPU { slog("agent: vision skipped (cpu/llama.cpp, no mmproj) — text only"); return nil }
+        guard await ModelManager.shared.ensureVision() else { slog("agent: vision unavailable"); return nil }
+        var img: UIImage?
+        var src = "broadcast"
+        if let d = ScreenShare.shared.latest { img = UIImage(data: d) }
+        if img == nil {
+            src = "screenshot"
+            let raw = FileManager.default.temporaryDirectory.appendingPathComponent("agent-shot.png")
+            let r = await Self.exec(.shot(raw.path))
+            if r.contains("\"ok\":true") { img = UIImage(contentsOfFile: raw.path) } else { slog("agent: shot failed \(r.prefix(200))") }
+        }
+        guard let img else { return nil }
+        let mode = src
+        let w: CGFloat = 448
+        let size = CGSize(width: w, height: (img.size.height / img.size.width * w).rounded())
+        let pts = UIScreen.main.bounds.size
+        let k = size.width / pts.width
+        let fmt = UIGraphicsImageRendererFormat(); fmt.scale = 1
+        let out = UIGraphicsImageRenderer(size: size, format: fmt).image { ctx in
+            img.draw(in: CGRect(origin: .zero, size: size))
+            let c = ctx.cgContext
+            for (i, e) in els.enumerated() {
+                let f = CGRect(x: e.frame.minX * k, y: e.frame.minY * k, width: e.frame.width * k, height: e.frame.height * k)
+                c.setStrokeColor(UIColor.systemRed.cgColor); c.setLineWidth(1.5); c.stroke(f)
+                let tag = "\(i)" as NSString
+                let attrs: [NSAttributedString.Key: Any] = [.font: UIFont.boldSystemFont(ofSize: 10), .foregroundColor: UIColor.white]
+                let ts = tag.size(withAttributes: attrs)
+                let bg = CGRect(x: f.minX, y: max(0, f.minY - ts.height), width: ts.width + 4, height: ts.height)
+                c.setFillColor(UIColor.systemRed.cgColor); c.fill(bg)
+                tag.draw(at: CGPoint(x: bg.minX + 2, y: bg.minY), withAttributes: attrs)
+            }
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("agent-shot-\(UUID().uuidString.prefix(6)).jpg")
+        guard let d = out.jpegData(compressionQuality: 0.8), (try? d.write(to: url)) != nil else { return nil }
+        slog("agent: vision on (\(mode)) \(Int(size.width))x\(Int(size.height)) \(d.count / 1024)KB els=\(els.count)")
+        return url
     }
 
     /// الإنجليزي حرف حرف؛ أي شي ثاني (عربي/رموز) دايمًا عن طريق الحافظة + Cmd+V
@@ -348,20 +507,81 @@ final class PhoneAgent: ObservableObject {
     private static var cachedPort: UInt16 = 0
 }
 
-/// إشعار تأكيد لما التطبيق بالخلفية
+/// إشعارات الوكيل: ثابت بزر «إيقاف» + تأكيد بزرين
 enum AgentNotify {
+    final class Delegate: NSObject, UNUserNotificationCenterDelegate {
+        func userNotificationCenter(_ c: UNUserNotificationCenter, didReceive r: UNNotificationResponse) async {
+            let id = r.actionIdentifier
+            await MainActor.run {
+                switch id {
+                case "agent.stop": PhoneAgent.shared.stop()
+                case "agent.yes": PhoneAgent.shared.answer(true)
+                case "agent.no": PhoneAgent.shared.answer(false)
+                default: break
+                }
+            }
+        }
+        func userNotificationCenter(_ c: UNUserNotificationCenter, willPresent n: UNNotification) async -> UNNotificationPresentationOptions {
+            // داخل التطبيق: نخفي إشعار التقدم (الشاشة تعرضه)، ونعرض الباقي
+            n.request.identifier == "agent-progress" ? [] : [.banner, .sound]
+        }
+    }
+    static let delegate = Delegate()
+
+    static func setup() {
+        let c = UNUserNotificationCenter.current()
+        c.delegate = delegate
+        let stop = UNNotificationAction(identifier: "agent.stop", title: "إيقاف", options: [.destructive])
+        let yes = UNNotificationAction(identifier: "agent.yes", title: "كمّل", options: [])
+        let no = UNNotificationAction(identifier: "agent.no", title: "لا", options: [.destructive])
+        c.setNotificationCategories([
+            UNNotificationCategory(identifier: "agent.run", actions: [stop], intentIdentifiers: []),
+            UNNotificationCategory(identifier: "agent.confirm", actions: [yes, no, stop], intentIdentifiers: []),
+        ])
+    }
+
+    static func progress(goal: String, step: String) {
+        let c = UNMutableNotificationContent()
+        c.title = "الوكيل شغّال: \(goal.prefix(50))"
+        c.body = step
+        c.categoryIdentifier = "agent.run"
+        c.interruptionLevel = .passive
+        c.threadIdentifier = "agent"
+        // نفس المعرّف = يستبدل نفسه (إشعار واحد ثابت)
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "agent-progress", content: c, trigger: nil))
+    }
+
     static func agentConfirm(_ q: String) {
         let c = UNMutableNotificationContent()
         c.title = "صوت يحتاج تأكيدك"
         c.body = q
         c.sound = .default
+        c.categoryIdentifier = "agent.confirm"
+        c.interruptionLevel = .timeSensitive
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "agent-confirm", content: c, trigger: nil))
+    }
+
+    static func done(_ r: String) {
+        clear()
+        let c = UNMutableNotificationContent()
+        c.title = "الوكيل خلص"
+        c.body = r
+        c.interruptionLevel = .passive
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "agent-done", content: c, trigger: nil))
+    }
+
+    static func clear() {
+        let ids = ["agent-progress", "agent-confirm"]
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids)
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids)
     }
 }
 
 struct PhoneAgentView: View {
     @ObservedObject var agent = PhoneAgent.shared
     @State private var goal = ""
+    @State private var see = PhoneAgent.see
+    @State private var shareLive = false
 
     var body: some View {
         Form {
@@ -374,8 +594,26 @@ struct PhoneAgentView: View {
                 } else {
                     Button("ابدأ") { agent.start(goal) }.disabled(goal.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
+                Picker("طريقة رؤية الشاشة", selection: $see) {
+                    ForEach(PhoneAgent.See.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .onChange(of: see) { _, v in PhoneAgent.see = v; if v == .share { ScreenShare.shared.start() } }
+                if see == .share {
+                    HStack {
+                        Text(shareLive ? "البث شغّال 🔴" : "اضغط الزر وبعدين «بدء البث»")
+                        Spacer()
+                        BroadcastPicker().frame(width: 44, height: 44)
+                    }
+                    .task {
+                        ScreenShare.shared.start()
+                        while !Task.isCancelled {
+                            shareLive = ScreenShare.shared.live
+                            try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        }
+                    }
+                }
             } footer: {
-                Text("يقرأ الشاشة ويختار خطوة وحدة كل مرة (١٠ خطوات كحد أقصى). أي إرسال أو حذف أو دفع أو كلمة سر يوقف ويسألك. تقدر توقفه بأي وقت.")
+                Text("«مشاركة الشاشة»: يرسل صورة الشاشة مع أرقام العناصر لنموذج الرؤية (لو البث طافي ياخذ لقطة). الصورة تشتغل على كرت الشاشة بس؛ على المعالج نص فقط.\nيقرأ الشاشة ويختار خطوة وحدة كل مرة (١٠ خطوات كحد أقصى). أي إرسال أو حذف أو دفع أو كلمة سر يوقف ويسألك. تقدر توقفه بأي وقت.")
             }
             if let q = agent.confirm {
                 Section("يحتاج تأكيد") {
@@ -399,6 +637,11 @@ struct PhoneAgentView: View {
 
 /// يكتشف أوامر الوكيل في الدردشة أو المكالمة
 enum PhoneAgentTrigger {
+    static func isStop(_ t: String) -> Bool {
+        let s = t.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard s.split(separator: " ").count <= 4 else { return false }
+        return ["وقف", "وقّف", "اوقف", "أوقف", "توقف", "بس خلاص", "stop"].contains { s.contains($0) }
+    }
     static let chatPrefixes = ["/جوال", "/agent", "جوال:", "نفذ على الجوال", "نفّذ على الجوال"]
     static let voicePrefixes = ["على الجوال", "نفذ على الجوال", "نفّذ على الجوال", "يا صوت نفذ", "يا صوت نفّذ", "on the phone"]
     static func goal(_ t: String, voice: Bool = false) -> String? {
