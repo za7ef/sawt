@@ -5,6 +5,9 @@ enum Storage {
     static let fm = FileManager.default
     /// فيه تنزيل شغال (نموذج أو صوت نماء): لا نلمس الملفات المؤقتة
     nonisolated(unsafe) static var downloadActive = false
+    /// تنزيلات ثانية (أصوات، ملفات llama) — مسح الكاش ما يلمس المؤقت وهي شغالة
+    nonisolated(unsafe) static var otherDownloads = 0
+    static var anyDownload: Bool { downloadActive || otherDownloads > 0 }
 
     /// ملفات النماذج تنزل من جديد، فما لها داعي تدخل نسخة iCloud الاحتياطية.
     static func excludeModelsFromBackup() {
@@ -125,7 +128,8 @@ enum Storage {
 
     /// يحذف الكاش: الملفات المؤقتة، كاش الشبكة، والتنزيلات الناقصة. ما يلمس النماذج الكاملة.
     static func clearCache() {
-        for f in (downloadActive ? [] : (try? fm.contentsOfDirectory(at: fm.temporaryDirectory, includingPropertiesForKeys: nil)) ?? []) {
+        let busy = anyDownload
+        for f in (busy ? [] : (try? fm.contentsOfDirectory(at: fm.temporaryDirectory, includingPropertiesForKeys: nil)) ?? []) {
             try? fm.removeItem(at: f)
         }
         for f in (try? fm.contentsOfDirectory(at: caches, includingPropertiesForKeys: nil)) ?? []
@@ -133,7 +137,7 @@ enum Storage {
             try? fm.removeItem(at: f)
         }
         // التنزيلات الناقصة نحذفها بس إذا ما فيه تنزيل شغال الحين
-        if !Storage.downloadActive { for f in partials() { try? fm.removeItem(at: f) } }
+        if !busy { for f in partials() { try? fm.removeItem(at: f) } }
         URLCache.shared.removeAllCachedResponses()
         slog("cache cleared")
     }

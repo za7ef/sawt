@@ -223,7 +223,9 @@ final class MemoryStore: ObservableObject {
                 if Task.isCancelled { return }
             }
             isExtracting = true
-            defer { isExtracting = false }
+            let mine = task
+            // نرجّعها false بس لو ما بدأ استخراج أحدث بعدنا
+            defer { if task == mine || task == nil { isExtracting = false } }
             let added = await run(exchanges)
             if Task.isCancelled { return }
             if added > 0 { onSaved?() }

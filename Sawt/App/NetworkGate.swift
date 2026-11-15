@@ -56,7 +56,13 @@ final class NetworkGate: ObservableObject {
                                       preferredStyle: .alert)
             a.addAction(UIAlertAction(title: "إلغاء", style: .cancel) { _ in finish(false) })
             a.addAction(UIAlertAction(title: "اسمح هالمرة", style: .default) { _ in finish(true) })
-            top.present(a, animated: true)
+            // لو التنبيه ما انعرض (شاشة ثانية فوق مثلاً) أو ما أحد رد خلال دقيقة: نرفض بدل ما نعلّق
+            top.present(a, animated: true) {
+                MainActor.assumeIsolated { if a.presentingViewController == nil { finish(false) } }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
+                MainActor.assumeIsolated { if !resumed { a.dismiss(animated: true); finish(false) } }
+            }
         }
         slog("net: one-time \(reason) -> \(ok)")
         return ok

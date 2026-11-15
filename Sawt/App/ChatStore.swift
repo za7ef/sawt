@@ -117,6 +117,8 @@ final class ChatStore: ObservableObject {
     }
 
     func delete(_ id: UUID) {
+        // رد شغال في هالمحادثة: نوقفه بدون ما نحفظ الجزئي (لا يروح لمحادثة ثانية)
+        if genConv == id, genTask != nil { latestPartial = ""; stop() }
         if let c = conversations.first(where: { $0.id == id }) {
             let atts = c.messages.flatMap { $0.attachments ?? [] }
             Task.detached(priority: .utility) { atts.forEach { $0.deleteFiles() } }
@@ -532,7 +534,9 @@ final class ChatStore: ObservableObject {
     }
 
     func append(_ m: Message, to conv: UUID?) {
-        guard let conv, let i = conversations.firstIndex(where: { $0.id == conv }) else { append(m); return }
+        guard let conv else { append(m); return }
+        // المحادثة انحذفت: نرمي الرسالة بدل ما نضيفها للمحادثة الحالية
+        guard let i = conversations.firstIndex(where: { $0.id == conv }) else { slog("chat: drop message for deleted conversation"); return }
         conversations[i].messages.append(m)
         conversations[i].updated = Date()
         save()

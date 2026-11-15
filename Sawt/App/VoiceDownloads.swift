@@ -50,6 +50,8 @@ final class VoiceDownloads: ObservableObject {
         if case .downloading = state[item.id] { return }
         state[item.id] = .downloading(0)
         Task {
+            Storage.otherDownloads += 1
+            defer { Storage.otherDownloads -= 1 }
             if let why = Storage.spaceProblem(forGB: item.gb) { state[item.id] = .failed(why); return }
             guard await NetworkGate.shared.permit("تنزيل صوت \(Catalog.allVoices.first { $0.id == item.id }?.title ?? item.id)") else {
                 state[item.id] = .idle; return
