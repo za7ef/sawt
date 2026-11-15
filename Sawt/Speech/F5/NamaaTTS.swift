@@ -247,7 +247,11 @@ final class NamaaEngine: @unchecked Sendable {
             queue.async {
                 MLX.Memory.clearCache()
                 c.resume()
-                self.holdSem.wait()   // الطابور واقف لين release
+                // الطابور واقف لين release — بحد أقصى ٩٠ ثانية عشان ما يتعلّق للأبد
+                if self.holdSem.wait(timeout: .now() + 90) == .timedOut {
+                    self.statLock.lock(); self.holding = false; self.statLock.unlock()
+                    slog("namaa: hold timed out → released")
+                }
             }
         }
     }
