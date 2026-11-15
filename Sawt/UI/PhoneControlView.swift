@@ -109,6 +109,9 @@ enum PhoneControl {
         var u = pairingURL
         var rv = URLResourceValues(); rv.isExcludedFromBackup = true
         try? u.setResourceValues(rv)
+        // النسخة الاحتياطية .bak اللي يكتبها Rust: برضه برا النسخ الاحتياطي
+        var bak = pairingURL.deletingPathExtension().appendingPathExtension("plist.bak")
+        if FileManager.default.fileExists(atPath: bak.path) { try? bak.setResourceValues(rv) }
         keychainStore(d)
         Log.shared("phonectl pairing saved: \(pairingURL.path) fp=\(fingerprint(d))")
     }
@@ -460,15 +463,15 @@ struct PhoneControlView: View {
         let h = host
         Task { @MainActor in
             // لما تطلع من التطبيق iOS يوقفه، فالأوامر ما توصل لين ترجع؛ نخليه صاحي بصوت صامت + وقت خلفية
-            var bgID = UIBackgroundTaskIdentifier.invalid
+            var bg: BGTask?
             if delay {
                 HostPairing.shared.keepAlive(true)
-                bgID = UIApplication.shared.beginBackgroundTask(withName: "phonectl") { }
+                bg = BGTask("phonectl")
             }
             defer {
                 if delay {
                     HostPairing.shared.keepAlive(false)
-                    if bgID != .invalid { UIApplication.shared.endBackgroundTask(bgID) }
+                    bg?.end()
                 }
             }
             if delay {
@@ -494,7 +497,7 @@ struct PhoneControlView: View {
                 r += after()
             }
             Log.shared("phonectl \(label): \(r.prefix(6000))")
-            UIPasteboard.general.string = r
+            // ما ننسخ تلقائيًا (فيه معلومات اقتران)؛ زر «نسخ» موجود
             output = String(r.prefix(4000))
             busy = false
         }

@@ -49,7 +49,6 @@ final class HostPairing: NSObject, ObservableObject, NetServiceDelegate {
                 HostPairing.call { c_accept(cfg, 300) }
             }.value
             Log.shared("hostpair accept: \(res.prefix(6000))")
-            UIPasteboard.general.string = res
             if res.contains("\"paired\":true") {
                 PhoneControl.pairingWritten()
                 finish("تم الاقتران ✅ انحفظ ملف جديد. جرّب «فحص الاتصال».")
@@ -60,6 +59,7 @@ final class HostPairing: NSObject, ObservableObject, NetServiceDelegate {
     }
 
     func cancel() {
+        status = "أوقف…"
         #if SAWTCTL
         c_host_cancel()
         #endif
@@ -78,24 +78,46 @@ final class HostPairing: NSObject, ObservableObject, NetServiceDelegate {
         Task { @MainActor in Log.shared("hostpair: bonjour published \(sender.name)") }
     }
 
-    /// صوت صامت عشان التطبيق يبقى صاحي وأنت في الإعدادات
+    /// صوت صامت عشان التطبيق يبقى صاحي وأنت في الإعدادات.
+    /// بعدّاد (أكثر من مستخدم)، وما يغيّر جلسة الصوت لو فيه مكالمة (playAndRecord)، ويرجّع الإعداد القديم.
+    private var aliveCount = 0
+    private var player: AVAudioPlayerNode?
+    private var savedAudio: (AVAudioSession.Category, AVAudioSession.Mode, AVAudioSession.CategoryOptions)?
     func keepAlive(_ on: Bool) {
         if on {
+            aliveCount += 1
+            guard aliveCount == 1 else { return }
             let s = AVAudioSession.sharedInstance()
+            if s.category == .playAndRecord {
+                // المكالمة شغّالة: صوتها يكفي يخلي التطبيق صاحي — ما نلمس الجلسة
+                Log.shared("keepAlive: call audio active, session untouched"); return
+            }
+            savedAudio = (s.category, s.mode, s.categoryOptions)
             try? s.setCategory(.playback, options: [.mixWithOthers])
             try? s.setActive(true)
+            guard let fmt = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1) else { return }
             let e = AVAudioEngine()
-            let fmt = e.outputNode.inputFormat(forBus: 0)
-            let player = AVAudioPlayerNode()
-            e.attach(player); e.connect(player, to: e.mainMixerNode, format: fmt)
-            if let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(fmt.sampleRate)) {
+            let p = AVAudioPlayerNode()
+            e.attach(p); e.connect(p, to: e.mainMixerNode, format: fmt)
+            if let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: 44100) {
                 buf.frameLength = buf.frameCapacity   // صفر = صمت
-                player.scheduleBuffer(buf, at: nil, options: .loops)
+                p.scheduleBuffer(buf, at: nil, options: .loops)
             }
-            try? e.start(); player.play()
-            engine = e
+            do { try e.start(); p.play(); engine = e; player = p }
+            catch { Log.shared("keepAlive: engine start failed \(error)"); e.detach(p) }
         } else {
-            engine?.stop(); engine = nil
+            guard aliveCount > 0 else { return }
+            aliveCount -= 1
+            guard aliveCount == 0 else { return }
+            player?.stop()
+            if let e = engine, let p = player { e.stop(); e.detach(p) }
+            engine = nil; player = nil
+            // نرجّع الجلسة بس لو محد غيّرها (مثلاً مكالمة بدأت بعدنا)
+            let s = AVAudioSession.sharedInstance()
+            if let sv = savedAudio, s.category == .playback {
+                try? s.setCategory(sv.0, mode: sv.1, options: sv.2)
+            }
+            savedAudio = nil
         }
     }
 
