@@ -20,6 +20,9 @@ final class PhoneAgent: ObservableObject {
     @Published var lastResult = ""
 
     private var task: Task<Void, Never>?
+    private var lastFront = ""
+    private var firstRead = true
+    private var isSelf: Bool { lastFront == Bundle.main.bundleIdentifier || lastFront.hasPrefix("com.za7ef.sawt") }
     private var activity: Activity<AgentActivityAttributes>?
     private var stepNo = 0
     private var obs: NSObjectProtocol?
@@ -82,7 +85,7 @@ final class PhoneAgent: ObservableObject {
             if let t = chatTarget { ChatStore.shared.updateText(t.msg, in: t.conv, "🤖 " + lastResult, save: true); chatTarget = nil }
             return
         }
-        self.goal = g; log = []; lastResult = ""; running = true; stepNo = 0
+        self.goal = g; log = []; lastResult = ""; running = true; stepNo = 0; firstRead = true
         say("الهدف: \(g)")
         surface("يبدأ…")
         task = Task { await self.loop() }
@@ -123,11 +126,20 @@ final class PhoneAgent: ObservableObject {
         let bg = UIApplication.shared.beginBackgroundTask(withName: "agent") { }
         defer { if bg != .invalid { UIApplication.shared.endBackgroundTask(bg) } }
         let tl = Date()
-        let lo = await Self.exec(.liveOpen)
+        // الجلسة الدائمة معطّلة افتراضيًا: قراءة الشاشة كانت تفشل معها؛ نرجع لاتصال لكل أمر مثل ١٤٣
+        let liveOn = UserDefaults.standard.bool(forKey: "agentLive")
+        let lo = liveOn ? await Self.exec(.liveOpen) : "{\"ok\":false,\"error\":\"disabled\"}"
         Self.useLive = lo.contains("\"ok\":true")
         slog("agent: live session \(Self.useLive ? "open" : "failed") \(Int(Date().timeIntervalSince(tl) * 1000))ms \(Self.useLive ? "" : String(lo.prefix(160)))")
         defer { Self.useLive = false; Task { _ = await Self.exec(.liveClose) } }
+        if await webShortcut() { return }
         if await shortcut() { return }
+        let pre = Self.mentionedApp(goal)
+        if pre == nil, UIApplication.shared.applicationState == .active {
+            // صوت قدّام: نطلع للرئيسية قبل أول قراءة (ما نقرأ ولا نلمس واجهة صوت)
+            _ = await Self.exec(.keys("home"))
+            try? await Task.sleep(nanoseconds: 600_000_000)
+        }
         // اختصار: لو الهدف يذكر تطبيق معروف نفتحه مباشرة قبل النموذج
         if let app = Self.mentionedApp(goal) {
             let t = Date()
@@ -148,7 +160,15 @@ final class PhoneAgent: ObservableObject {
                 if fails >= 2 { finish("ما قدرت أقرأ الشاشة"); return }
                 try? await Task.sleep(nanoseconds: 800_000_000); continue
             }
-            let (app, els) = scr
+            var (app, els) = scr
+            if isSelf {
+                // ما نلمس واجهة صوت نفسها أبدًا: نطلع للرئيسية ونعيد القراءة
+                say("صوت قدّام — أطلع للشاشة الرئيسية")
+                _ = await Self.exec(.keys("home"))
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                guard let s2 = await readScreen(), !isSelf else { finish("ما قدرت أطلع من صوت"); return }
+                (app, els) = s2
+            }
             let axMs = Int(Date().timeIntervalSince(tAX) * 1000)
             let tLLM = Date()
             let screenText = Self.describe(app: app, els)
@@ -170,6 +190,7 @@ final class PhoneAgent: ObservableObject {
             }
             if Task.isCancelled { return }
             let llmMs = Int(Date().timeIntervalSince(tLLM) * 1000)
+            slog("agent: raw step=\(n) «\(raw.prefix(300))»")
             guard let first = action, let kind0 = first["action"] as? String else {
                 say("⚠️ رد غير مفهوم: \(raw.prefix(120))"); finish("النموذج ما رد بخطوة صالحة"); return
             }
@@ -178,6 +199,10 @@ final class PhoneAgent: ObservableObject {
             var actMs = 0
             for action in acts {
                 guard let kind = action["action"] as? String else { continue }
+                if kind == "tap", !((action["id"] as? Int).map { els.indices.contains($0) } ?? false) {
+                    say("⚠️ رقم عنصر غير موجود: \(action["id"] ?? "؟")")
+                    history.append("رقم غلط \(action["id"] ?? "؟") — اختر رقم من القائمة"); lastFailed = true; break
+                }
                 let desc = Self.describeAction(action, els)
                 say("\(n). \(desc)")
                 if kind == "done" {
@@ -217,7 +242,7 @@ final class PhoneAgent: ObservableObject {
     static let system = """
     أنت وكيل يتحكم بجوال iPhone نيابة عن المستخدم. كل مرة تشوف وصف الشاشة كقائمة عناصر مرقّمة، وتختار خطوة وحدة بس.
     رد بسطر JSON واحد فقط بدون أي كلام ثاني، بأحد هذي الأشكال:
-    {"action":"tap","id":3}
+    {"action":"tap","id":N}   (N = رقم العنصر المطلوب من القائمة بالضبط، مو مثال)
     {"action":"type","text":"النص"}   (يكتب في الخانة المفتوحة؛ اضغط على الخانة أول لو ما كانت مفتوحة)
     {"action":"enter"}               (زر الإدخال/إرسال في الكيبورد)
     {"action":"swipe","dir":"up"}     (up يمرر لتحت المحتوى، down لفوق، left، right)
@@ -225,7 +250,8 @@ final class PhoneAgent: ObservableObject {
     {"action":"back"}
     {"action":"home"}
     {"action":"done","summary":"وش سويت باختصار"}
-    لو واضح تقدر ترجع حتى ٣ خطوات مرة وحدة: {"actions":[{"action":"tap","id":2},{"action":"type","text":"هلا"}]}
+    لو واضح تقدر ترجع حتى ٣ خطوات مرة وحدة: {"actions":[{"action":"tap","id":N},{"action":"type","text":"..."}]}
+    إذا التطبيق المطلوب مو قدّام، أول خطوة open باسمه.
     في open اكتب اسم التطبيق بالإنجليزي إذا تعرفه (Notes, Settings, WhatsApp...).
     قواعد: لا تخترع أرقام عناصر غير موجودة. لو الهدف تحقق قل done. لو انحسبت نفس الخطوة مرتين بدون تغيير جرّب شي ثاني.
     """
@@ -283,6 +309,7 @@ final class PhoneAgent: ObservableObject {
             ("واتساب", "net.whatsapp.WhatsApp"),
             ("الساعه", "com.apple.mobiletimer"),
             ("Notes", "com.apple.mobilenotes"),
+            ("سفاري", "com.apple.mobilesafari"),
         ]
         return cases.map { c in
             let got = lookup(c.0)?.bundle ?? "nil"
@@ -293,13 +320,16 @@ final class PhoneAgent: ObservableObject {
     /// بس لو الهدف يبدأ بـ«افتح/open/شغّل» + اسم تطبيق من الجدول بعده مباشرة
     static func mentionedApp(_ g: String) -> String? {
         let t = g.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let v = ["افتح", "إفتح", "open", "شغّل", "شغل"].first(where: { t.lowercased().hasPrefix($0) }) else { return nil }
+        let verbs = ["روح على", "روح الى", "روح إلى", "روح ل", "روح", "ادخل على", "ادخل", "أدخل", "اذهب الى", "اذهب إلى", "افتح", "إفتح", "open", "go to", "شغّل", "شغل"]
+        guard let v = verbs.first(where: { t.lowercased().hasPrefix($0) }) else { return nil }
         let rest = t.dropFirst(v.count).trimmingCharacters(in: .whitespaces)
         let words = rest.split(separator: " ").map(String.init)
         // نجرب أول كلمة، وأول كلمتين، وأول ثلاث (أسماء مثل «واتساب للأعمال»)، والأطول يفوز
         for n in stride(from: min(3, words.count), through: 1, by: -1) {
             var cand = words.prefix(n).joined(separator: " ")
-            if cand.hasPrefix("و") && n == 1 && lookup(cand) == nil { cand = String(cand.dropFirst()) }
+            for p in ["و", "ل", "على"] where lookup(cand) == nil && cand.hasPrefix(p) && cand.count > p.count + 2 {
+                cand = String(cand.dropFirst(p.count))
+            }
             if let e = lookup(cand), !e.bundle.isEmpty { return cand }
         }
         return nil
@@ -328,10 +358,20 @@ final class PhoneAgent: ObservableObject {
 
     // ───── الشاشة ─────
     private func readScreen() async -> (String, [Element])? {
-        let r = await Self.exec(.screen(4000))
+        let r = await Self.exec(.screen(firstRead ? 8000 : 5000))
+        firstRead = false
         guard let d = try? JSONSerialization.jsonObject(with: Data(r.utf8)) as? [String: Any],
-              d["ok"] as? Bool == true else { say("⚠️ قراءة الشاشة: \(r.prefix(160))"); return nil }
+              d["ok"] as? Bool == true else {
+            slog("agent: ax failed \(r.prefix(300)) — ocr fallback")
+            // بديل: نص من صورة الشاشة (Apple Vision) مع إطاراته
+            let o = await ocrElements(existing: [])
+            if o.count >= 2 { lastFront = ""; say("قراءة بالصورة (\(o.count) نص)"); return ("؟", Array(o.prefix(45))) }
+            say("⚠️ قراءة الشاشة: \(r.prefix(160))"); return nil
+        }
+        if d["partial"] as? Bool == true { slog("agent: ax partial tree") }
         let app = ((d["app"] as? [String: Any])?["name"] as? String) ?? "؟"
+        lastFront = ((d["app"] as? [String: Any])?["bundle"] as? String) ?? ""
+        slog("agent: frontmost=\(lastFront.isEmpty ? app : lastFront)")
         var els: [Element] = []
         for e in (d["elements"] as? [[String: Any]]) ?? [] {
             guard let f = e["f"] as? [Double], f.count == 4 else { continue }
@@ -552,7 +592,7 @@ final class PhoneAgent: ObservableObject {
         (["واتساب", "واتس", "الواتس", "whatsapp"], "net.whatsapp.WhatsApp", "WhatsApp"),
         (["واتساب للأعمال", "واتس أعمال", "whatsapp business"], "net.whatsapp.WhatsAppSMB", "WhatsApp Business"),
         (["يوتيوب", "اليوتيوب", "youtube"], "com.google.ios.youtube", "YouTube"),
-        (["سفاري", "المتصفح", "safari"], "com.apple.mobilesafari", "Safari"),
+        (["سفاري", "سافاري", "المتصفح", "safari"], "com.apple.mobilesafari", "Safari"),
         (["الرسائل", "رسائل", "messages", "imessage"], "com.apple.MobileSMS", "Messages"),
         (["الساعة", "ساعة", "المنبه", "منبه", "clock", "alarm"], "com.apple.mobiletimer", "Clock"),
         (["التقويم", "تقويم", "calendar"], "com.apple.mobilecal", "Calendar"),
@@ -579,7 +619,6 @@ final class PhoneAgent: ObservableObject {
         (["تويتر", "اكس", "إكس", "x", "twitter"], "com.atebits.Tweetie2", "X"),
         (["تلقرام", "تيليجرام", "telegram"], "ph.telegra.Telegraph", "Telegram"),
         (["كرنشي رول", "crunchyroll"], "com.crunchyroll.iphone", "Crunchyroll"),
-        (["صوت", "sawt"], "", "Sawt"),
     ]
 
     static func normName(_ x: String) -> String {
@@ -624,7 +663,9 @@ final class PhoneAgent: ObservableObject {
             say("⚠️ إطلاق \(hit.bundle): \(r.prefix(120))")
         }
         let q = hit?.en ?? name
-        let r = await Self.exec(.launch(q))
+        // الافتراضي مثل ١٤٣: البحث (سبوتلايت) باسم التطبيق؛ الإطلاق بالمعرّف بس لتطابق الجدول التام
+        let fuzzy = UserDefaults.standard.bool(forKey: "agentFuzzyLaunch")
+        let r = fuzzy ? await Self.exec(.launch(q)) : "{\"ok\":false,\"error\":\"fuzzy disabled\"}"
         // السجل فيه المرشحين ودرجاتهم (خطوة match)
         slog("agent: open match «\(q)» → \(r.prefix(600))")
         if r.contains("\"ok\":true") { try? await Task.sleep(nanoseconds: 700_000_000); return (true, r) }
@@ -655,6 +696,33 @@ final class PhoneAgent: ObservableObject {
         slog("agent: open chosen=spotlight «\(q)»")
         try? await Task.sleep(nanoseconds: 1_000_000_000)
         return (r2.contains("\"ok\":true"), r2)
+    }
+
+    /// اختصار الويب: «ابحث عن …» أو «ادخل موقع x.com» → نفتح الرابط مباشرة في سفاري (صوت لازم يكون قدّام)
+    private func webShortcut() async -> Bool {
+        let g = goal
+        var url: URL?
+        for k in ["ابحث عن", "أبحث عن", "إبحث عن", "وابحث عن", "ابحث في قوقل عن", "ابحث فيه عن", "دور على", "دوّر على", "search for", "google "] {
+            if let r = g.range(of: k, options: .caseInsensitive) {
+                let q = g[r.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: " :«»\"'،,."))
+                if !q.isEmpty, let e = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+                    url = URL(string: "https://www.google.com/search?q=\(e)")
+                }
+                break
+            }
+        }
+        if url == nil, let m = g.range(of: #"[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)+(/\S*)?"#, options: .regularExpression) {
+            let host = String(g[m])
+            url = URL(string: host.lowercased().hasPrefix("http") ? host : "https://\(host)")
+        }
+        guard let url else { return false }
+        guard UIApplication.shared.applicationState == .active else { slog("agent: web shortcut skipped (not foreground)"); return false }
+        say("⚡ أفتح \(url.absoluteString.removingPercentEncoding ?? url.absoluteString)")
+        let ok = await UIApplication.shared.open(url)
+        slog("agent: web open \(url.absoluteString) ok=\(ok)")
+        guard ok else { return false }
+        finish("✅ فتحت \(url.host ?? "") في المتصفح")
+        return true
     }
 
     /// اختصار بدون النموذج: «افتح الملاحظات وأنشئ ملاحظة جديدة واكتب ...»
