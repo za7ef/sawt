@@ -20,6 +20,14 @@ struct SawtApp: App {
         nc.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: nil) { _ in AppPhase.active = false }
         nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { _ in AppPhase.active = false }
         nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { _ in AppPhase.active = true }
+        // نشاط المكالمة: ننهي اليتيم عند التشغيل/الرجوع، وننهيه عند إغلاق التطبيق
+        nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { CallActivity.cleanupOrphans() }
+        }
+        nc.addObserver(forName: UIApplication.willTerminateNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { CallActivity.endSync() }
+        }
+        Task { @MainActor in CallActivity.cleanupOrphans() }
         if #available(iOS 26.0, *) {
             slog("bg: continued-processing gpu=\(BGTaskScheduler.supportedResources.contains(.gpu)) llmDevice=\(ComputeMode.current)")
         }
