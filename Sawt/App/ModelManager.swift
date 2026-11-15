@@ -46,7 +46,15 @@ final class ModelManager: ObservableObject {
     func loadAll() {
         Task.detached(priority: .utility) { Storage.excludeModelsFromBackup() }
         Task {
-            if llm == .idle, downloaded.contains(AppSettings.shared.llmID) {
+            // ما نحمّل MLX عند التشغيل لو: الإعداد «المعالج» (MLX على المعالج يطيّح التطبيق، والرد من llama.cpp أصلًا)،
+            // أو التطبيق مو قدّام (كرت الشاشة ممنوع بالخلفية)، أو فيه نموذج سحابي مفعّل (ما نحمّل شي ثقيل).
+            // كرت الشاشة يتحمّل لاحقًا لما تختاره أو ترجع للمحلي.
+            let skip: String? = ComputeMode.current == "cpu" ? "llmDevice=cpu"
+                : !AppPhase.active ? "app not active"
+                : CloudLLM.active != nil ? "cloud active" : nil
+            if let skip {
+                slog("llm: launch preload skipped (\(skip))")
+            } else if llm == .idle, downloaded.contains(AppSettings.shared.llmID) {
                 await activate(AppSettings.shared.llm).value
             }
             let sid = AppSettings.shared.sttID
@@ -156,7 +164,11 @@ final class ModelManager: ObservableObject {
     /// يعيد تحميل النموذج الحالي بوضع النظر (مرة وحدة) إذا يدعم الصور.
     /// يُستدعى أول ما تنضاف صورة (قبل الإرسال) عشان التحميل يبدأ بدري؛ الطلبات المتزامنة تشترك بنفس المهمة.
     private var visionTask: Task<Bool, Never>?
-    func ensureVision() async -> Bool {
+    func ensureVision(cloudOK: Bool = true) async -> Bool {
+        // النموذج السحابي يشوف الصور بنفسه: ما نحمّل نموذج النظر المحلي
+        if cloudOK, CloudLLM.active != nil { return true }
+        // على المعالج: llama.cpp بدون نظر، وMLX على المعالج يطيّح التطبيق
+        if LLMService.onCPU { slog("llm: vision skipped (cpu)"); return false }
         if let t = visionTask { return await t.value }
         let t = Task { await self.loadVision() }
         visionTask = t
