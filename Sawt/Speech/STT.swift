@@ -94,6 +94,7 @@ enum SawtError: LocalizedError {
     static func friendly(_ error: Error?) -> SawtError {
         guard let error else { return .failed("صار خطأ غير معروف.") }
         if let e = error as? SawtError { return e }
+        if let c = error as? CloudAgent.Failure { return .failed(c.message) }
         let d = String(describing: error)
         if d.contains("Template") || d.contains("Jinja") {
             return .failed("هذا النموذج ما يتوافق مع طريقة المحادثة في التطبيق. جرّب Qwen3 4B.")
