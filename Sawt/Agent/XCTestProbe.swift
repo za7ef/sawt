@@ -12,19 +12,33 @@ enum XCTestProbe {
 
     /// المسارات المحتملة لكل إطار بالترتيب (المكان يختلف بين الإصدارات)
     private static let frameworks: [(String, [String])] = [
+        // الأطر تطلب @rpath/lib_TestingInterop.dylib: نحمّله أول بمساره الكامل (وفيه كمان LC_RPATH للتطبيق)
+        ("lib_TestingInterop", ["/System/Developer/usr/lib/lib_TestingInterop.dylib"]),
         ("XCTAutomationSupport", ["/System/Developer/Library/PrivateFrameworks/XCTAutomationSupport.framework/XCTAutomationSupport"]),
         ("XCTestCore", ["/System/Developer/Library/PrivateFrameworks/XCTestCore.framework/XCTestCore"]),
         ("XCUnit", ["/System/Developer/Library/PrivateFrameworks/XCUnit.framework/XCUnit"]),
         ("XCTest", ["/System/Developer/Library/Frameworks/XCTest.framework/XCTest"]),
         ("XCUIAutomation", ["/System/Developer/Library/Frameworks/XCUIAutomation.framework/XCUIAutomation",
                             "/System/Developer/Library/PrivateFrameworks/XCUIAutomation.framework/XCUIAutomation"]),
+        ("libXCTestSwiftSupport", ["/System/Developer/usr/lib/libXCTestSwiftSupport.dylib"]),
     ]
+
+    /// محتويات /System/Developer/usr/lib (عشان نعرف وش المكتبات الموجودة)
+    static func listDevLib() -> Step {
+        let dir = "/System/Developer/usr/lib"
+        guard let items = try? FileManager.default.contentsOfDirectory(atPath: dir) else {
+            return Step(name: "usr/lib", ok: false, detail: "ما قدر يقرأ \(dir)")
+        }
+        let libs = items.filter { $0.hasSuffix(".dylib") }.sorted()
+        return Step(name: "usr/lib", ok: !libs.isEmpty, detail: "\(libs.count): " + libs.joined(separator: ", "))
+    }
 
     /// يجرب تحميل الأطر؛ يرجع خطوة لكل إطار مع نص dlerror لو فشل
     static func loadFrameworks() -> [Step] {
         var out: [Step] = []
         let devExists = FileManager.default.fileExists(atPath: "/System/Developer/Library")
         out.append(Step(name: "ddi", ok: devExists, detail: devExists ? "/System/Developer موجود" : "صورة المطوّر مو مركّبة (أو المسار مخفي)"))
+        out.append(listDevLib())
         for (name, paths) in frameworks {
             var done = false
             var errs: [String] = []
@@ -35,7 +49,7 @@ enum XCTestProbe {
                     break
                 }
                 let e = dlerror().map { String(cString: $0) } ?? "؟"
-                errs.append(String(e.prefix(220)))
+                errs.append(String(e.prefix(400)))
             }
             if !done { out.append(Step(name: name, ok: false, detail: errs.joined(separator: " | "))) }
         }
