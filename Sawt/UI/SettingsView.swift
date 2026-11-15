@@ -112,7 +112,7 @@ struct SettingsView: View {
                     if llmDevice != "gpu" {
                         if llamaDL.downloaded {
                             HStack {
-                                Text("نموذج المعالج جاهز (\(LlamaModelFile.sizeText))")
+                                Text("\(LlamaModelFile.spec.name) جاهز (\(LlamaModelFile.sizeText)) — تغيّره من صفحة النماذج")
                                 Spacer()
                                 Button("احذف", role: .destructive) { llamaDL.delete() }.buttonStyle(.borderless)
                             }
@@ -120,7 +120,7 @@ struct SettingsView: View {
                             ProgressView(value: llamaDL.progress) { Text("ينزّل نموذج المعالج… \(Int(llamaDL.progress * 100))٪") }
                             Button("إلغاء", role: .destructive) { llamaDL.cancel() }
                         } else {
-                            Button("نزّل نموذج المعالج (\(LlamaModelFile.sizeText))") { llamaDL.start() }
+                            Button("نزّل \(LlamaModelFile.spec.name) (\(LlamaModelFile.sizeText))") { llamaDL.start() }
                             Text("المتوفر: \(ByteCountFormatter.string(fromByteCount: LlamaModelFile.freeBytes, countStyle: .file))").font(.footnote).foregroundStyle(.secondary)
                         }
                         if !llamaDL.message.isEmpty { Text(llamaDL.message).font(.footnote) }

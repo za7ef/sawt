@@ -10,6 +10,8 @@ struct ModelsView: View {
     @State private var confirmSTT: STTOption?
     @State private var confirmAll = false
     @State private var files: [Storage.ModelFolder] = []
+    /// تبويب النماذج اللغوية: كرت الشاشة (MLX) أو المعالج (llama.cpp)
+    @State private var tab = UserDefaults.standard.string(forKey: "llmDevice") == "cpu" ? "cpu" : "gpu"
 
     private let ramGB = Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824
 
@@ -17,11 +19,30 @@ struct ModelsView: View {
         NavigationStack {
             List {
                 Section {
+                    Picker("نوع التشغيل", selection: $tab) {
+                        Text("كرت الشاشة").tag("gpu")
+                        Text("المعالج").tag("cpu")
+                    }
+                    .pickerStyle(.segmented)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets())
+                }
+
+                if tab == "cpu" {
+                    Section {
+                        ForEach(GGUFSpec.all) { CPUModelRow(spec: $0, ramGB: ramGB) }
+                    } header: {
+                        Text("نماذج المعالج")
+                    } footer: {
+                        Text("المختار هنا يشتغل كل ما كان التشغيل على المعالج: إعداد «المعالج»، أو «تلقائي» والتطبيق بالخلفية — للدردشة والمكالمة والوكيل. أبطأ من كرت الشاشة لكنه يكمل بالخلفية.")
+                    }
+                } else {
+                Section {
                     ForEach(Catalog.builtInLLMs) { row($0) }
                 } header: {
-                    Text("النماذج اللغوية")
+                    Text("نماذج كرت الشاشة")
                 } footer: {
-                    Text("ذاكرة جهازك تقريبًا \(String(format: "%.0f", ramGB)) GB. النماذج تنزل من Hugging Face مرة وحدة، وبعدها تشتغل على الجهاز بدون إنترنت.")
+                    Text("ذاكرة جهازك تقريبًا \(String(format: "%.0f", ramGB)) GB. النماذج تنزل من Hugging Face مرة وحدة، وبعدها تشتغل على الجهاز بدون إنترنت. المختار هنا يشتغل والتطبيق قدّام (كرت الشاشة).")
                 }
 
                 Section("نموذج مخصص") {
@@ -38,6 +59,7 @@ struct ModelsView: View {
                         }
                         .disabled(!customRepo.contains("/"))
                     }
+                }
                 }
 
                 Section {
@@ -253,5 +275,85 @@ struct ModelsView: View {
             .padding(.horizontal, 8).padding(.vertical, 3)
             .foregroundStyle(.secondary)
             .glassEffect(.regular, in: .capsule)
+    }
+}
+
+
+/// بطاقة نموذج المعالج (GGUF على llama.cpp): نفس شكل بطاقات كرت الشاشة
+struct CPUModelRow: View {
+    let spec: GGUFSpec
+    let ramGB: Double
+    @ObservedObject private var dl: LlamaDownloader
+    @AppStorage("cpuModel") private var activeID = GGUFSpec.active.id
+    @State private var confirmDelete = false
+
+    init(spec: GGUFSpec, ramGB: Double) {
+        self.spec = spec
+        self.ramGB = ramGB
+        _dl = ObservedObject(wrappedValue: LlamaDownloader.of(spec))
+    }
+
+    var body: some View {
+        let active = activeID == spec.id
+        let fits = spec.ramGB <= ramGB * 0.55
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(spec.name).font(.headline)
+                if let tag = spec.tag {
+                    Text(tag).font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .glassEffect(.regular.tint(Theme.accent.opacity(0.5)), in: .capsule)
+                }
+                Spacer()
+                if active && dl.downloaded {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                }
+            }
+            HStack(spacing: 12) {
+                Label(spec.sizeText, systemImage: "arrow.down.circle")
+                Label(String(format: "%.1f GB", spec.ramGB), systemImage: "memorychip")
+                Label(spec.speed, systemImage: "bolt")
+            }
+            .font(.caption).foregroundStyle(.secondary)
+            .environment(\.layoutDirection, .rightToLeft)
+            Group {
+                if fits {
+                    Label("يناسب جوالك", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
+                } else {
+                    Label("ثقيل على جوالك", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                }
+            }
+            .font(.caption2.weight(.semibold))
+            Text("العربي: \(spec.arabic) • على المعالج، يشتغل بالخلفية").font(.caption).foregroundStyle(.secondary)
+
+            if dl.running {
+                ProgressView(value: dl.progress) {
+                    Text("ينزل… \(Int(dl.progress * 100))٪").font(.caption)
+                }
+            }
+            HStack(spacing: 10) {
+                if dl.running {
+                    Button("إلغاء") { dl.cancel() }.buttonStyle(.glass)
+                } else if !dl.downloaded {
+                    Button("تنزيل وتشغيل") { dl.activateWhenDone = true; dl.start() }
+                        .buttonStyle(.glassProminent)
+                } else if !active {
+                    Button("تشغيل") { GGUFSpec.setActive(spec); activeID = spec.id }
+                        .buttonStyle(.glassProminent)
+                }
+                if dl.downloaded {
+                    Button(role: .destructive) { confirmDelete = true } label: { Image(systemName: "trash") }
+                        .buttonStyle(.glass)
+                }
+                if !dl.message.isEmpty && !dl.running && !dl.downloaded {
+                    Text(dl.message).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                }
+            }
+            .controlSize(.small)
+        }
+        .padding(.vertical, 4)
+        .confirmationDialog("تحذف \(spec.name)؟", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("حذف من الجهاز", role: .destructive) { dl.delete() }
+        }
     }
 }
