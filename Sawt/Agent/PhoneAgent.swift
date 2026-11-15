@@ -121,19 +121,35 @@ final class PhoneAgent: ObservableObject {
         if Self.see == .share { ScreenShare.shared.start() }
         let bg = UIApplication.shared.beginBackgroundTask(withName: "agent") { }
         defer { if bg != .invalid { UIApplication.shared.endBackgroundTask(bg) } }
+        let tl = Date()
+        let lo = await Self.exec(.liveOpen)
+        Self.useLive = lo.contains("\"ok\":true")
+        slog("agent: live session \(Self.useLive ? "open" : "failed") \(Int(Date().timeIntervalSince(tl) * 1000))ms \(Self.useLive ? "" : String(lo.prefix(160)))")
+        defer { Self.useLive = false; Task { _ = await Self.exec(.liveClose) } }
         if await shortcut() { return }
+        // اختصار: لو الهدف يذكر تطبيق معروف نفتحه مباشرة قبل النموذج
+        if let app = Self.mentionedApp(goal) {
+            let t = Date()
+            let o = await openApp(app)
+            say("1. افتح \(app)" + (o.ok ? "" : " ⚠️"))
+            slog("agent: timing pre-open action=\(Int(Date().timeIntervalSince(t) * 1000))ms")
+            if o.ok, Self.isOnlyOpen(goal) { finish("✅ فتحت \(app)"); return }
+        }
         if Task.isCancelled { return }
         var history: [String] = []
         var fails = 0
         var lastFailed = false
         for n in 1...maxSteps {
             if Task.isCancelled { return }
+            let tAX = Date()
             guard let scr = await readScreen() else {
                 fails += 1
                 if fails >= 2 { finish("ما قدرت أقرأ الشاشة"); return }
                 try? await Task.sleep(nanoseconds: 800_000_000); continue
             }
             let (app, els) = scr
+            let axMs = Int(Date().timeIntervalSince(tAX) * 1000)
+            let tLLM = Date()
             let screenText = Self.describe(app: app, els)
             let user = """
             الهدف: \(goal)
@@ -152,25 +168,38 @@ final class PhoneAgent: ObservableObject {
                 if action != nil { break }
             }
             if Task.isCancelled { return }
-            guard let action, let kind = action["action"] as? String else {
+            let llmMs = Int(Date().timeIntervalSince(tLLM) * 1000)
+            guard let first = action, let kind0 = first["action"] as? String else {
                 say("⚠️ رد غير مفهوم: \(raw.prefix(120))"); finish("النموذج ما رد بخطوة صالحة"); return
             }
-            let desc = Self.describeAction(action, els)
-            say("\(n). \(desc)")
-            if kind == "done" {
-                let sum = (action["summary"] as? String) ?? "خلصت"
-                finish("✅ \(sum)"); return
-            }
-            if let why = Self.sensitive(action, els) {
-                let ok = await askConfirm("\(why)\n\(desc)\nأكمل؟")
+            _ = kind0
+            let acts = Self.actions(raw)
+            var actMs = 0
+            for action in acts {
+                guard let kind = action["action"] as? String else { continue }
+                let desc = Self.describeAction(action, els)
+                say("\(n). \(desc)")
+                if kind == "done" {
+                    let sum = (action["summary"] as? String) ?? "خلصت"
+                    finish("✅ \(sum)"); return
+                }
+                if let why = Self.sensitive(action, els) {
+                    let ok = await askConfirm("\(why)\n\(desc)\nأكمل؟")
+                    if Task.isCancelled { return }
+                    if !ok { say("رفضت — وقفت"); finish("انلغى قبل خطوة حساسة"); return }
+                }
+                let tA = Date()
+                let r = await perform(kind, action, els)
+                actMs += Int(Date().timeIntervalSince(tA) * 1000)
+                history.append(desc + (r.ok ? "" : " (فشل: \(r.info.prefix(60)))"))
+                lastFailed = !r.ok
+                if !r.ok { say("⚠️ \(r.info.prefix(160))"); break }
                 if Task.isCancelled { return }
-                if !ok { say("رفضت — وقفت"); finish("انلغى قبل خطوة حساسة"); return }
+                // عناصر الشاشة تتغير بعد اللمس: ما نكمل بأرقام قديمة إلا للكتابة/الإدخال
+                if kind == "tap" || kind == "open" || kind == "back" || kind == "home" { if acts.count > 1 { try? await Task.sleep(nanoseconds: 400_000_000) } }
             }
-            let r = await perform(kind, action, els)
-            history.append(desc + (r.ok ? "" : " (فشل: \(r.info.prefix(60)))"))
-            lastFailed = !r.ok
-            if !r.ok { say("⚠️ \(r.info.prefix(160))") }
-            try? await Task.sleep(nanoseconds: 900_000_000)
+            slog("agent: timing step=\(n) ax=\(axMs)ms llm=\(llmMs)ms action=\(actMs)ms els=\(els.count) acts=\(acts.count)")
+            try? await Task.sleep(nanoseconds: 300_000_000)
         }
         finish("وصلت الحد (\(maxSteps) خطوات) قبل ما أخلص")
     }
@@ -195,6 +224,7 @@ final class PhoneAgent: ObservableObject {
     {"action":"back"}
     {"action":"home"}
     {"action":"done","summary":"وش سويت باختصار"}
+    لو واضح تقدر ترجع حتى ٣ خطوات مرة وحدة: {"actions":[{"action":"tap","id":2},{"action":"type","text":"هلا"}]}
     في open اكتب اسم التطبيق بالإنجليزي إذا تعرفه (Notes, Settings, WhatsApp...).
     قواعد: لا تخترع أرقام عناصر غير موجودة. لو الهدف تحقق قل done. لو انحسبت نفس الخطوة مرتين بدون تغيير جرّب شي ثاني.
     """
@@ -202,14 +232,40 @@ final class PhoneAgent: ObservableObject {
     private func ask(_ user: String, image: URL? = nil) async -> String {
         var out = ""
         do {
-            let st = try await LLMService.shared.stream(system: Self.system, history: [], user: user, maxTokens: 80,
+            let st = try await LLMService.shared.stream(system: Self.system, history: [], user: user, maxTokens: 60,
                                                         images: image.map { [$0] } ?? [])
             for try await c in st {
                 out += c
-                if out.contains("}") , Self.parse(out) != nil { break }
+                if out.contains("}"), !out.contains("\"actions\""), Self.parse(out) != nil { break }
+                if out.contains("]"), out.hasSuffix("}") || out.hasSuffix("}\n"), !Self.actions(out).isEmpty { break }
             }
         } catch { slog("agent: llm error \(error)") }
         return out
+    }
+
+    /// يقبل خطوة وحدة أو {"actions":[...]} (حتى ٣ خطوات)
+    static func actions(_ s: String) -> [[String: Any]] {
+        guard let a = s.firstIndex(of: "{") else { return [] }
+        if let d = try? JSONSerialization.jsonObject(with: Data(String(s[a...]).utf8)) as? [String: Any],
+           let arr = d["actions"] as? [[String: Any]] { return Array(arr.filter { valid($0) }.prefix(3)) }
+        if let one = parse(s) { return [one] }
+        return []
+    }
+    static func valid(_ o: [String: Any]) -> Bool {
+        guard let k = o["action"] as? String else { return false }
+        return ["tap", "type", "enter", "swipe", "open", "back", "home", "done"].contains(k)
+    }
+
+    static func mentionedApp(_ g: String) -> String? {
+        let l = g.lowercased()
+        for e in apps where !e.bundle.isEmpty {
+            if e.names.contains(where: { $0.count >= 3 && l.contains($0) }) { return e.names[0] }
+        }
+        return nil
+    }
+    static func isOnlyOpen(_ g: String) -> Bool {
+        let w = g.split(separator: " ")
+        return w.count <= 3 && (g.hasPrefix("افتح") || g.lowercased().hasPrefix("open") || g.hasPrefix("شغل") || g.hasPrefix("شغّل"))
     }
 
     static func parse(_ s: String) -> [String: Any]? {
@@ -222,8 +278,9 @@ final class PhoneAgent: ObservableObject {
         }
         guard let end else { return nil }
         let j = String(s[a...end])
-        guard let o = try? JSONSerialization.jsonObject(with: Data(j.utf8)) as? [String: Any],
-              let k = o["action"] as? String,
+        guard let o = try? JSONSerialization.jsonObject(with: Data(j.utf8)) as? [String: Any] else { return nil }
+        if let arr = o["actions"] as? [[String: Any]], let f = arr.first(where: { valid($0) }) { return f }
+        guard let k = o["action"] as? String,
               ["tap", "type", "enter", "swipe", "open", "back", "home", "done"].contains(k) else { return nil }
         return o
     }
@@ -245,15 +302,15 @@ final class PhoneAgent: ObservableObject {
         }
         let b = UIScreen.main.bounds
         els = els.filter { $0.frame.intersects(b) }
-        return (app, Array(els.prefix(70)))
+        return (app, Array(els.prefix(40)))
     }
 
     static func describe(app: String, _ els: [Element]) -> String {
         var lines = ["التطبيق: \(app)"]
         for (i, e) in els.enumerated() {
             var l = "[\(i)] \(e.kind)"
-            if !e.label.isEmpty { l += " \"\(e.label.prefix(60))\"" }
-            if !e.value.isEmpty && e.value != e.label { l += " = \"\(e.value.prefix(40))\"" }
+            if !e.label.isEmpty { l += " \"\(e.label.prefix(30))\"" }
+            if !e.value.isEmpty && e.value != e.label { l += " = \"\(e.value.prefix(20))\"" }
             if e.secure { l += " (كلمة سر)" }
             lines.append(l)
         }
@@ -452,7 +509,7 @@ final class PhoneAgent: ObservableObject {
         slog("agent: open «\(name)» → \(hit?.bundle ?? "?")")
         if let hit, !hit.bundle.isEmpty {
             let r = await Self.exec(.launch(hit.bundle))
-            if r.contains("\"ok\":true") { try? await Task.sleep(nanoseconds: 1_200_000_000); return (true, r) }
+            if r.contains("\"ok\":true") { try? await Task.sleep(nanoseconds: 700_000_000); return (true, r) }
             say("⚠️ إطلاق \(hit.bundle): \(r.prefix(120))")
         }
         let q = hit?.en ?? name
@@ -521,11 +578,28 @@ final class PhoneAgent: ObservableObject {
             port = cachedPort
         }
         let h = UserDefaults.standard.string(forKey: "pcHost") ?? "10.7.0.1"
+        var op = op
+        if useLive, let j = liveJSON(op) { op = .live(j) }
         let r = await PhoneControl.run(op, host: h, rpPort: port, rpHost: PhoneControl.lastRPHost)
         if !r.contains("\"ok\":true") { cachedPort = 0 }
         return r
     }
     private static var cachedPort: UInt16 = 0
+    /// أثناء تشغيل الوكيل: كل الأوامر على جلسة وحدة مفتوحة (بدون اتصال/تحقق/بث جديد كل خطوة)
+    static var useLive = false
+
+    static func liveJSON(_ op: PhoneControl.Op) -> String? {
+        let d: [String: Any]
+        switch op {
+        case .tap(let x, let y): d = ["op": "tap", "x": Int(x), "y": Int(y)]
+        case .drag(let a, let b, let x, let y): d = ["op": "drag", "x1": Int(a), "y1": Int(b), "x2": Int(x), "y2": Int(y)]
+        case .keys(let w): d = ["op": "keys", "what": w]
+        case .screen(let ms): d = ["op": "screen", "wait": Int(ms)]
+        case .launch(let q): d = ["op": "launch", "q": q]
+        default: return nil
+        }
+        return (try? JSONSerialization.data(withJSONObject: d)).map { String(decoding: $0, as: UTF8.self) }
+    }
 }
 
 /// إشعارات الوكيل: ثابت بزر «إيقاف» + تأكيد بزرين
