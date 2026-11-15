@@ -184,6 +184,15 @@ fn run(cfg_json: *const c_char, f: impl AsyncFnOnce(Config, &mut Vec<Json>) -> R
     CString::new(v.to_string()).unwrap_or_default().into_raw()
 }
 
+/// تطبيع الأسماء: حروف صغيرة، بدون مسافات/رموز، بدون «ال» في البداية، وتوحيد الهمزات والتاء المربوطة والألف المقصورة
+fn norm_name(x: &str) -> String {
+    let mut t: String = x.to_lowercase().chars().filter(|c| c.is_alphanumeric()).map(|c| match c {
+        'أ' | 'إ' | 'آ' | 'ٱ' => 'ا', 'ة' => 'ه', 'ى' => 'ي', 'ؤ' => 'و', 'ئ' => 'ي', _ => c,
+    }).collect();
+    if t.starts_with("ال") && t.chars().count() > 3 { t = t.chars().skip(2).collect() }
+    t
+}
+
 fn cstr(p: *const c_char) -> String {
     if p.is_null() { return String::new() }
     unsafe { CStr::from_ptr(p) }.to_string_lossy().to_string()
@@ -742,16 +751,29 @@ async fn live_step(l: &mut Live, o: &Json, steps: &mut Vec<Json>) -> Res<Json> {
             let mut bundle = (q.contains('.') && !q.contains(' ')).then(|| q.clone());
             if bundle.is_none() {
                 let apps = asvc.list_apps(false, true, false, false, true).await.map_err(|e| format!("list_apps: {e:?}"))?;
-                let norm = |x: &str| x.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect::<String>();
-                let nq = norm(&q);
-                let mut best: Option<(u8, String)> = None;
-                for a in &apps {
-                    let na = norm(&a.name);
-                    if nq.is_empty() || na.is_empty() { continue }
-                    let sc = if na == nq { 3 } else if na.starts_with(&nq) || nq.starts_with(&na) { 2 } else if na.contains(&nq) || nq.contains(&na) { 1 } else { 0 };
-                    if sc > 0 && best.as_ref().map_or(true, |b| sc > b.0) { best = Some((sc, a.bundle_identifier.clone())) }
-                }
-                bundle = best.map(|b| b.1);
+                let nq = norm_name(&q);
+                let mut scored: Vec<(u32, String, String)> = apps.iter().filter_map(|a| {
+                    let na = norm_name(&a.name);
+                    if na.is_empty() || nq.is_empty() { return None }
+                    let sc = if na == nq { 100 }
+                        else if na.starts_with(&nq) && nq.chars().count() * 10 >= na.chars().count() * 6 { 70 }
+                        else if nq.starts_with(&na) && na.chars().count() * 10 >= nq.chars().count() * 6 { 60 }
+                        else { 0 };
+                    (sc > 0).then(|| (sc, a.name.clone(), a.bundle_identifier.clone()))
+                }).collect();
+                scored.sort_by(|x, y| y.0.cmp(&x.0));
+                let cands: Vec<Json> = scored.iter().take(5).map(|c| json!({"name": c.1, "bundle": c.2, "score": c.0})).collect();
+                steps.push(json!({"step": "match", "q": q, "norm": nq, "candidates": cands}));
+                // نطلق بس لو تطابق تام، أو فائز واحد واضح (الثاني أقل منه)
+                let clear = match scored.as_slice() {
+                    [] => None,
+                    [one] if one.0 >= 60 => Some(one.2.clone()),
+                    [a, b, ..] if a.0 == 100 && b.0 < 100 => Some(a.2.clone()),
+                    [a, b, ..] if a.0 >= 70 && b.0 < a.0 => Some(a.2.clone()),
+                    _ => None,
+                };
+                if clear.is_none() { return Err(format!("ambiguous: {}", json!(cands))) }
+                bundle = clear;
             }
             let b = bundle.ok_or_else(|| format!("ما لقيت تطبيق باسم «{q}»"))?;
             let r = asvc.launch_application(b.clone(), &[], false, false, None, None, None).await.map_err(|e| format!("launch {b}: {e:?}"))?;
