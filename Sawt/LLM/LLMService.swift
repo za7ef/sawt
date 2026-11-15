@@ -84,7 +84,7 @@ actor LLMService {
     /// تسخين صامت: يحمّل الأوزان ويولّد رمز واحد على تعليمات المحادثة
     /// (كرت الشاشة: يجمّع كيرنلات Metal؛ المعالج: يعبّي كاش البداية في llama)
     func warmUp(reason: String) async {
-        let dev = ComputeMode.device(for: ComputeMode.current)
+        let dev = ComputeMode.device(for: ComputeMode.current) ?? "gpu"
         if let w = lastWarm, w.device == dev, Date().timeIntervalSince(w.at) < 120 { return }
         if dev == "gpu" && !AppPhase.active { return }   // Metal ممنوع في الخلفية
         let sys = await MainActor.run { AppSettings.shared.systemPrompt(chat: true, query: "", memory: false) }
