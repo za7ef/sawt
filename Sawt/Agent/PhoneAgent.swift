@@ -88,7 +88,15 @@ final class PhoneAgent: ObservableObject {
         if g.isEmpty { why = "الهدف فاضي" }
         else if running { why = "الوكيل شغّال على مهمة ثانية — قل «وقف» أول" }
         else if !(PhoneControl.available && PhoneControl.hasPairing) { why = "التحكم بالجوال مو جاهز (اقتران/الأداة)" }
-        else if LLMService.onCPU, !GGUFSpec.active.isDownloaded { why = "نموذج المعالج (\(GGUFSpec.active.name)) مو منزّل — نزّله من صفحة النماذج ← المعالج" }
+        else if let s = Self.cpuSpecForStep(), !s.isDownloaded { why = "نموذج المعالج (\(Self.cpuSpecForStep()?.name ?? "")) مو منزّل — نزّله من صفحة النماذج ← المعالج" }
+        // نموذج كرت شاشة مختار للوكيل يختلف عن المحمّل: نحمّله (يصير هو نموذج كرت الشاشة)
+        if why == nil, Self.pick.hasPrefix("gpu:"), !LLMService.onCPU {
+            let repo = String(Self.pick.dropFirst(4))
+            if repo != AppSettings.shared.llmID, let m = Catalog.llms.first(where: { $0.id == repo }), ModelManager.shared.downloaded.contains(repo) {
+                slog("agent: switching GPU model to \(repo) for agent")
+                _ = ModelManager.shared.activate(m)
+            }
+        }
         if let why {
             slog("agent: start refused: \(why)")
             // لو شغّال ما نلمس فقاعة المهمة الحالية
@@ -216,7 +224,7 @@ final class PhoneAgent: ObservableObject {
                 attempt += 1
                 action = Self.parse(raw)
                 if action != nil { break }
-                if raw.isEmpty, LLMService.onCPU { break }   // خطأ تحميل/ذاكرة على المعالج: ما نعيد
+                if raw.isEmpty, Self.cpuSpecForStep() != nil { break }   // خطأ تحميل/ذاكرة على المعالج: ما نعيد
             }
             if Task.isCancelled { return }
             let llmMs = Int(Date().timeIntervalSince(tLLM) * 1000)
@@ -327,16 +335,31 @@ final class PhoneAgent: ObservableObject {
     str ::= "\"" ( [^"\\\x00-\x1F] | "\\" ["\\/nt] )* "\""
     """#
 
+    /// اختيار شاشة الوكيل: "" = نفس صفحة النماذج حسب الجهاز، "cpu:<id>" نموذج معالج، "gpu:<repo>" نموذج كرت شاشة
+    static var pick: String { UserDefaults.standard.string(forKey: "agentModelPick") ?? "" }
+    /// نموذج المعالج اللي يشتغل للوكيل الحين (nil = كرت الشاشة)
+    static func cpuSpecForStep() -> GGUFSpec? {
+        let p = pick
+        if p.hasPrefix("cpu:"), let s = GGUFSpec.all.first(where: { "cpu:" + $0.id == p }), s.isDownloaded { return s }
+        if p.hasPrefix("gpu:") {
+            if LLMService.onCPU {
+                slog("agent: picked \(p) needs GPU but app is on CPU → fallback \(GGUFSpec.active.id)")
+                return GGUFSpec.active
+            }
+            return nil
+        }
+        return LLMService.onCPU ? GGUFSpec.active : nil
+    }
+
     private func ask(_ user: String, image: URL? = nil) async -> String {
         let t0 = Date()
         var model = "gpu-mlx"
         defer { slog("agent: model=\(model) \(Int(Date().timeIntervalSince(t0) * 1000))ms") }
         // على المعالج: نموذج المعالج المختار من صفحة النماذج (llama.cpp) مع قيود الصيغة
-        if LLMService.onCPU {
-            let spec = GGUFSpec.active
+        if let spec = Self.cpuSpecForStep() {
             model = "\(spec.id)-cpu+gbnf"
             guard spec.isDownloaded else { say("⚠️ \(spec.name) مو منزّل — نزّله من صفحة النماذج ← المعالج"); return "" }
-            do { return try await LlamaEngine.shared.complete(system: Self.system, user: user, maxTokens: 256, grammar: Self.grammar) }
+            do { return try await LlamaEngine.of(spec).complete(system: Self.system, user: user, maxTokens: 256, grammar: Self.grammar) }
             catch {
                 slog("agent: cpu error \(error)")
                 if "\(error)".contains("أطول من سياق") { overflowed = true; return "" }
@@ -713,7 +736,7 @@ final class PhoneAgent: ObservableObject {
     /// صورة الشاشة مصغّرة مع أرقام العناصر مرسومة عليها: من البث لو شغّال، وإلا لقطة من خدمة الأدوات
     private func visionImage(_ els: [Element], lastFailed: Bool) async -> URL? {
         guard Self.see == .share else { return nil }
-        if LLMService.onCPU { slog("agent: vision skipped (cpu/llama.cpp, no mmproj) — text only"); return nil }
+        if Self.cpuSpecForStep() != nil { slog("agent: vision skipped (cpu/llama.cpp, no mmproj) — text only"); return nil }
         guard await ModelManager.shared.ensureVision() else { slog("agent: vision unavailable"); return nil }
         guard let fr = await currentFrame() else { return nil }
         let (img, src) = fr
@@ -1044,6 +1067,8 @@ struct PhoneAgentView: View {
     @AppStorage("agentMaxSteps") private var maxSteps = 10
     @State private var testOut = ""
     @State private var shareLive = false
+    @AppStorage("agentModelPick") private var agentPick = ""
+    @ObservedObject private var models = ModelManager.shared
 
     var body: some View {
         Form {
@@ -1056,7 +1081,14 @@ struct PhoneAgentView: View {
                 } else {
                     Button("ابدأ") { agent.start(goal) }.disabled(goal.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                Text("يستخدم النموذج المختار في صفحة النماذج: «كرت الشاشة» والتطبيق قدّام، و«المعالج» بالخلفية أو لو اخترت المعالج.")
+                Picker("نموذج الوكيل", selection: $agentPick) {
+                    Text("نفس صفحة النماذج (تلقائي)").tag("")
+                    ForEach(GGUFSpec.all.filter { $0.isDownloaded }) { Text("المعالج: \($0.name)").tag("cpu:" + $0.id) }
+                    ForEach(Catalog.llms.filter { models.downloaded.contains($0.id) }) { Text("كرت الشاشة: \($0.title)").tag("gpu:" + $0.id) }
+                }
+                Text(agentPick.isEmpty
+                     ? "يستخدم المختار في صفحة النماذج: كرت الشاشة والتطبيق قدّام، والمعالج بالخلفية."
+                     : (agentPick.hasPrefix("gpu:") ? "لو التطبيق بالخلفية (معالج بس) يرجع لنموذج المعالج المختار." : "يشتغل على المعالج حتى والتطبيق قدّام."))
                     .font(.footnote).foregroundStyle(.secondary)
                 Picker("أقصى عدد خطوات", selection: $maxSteps) {
                     ForEach([10, 20, 30], id: \.self) { Text("\($0)").tag($0) }
