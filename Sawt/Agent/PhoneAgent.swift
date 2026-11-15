@@ -92,7 +92,7 @@ final class PhoneAgent: ObservableObject {
         if why == nil, Self.pick.hasPrefix("cloud:") {
             if Self.cloud == nil { why = "ما فيه مفتاح للخدمة السحابية المختارة — حطه في «مفاتيح الخدمات»" }
             else if !UserDefaults.standard.bool(forKey: "cloudConsent") { why = "لازم توافق على تنبيه الخصوصية للوكيل السحابي أول" }
-            else if !NetworkGate.shared.on { why = "الإنترنت مقفول في التطبيق — افتحه من الإعدادات أو اختر نموذج محلي" }
+            // زر الإنترنت في خانة الكتابة = البحث في الويب؛ الوكيل السحابي (مثل الدردشة السحابية) بوابته الموافقة + المفتاح
         }
         // نموذج كرت شاشة مختار للوكيل يختلف عن المحمّل: نحمّله (يصير هو نموذج كرت الشاشة)
         if why == nil, Self.pick.hasPrefix("gpu:"), !LLMService.onCPU {
@@ -1090,6 +1090,9 @@ enum AgentNotify {
 struct PhoneAgentView: View {
     @ObservedObject var agent = PhoneAgent.shared
     @State private var goal = ""
+    @State private var refusal: String?
+    @State private var starting = false
+    @FocusState private var goalFocused: Bool
     @State private var see = PhoneAgent.see
     @AppStorage("agentMaxSteps") private var maxSteps = 10
     @State private var testOut = ""
@@ -1100,16 +1103,47 @@ struct PhoneAgentView: View {
     @State private var pendingPick = ""
     @ObservedObject private var models = ModelManager.shared
 
+    /// لمسة «ابدأ»: اهتزاز خفيف فورًا + «جاري البدء…»، نقفل الكيبورد، وبعدين نبدأ (والسبب يطلع لو ما بدأ)
+    private func tapStart() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        slog("agent: ui start tapped")
+        starting = true
+        refusal = nil
+        goalFocused = false
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 150_000_000)   // نخلي الكيبورد ينزل والواجهة تتحدث
+            let r = agent.start(goal)
+            starting = false
+            refusal = r
+            if let r { UINotificationFeedbackGenerator().notificationOccurred(.error); slog("agent: ui refusal shown \(r.prefix(80))") }
+        }
+    }
+
     var body: some View {
         Form {
             Section {
                 TextField("وش تبيني أسوي؟ مثال: افتح الملاحظات واكتب مرحبا", text: $goal, axis: .vertical)
+                    .focused($goalFocused)
                 if agent.running {
                     Button(role: .destructive) { agent.stop() } label: {
                         Label("إيقاف", systemImage: "stop.circle.fill").font(.title3.bold()).frame(maxWidth: .infinity)
                     }
                 } else {
-                    Button("ابدأ") { agent.start(goal) }.disabled(goal.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Button(action: tapStart) {
+                        HStack(spacing: 8) {
+                            if starting { ProgressView().controlSize(.small) }
+                            Text(starting ? "جاري البدء…" : "ابدأ").font(.headline)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 36)
+                        .contentShape(Rectangle())
+                    }
+                    // زر مستقل (مو صف الفورم): يستجيب من أول لمسة حتى والكيبورد مفتوح
+                    .buttonStyle(.borderedProminent)
+                    .disabled(starting || goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                if let r = refusal, !agent.running {
+                    Label("ما بدأ: \(r)", systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote).foregroundStyle(.orange)
                 }
                 Picker("نموذج الوكيل", selection: $agentPick) {
                     Text("نفس صفحة النماذج (تلقائي)").tag("")
@@ -1184,6 +1218,7 @@ struct PhoneAgentView: View {
                 }
             }
         }
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("الوكيل (تجريبي)")
         .alert("الوكيل السحابي", isPresented: $askConsent) {
             Button("موافق", role: .destructive) { UserDefaults.standard.set(true, forKey: "cloudConsent") }
