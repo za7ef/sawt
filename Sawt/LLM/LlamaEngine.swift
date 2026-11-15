@@ -129,6 +129,51 @@ actor LlamaEngine {
         return 2
     }
 
+    /// خيوط التوليد: من اختبار الخيوط لو انحفظ، وإلا عدد الأنوية القوية
+    private func genThreads() -> Int32 {
+        let v = UserDefaults.standard.integer(forKey: "llamaThreads")
+        return v > 0 ? Int32(v) : perfCores()
+    }
+
+    /// يجرب ٢/٤/٦ خيوط على نفس السؤال ويحفظ الأسرع
+    func benchThreads() throws -> String {
+        #if LLAMA
+        try load()
+        guard let ctx else { throw SawtError.notReady("نموذج المعالج") }
+        let all = Int32(ProcessInfo.processInfo.activeProcessorCount)
+        var best: (Int32, Double) = (perfCores(), 0)
+        var lines: [String] = []
+        for n in [Int32(2), 4, 6] where n <= all {
+            llama_set_n_threads(ctx, n, max(n, all - 1))
+            let t0 = Date()
+            let k = try generate(system: "جاوب باختصار.", history: [], user: "عدّ من ١ إلى ٣٠ بالكلمات.", maxTokens: 40,
+                                 temperature: 0.1, topP: 0.9, emit: { _ in true }, trimForCPU: false)
+            let rate = Double(k) / max(Date().timeIntervalSince(t0), 0.001)
+            lines.append("\(n): \(String(format: "%.1f", rate))")
+            slog("llama: bench threads=\(n) \(String(format: "%.2f", rate)) tok/s (incl. prefill)")
+            if rate > best.1 { best = (n, rate) }
+        }
+        UserDefaults.standard.set(Int(best.0), forKey: "llamaThreads")
+        llama_set_n_threads(ctx, best.0, max(best.0, all - 1))
+        return "الأسرع \(best.0) خيوط — " + lines.joined(separator: "، ") + " رمز/ث"
+        #else
+        throw SawtError.notReady("محرك المعالج ما انبنى في هذي النسخة")
+        #endif
+    }
+
+    /// تسخين: يحمّل النموذج ويعالج التعليمات مسبقًا عشان أول رد يكون أسرع
+    func prewarm(system: String) {
+        #if LLAMA
+        do {
+            try load()
+            let t0 = Date()
+            _ = try generate(system: system, history: [], user: ".", maxTokens: 1, temperature: 0.1, topP: 0.9,
+                             emit: { _ in false }, trimForCPU: false)
+            slog("llama: prewarm \(Int(Date().timeIntervalSince(t0) * 1000))ms")
+        } catch { slog("llama: prewarm failed \(error)") }
+        #endif
+    }
+
     func load() throws {
         #if LLAMA
         if ctx != nil { return }
@@ -148,7 +193,7 @@ actor LlamaEngine {
         cp.n_ctx = nCtx
         cp.n_batch = 512
         cp.n_ubatch = 512
-        let p = perfCores()
+        let p = genThreads()
         let all = Int32(ProcessInfo.processInfo.activeProcessorCount)
         cp.n_threads = p
         cp.n_threads_batch = max(p, all - 1)
@@ -223,10 +268,18 @@ actor LlamaEngine {
 
     /// يولّد ويرجّع القطع وحدة وحدة. شغّال كله داخل الـactor (خيط واحد).
     func generate(system: String, history: [Chat.Message], user: String, maxTokens: Int,
-                  temperature: Float, topP: Float, emit: @Sendable (String) -> Bool) throws -> Int {
+                  temperature: Float, topP: Float, emit: @Sendable (String) -> Bool, trimForCPU: Bool = true) throws -> Int {
         #if LLAMA
         try load()
         guard let ctx, let vocab else { throw SawtError.notReady("نموذج المعالج") }
+        // على المعالج: آخر ٦ رسائل بس، وكل رسالة قديمة مقصوصة (الـprefill هو أبطأ جزء)
+        var history = history
+        if trimForCPU {
+            history = Array(history.suffix(6)).map { m in
+                m.content.count > 600 ? Chat.Message(role: m.role, content: String(m.content.prefix(600))) : m
+            }
+        }
+        let tp = Date()
         var toks = tokenize(Self.prompt(system: system, history: history, user: user))
         // لو طويل: نقص من بداية السجل (نخلي التعليمات وآخر الكلام)
         let budget = Int(nCtx) - maxTokens - 8
@@ -254,7 +307,8 @@ actor LlamaEngine {
         }
         let prefillMs = Int(Date().timeIntervalSince(t0) * 1000)
         cached = toks
-        slog("llama: prefill \(toks.count - common) new tok (cached \(common)) in \(prefillMs)ms")
+        let newTok = toks.count - common
+        slog("llama: prefill \(newTok) new tok (cached \(common)/\(toks.count)) in \(prefillMs)ms ≈ \(String(format: "%.0f", Double(newTok) / max(Double(prefillMs) / 1000, 0.001))) tok/s tokenize=\(Int(t0.timeIntervalSince(tp) * 1000))ms threads=\(llama_n_threads(ctx))")
 
         let sp = llama_sampler_chain_default_params()
         let smpl = llama_sampler_chain_init(sp)

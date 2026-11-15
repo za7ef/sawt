@@ -76,6 +76,38 @@ actor LLMService {
     }
 
     /// اختبار قصير للمعالج: يرجع nil إذا نجح، أو رسالة الخطأ
+    /// هل الرد الجاي بيطلع من المعالج (llama.cpp)؟
+    static var onCPU: Bool { ComputeMode.device(for: ComputeMode.forced ?? ComputeMode.current) == "cpu" }
+
+    private var lastWarm: (device: String, at: Date)?
+
+    /// تسخين صامت: يحمّل الأوزان ويولّد رمز واحد على تعليمات المحادثة
+    /// (كرت الشاشة: يجمّع كيرنلات Metal؛ المعالج: يعبّي كاش البداية في llama)
+    func warmUp(reason: String) async {
+        let dev = ComputeMode.device(for: ComputeMode.current)
+        if let w = lastWarm, w.device == dev, Date().timeIntervalSince(w.at) < 120 { return }
+        if dev == "gpu" && !AppPhase.active { return }   // Metal ممنوع في الخلفية
+        let sys = await MainActor.run { AppSettings.shared.systemPrompt(chat: true, query: "", memory: false) }
+        let t0 = Date()
+        if dev == "cpu" {
+            guard LlamaModelFile.isDownloaded else { return }
+            await LlamaEngine.shared.prewarm(system: sys)
+        } else {
+            guard container != nil else { slog("llm: warm-up skipped (not loaded) \(reason)"); return }
+            do {
+                let st = try stream(system: sys, history: [], user: ".", maxTokens: 1)
+                for try await _ in st {}
+            } catch { slog("llm: warm-up failed \(error)"); return }
+        }
+        lastWarm = (dev, Date())
+        slog("llm: warm-up \(dev) (\(reason)) \(Int(Date().timeIntervalSince(t0) * 1000))ms")
+    }
+
+    func cpuThreadBench() async -> String {
+        guard LlamaModelFile.isDownloaded else { return "نموذج المعالج مو منزّل" }
+        do { return try await LlamaEngine.shared.benchThreads() } catch { return error.localizedDescription }
+    }
+
     func cpuSelfTest() async -> (ok: Bool, info: String) {
         guard LlamaModelFile.isDownloaded else { return (false, "نموذج المعالج مو منزّل") }
         return await ComputeMode.$forced.withValue("cpu") {
@@ -128,6 +160,7 @@ actor LLMService {
         slog("llm: loaded vision=\(vision) avail=\(RAM.availableMB)MB")
         loadedID = option.id
         progress(1)
+        Task.detached(priority: .utility) { await LLMService.shared.warmUp(reason: "loaded") }
     }
 
     /// يرجع تدفق نص الرد. السجل يحتوي الرسائل السابقة بدون الرسالة الحالية.
@@ -139,8 +172,10 @@ actor LLMService {
         if ComputeMode.device(for: ComputeMode.forced ?? ComputeMode.current) == "cpu" {
             slog("llm: cpu → llama.cpp (mlx loaded=\(container != nil) avail=\(RAM.availableMB)MB)")
             callSession = nil; callTurns = 0
+            // المعالج أبطأ بكثير: سقف أقل للرد
+            let cap = ThermalWatch.isHot ? 200 : 320
             return LlamaEngine.shared.stream(system: system, history: history, user: user,
-                                             maxTokens: ThermalWatch.isHot ? min(200, maxTokens) : maxTokens)
+                                             maxTokens: min(cap, maxTokens))
         }
         guard let container else { throw SawtError.notReady("النموذج اللغوي") }
         var params = GenerateParameters()
