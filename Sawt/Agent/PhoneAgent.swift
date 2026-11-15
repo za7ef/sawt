@@ -52,14 +52,34 @@ final class PhoneAgent: ObservableObject {
         AgentNotify.clear()
     }
     private var confirmCont: CheckedContinuation<Bool, Never>?
-    let maxSteps = 10
+    /// الحد الأقصى للخطوات (١٠/٢٠/٣٠) من الإعدادات
+    var maxSteps: Int { let v = UserDefaults.standard.integer(forKey: "agentMaxSteps"); return [10, 20, 30].contains(v) ? v : 10 }
+    /// فقاعة الحالة في المحادثة لما ينطلق من «/جوال»
+    var chatTarget: (conv: UUID?, msg: UUID)?
+
+    private func updateBubble(final: Bool = false) {
+        guard let t = chatTarget else { return }
+        // فقاعة الإقرار تعرض الخطوات؛ والنتيجة تنزل كرد عادي مستقل
+        var lines = ["تمام، جاري تنفيذ المهمة…"]
+        let steps = log.dropFirst().suffix(final ? 12 : 6).map { "• " + $0.text }
+        if !steps.isEmpty { lines.append(""); lines += steps }
+        if !final { lines.append("(تقدر توقفه من الإشعار أو الجزيرة)") }
+        ChatStore.shared.updateText(t.msg, in: t.conv, lines.joined(separator: "\n"), save: final)
+        if final {
+            let res = lastResult.replacingOccurrences(of: "✅ ", with: "")
+            ChatStore.shared.append(Message(role: .assistant, text: lastResult.hasPrefix("✅") ? "خلصت: \(res)" : "ما كملت المهمة: \(res)"), to: t.conv)
+            chatTarget = nil
+        }
+    }
 
     // ───── التشغيل والإيقاف ─────
     func start(_ goal: String) {
         let g = goal.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !g.isEmpty, !running else { return }
         guard PhoneControl.available, PhoneControl.hasPairing else {
-            lastResult = "التحكم بالجوال مو جاهز (اقتران/الأداة)"; return
+            lastResult = "التحكم بالجوال مو جاهز (اقتران/الأداة)"
+            if let t = chatTarget { ChatStore.shared.updateText(t.msg, in: t.conv, "🤖 " + lastResult, save: true); chatTarget = nil }
+            return
         }
         self.goal = g; log = []; lastResult = ""; running = true; stepNo = 0
         say("الهدف: \(g)")
@@ -82,6 +102,7 @@ final class PhoneAgent: ObservableObject {
     private func finish(_ r: String) {
         guard running else { return }
         running = false; lastResult = r
+        updateBubble(final: true)
         unsurface()
         AgentNotify.done(r)
         HostPairing.shared.keepAlive(false)
@@ -90,7 +111,7 @@ final class PhoneAgent: ObservableObject {
 
     private func say(_ s: String) {
         log.append(Step(text: s)); slog("agent: \(s.prefix(300))")
-        if running { stepNo += s.first?.isNumber == true ? 1 : 0; surface(s) }
+        if running { stepNo += s.first?.isNumber == true ? 1 : 0; surface(s); updateBubble() }
     }
 
     // ───── الحلقة ─────
@@ -372,12 +393,12 @@ final class PhoneAgent: ObservableObject {
         return url
     }
 
-    /// الإنجليزي حرف حرف؛ أي شي ثاني (عربي/رموز) دايمًا عن طريق الحافظة + Cmd+V
+    /// كل الكتابة عن طريق الحافظة + Cmd+V (مستقلة عن لغة الكيبورد)
     static func typeText(_ t: String) async -> String {
-        let ascii = t.unicodeScalars.allSatisfy { $0.isASCII && $0.value >= 32 && $0.value < 127 }
+        // دايمًا عن طريق الحافظة: أكواد HID تعتمد على لغة الكيبورد (العربي يقلب hello لحروف عربية)
         let hex = t.unicodeScalars.prefix(24).map { String(format: "%04X", $0.value) }.joined(separator: " ")
-        slog("agent: type via=\(ascii ? "keys" : "paste") text=«\(t)» u=[\(hex)]")
-        return await exec(.keys(ascii ? t : "paste:" + t))
+        slog("agent: type via=paste text=«\(t)» u=[\(hex)]")
+        return await exec(.keys("paste:" + t))
     }
 
     /// جدول التطبيقات الشائعة: الاسم (عربي/إنجليزي) → معرّف الحزمة + الاسم الإنجليزي
@@ -581,6 +602,7 @@ struct PhoneAgentView: View {
     @ObservedObject var agent = PhoneAgent.shared
     @State private var goal = ""
     @State private var see = PhoneAgent.see
+    @AppStorage("agentMaxSteps") private var maxSteps = 10
     @State private var shareLive = false
 
     var body: some View {
@@ -594,6 +616,10 @@ struct PhoneAgentView: View {
                 } else {
                     Button("ابدأ") { agent.start(goal) }.disabled(goal.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
+                Picker("أقصى عدد خطوات", selection: $maxSteps) {
+                    ForEach([10, 20, 30], id: \.self) { Text("\($0)").tag($0) }
+                }
+                .pickerStyle(.segmented)
                 Picker("طريقة رؤية الشاشة", selection: $see) {
                     ForEach(PhoneAgent.See.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
@@ -613,7 +639,7 @@ struct PhoneAgentView: View {
                     }
                 }
             } footer: {
-                Text("«مشاركة الشاشة»: يرسل صورة الشاشة مع أرقام العناصر لنموذج الرؤية (لو البث طافي ياخذ لقطة). الصورة تشتغل على كرت الشاشة بس؛ على المعالج نص فقط.\nيقرأ الشاشة ويختار خطوة وحدة كل مرة (١٠ خطوات كحد أقصى). أي إرسال أو حذف أو دفع أو كلمة سر يوقف ويسألك. تقدر توقفه بأي وقت.")
+                Text("«مشاركة الشاشة»: يرسل صورة الشاشة مع أرقام العناصر لنموذج الرؤية (لو البث طافي ياخذ لقطة). الصورة تشتغل على كرت الشاشة بس؛ على المعالج نص فقط.\nيقرأ الشاشة ويختار خطوة وحدة كل مرة (الحد حسب الإعداد). أي إرسال أو حذف أو دفع أو كلمة سر يوقف ويسألك. تقدر توقفه بأي وقت.")
             }
             if let q = agent.confirm {
                 Section("يحتاج تأكيد") {
