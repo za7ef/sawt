@@ -32,6 +32,11 @@ final class PhoneAgent: ObservableObject {
     private var obs: NSObjectProtocol?
 
     private init() {
+        // وضع الأتمتة وقف وسط المهمة (أزرار الصوت أو انتهى التفويض): نوقف المهمة، وما نرجّعه لحالنا
+        _ = NotificationCenter.default.addObserver(forName: Notification.Name("sawt.automationEnded"), object: nil, queue: .main) { note in
+            let why = note.object as? String ?? ""
+            Task { @MainActor in PhoneAgent.shared.automationEnded(why) }
+        }
         obs = NotificationCenter.default.addObserver(forName: Notification.Name("sawt.stopAgent"), object: nil, queue: .main) { _ in
             Task { @MainActor in PhoneAgent.shared.stop() }
         }
@@ -132,6 +137,17 @@ final class PhoneAgent: ObservableObject {
         finish("انوقف بطلبك")
     }
 
+    /// وضع الأتمتة انطفى وسط المهمة: غالبًا هو وقفه بأزرار الصوت
+    func automationEnded(_ why: String) {
+        guard running else { return }
+        slog("agent: automation ended mid-task: \(why)")
+        task?.cancel()
+        answer(false)
+        say("⏹️ وقفت وضع الأتمتة (أزرار الصوت؟) — \(why)")
+        XCTBackend.automationWanted = false
+        finish("وقفتها أنت: وضع الأتمتة انطفى وسط المهمة. أرسل المهمة من جديد لو تبي تكمل")
+    }
+
     func answer(_ yes: Bool) {
         confirm = nil
         confirmCont?.resume(returning: yes); confirmCont = nil
@@ -161,12 +177,12 @@ final class PhoneAgent: ObservableObject {
         defer { bg.end() }
         // الطريقة المختارة بس، بدون رجوع لطريقة ثانية. XCTest: نشغّل وضع الأتمتة تلقائيًا وننتظره
         if Self.see == .xct {
-            if !XCTBackend.isReady || !Runner.isOn { say("الطريقة: XCTest — أشغّل المشغّل… (دخّل رمز الجوال لو طلبه)") }
+            if !XCTBackend.runnerReady || !Runner.isOn { say("الطريقة: XCTest — أشغّل المشغّل… (دخّل رمز الجوال لو طلبه)") }
             if let e = await Runner.set(true) {
                 say("✗ XCTest ما اشتغل: \(e.prefix(200))")
                 finish("وقفت: المشغّل ما اشتغل — \(e.prefix(160))"); return
             }
-            if let e = await XCTBackend.enableAutomation() {
+            if let e = await XCTBackend.beginTask() {
                 say("✗ \(e.prefix(200))")
                 finish("وقفت: \(e.prefix(160))"); return
             }
@@ -1465,7 +1481,7 @@ enum Runner {
             PhoneAgent.see = .xct
             if !alive { alive = true; HostPairing.shared.keepAlive(true) }
             let busy = PhoneAgent.shared.running
-            if !busy && !XCTBackend.isReady { RunnerActivity.show(RunnerActivity.state("prep", "يجهّز جلسة XCTest"), goal: "المشغّل") }
+            if !busy && !XCTBackend.runnerReady { RunnerActivity.show(RunnerActivity.state("prep", "يجهّز جلسة XCTest"), goal: "المشغّل") }
             let e = await XCTBackend.startAutomation()
             if !busy {
                 if let e { RunnerActivity.show(RunnerActivity.state("sleep", "ما اشتغل: " + String(e.prefix(60))), goal: "المشغّل") }
@@ -1484,7 +1500,7 @@ enum Runner {
 
     /// عند فتح التطبيق: لو كان شغّال نرجّعه
     static func resume() async {
-        if isOn && !XCTBackend.isReady { await set(true) }
+        if isOn && !XCTBackend.runnerReady { await set(true) }
         else if isOn && !alive {
             alive = true; HostPairing.shared.keepAlive(true)
             RunnerActivity.observe()
@@ -1496,7 +1512,7 @@ enum Runner {
     static var stateText: String {
         if !isOn { return "متوقف" }
         if PhoneAgent.shared.running { return "شغّال: الخطوة \(PhoneAgent.shared.stepNo)" }
-        return XCTBackend.isReady ? "شغّال (نايم)" : "يجهّز…"
+        return XCTBackend.runnerReady ? "شغّال (نايم)" : "يجهّز…"
     }
 }
 

@@ -117,14 +117,24 @@ enum XCTBackend {
         let recent = lifeEvents.isEmpty ? "ما فيه أحداث خلفية/قفل مسجّلة" : lifeEvents.joined(separator: "، ")
         sessionState = "انتهى التفويض (\(where_)) — آخر الأحداث: \(recent)"
         slog("xct: auth lost at \(where_); recent: \(recent)")
+        if automationWanted { postAutomationEnded("انتهى التفويض (\(where_))") }
     }
 
     /// يعيد التفويض ووضع الأتمتة (ممكن يطلب الرمز). true لو رجعت الجلسة
     static func reauthorize() async -> Bool {
+        // وسط مهمة ما نرجّع وضع الأتمتة لحالنا: ممكن هو اللي وقفه بأزرار الصوت. المهمة توقف والمهمة الجاية تجهّز من جديد
+        if automationWanted { slog("xct: no auto re-enable mid-task"); return false }
         let cfg = await XCTestProbe.connectionConfig()
         if let e = await prepare(cfg: cfg, force: true) { slog("xct: reauth failed: \(e)"); return false }
         if automationWanted, let e = await enableAutomation() { slog("xct: reauth enable failed: \(e)"); return false }
         return true
+    }
+
+    /// وضع الأتمتة وقف وسط مهمة (غالبًا هو وقفه بأزرار الصوت): المهمة توقف بدون إعادة تفعيل
+    static func postAutomationEnded(_ why: String) {
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Notification.Name("sawt.automationEnded"), object: why)
+        }
     }
 
     // MARK: - تفعيل وإطفاء وضع الأتمتة (مع المهمة)
@@ -167,35 +177,72 @@ enum XCTBackend {
 
     // MARK: - وضع الأتمتة (جلسة دائمة)
 
-    /// يشغّل الجلسة ويبدأ مراقب يعيد بناءها لو انقطعت (كل ١٥ ثانية). يرجع سبب الفشل أو nil
+    /// المشغّل جاهز خفيف: الأطر محمّلة والعملية مفوّضة، بدون إعداد اختبار ولا جلسة ولا وصول (عشان ما تتعتّم الشاشة)
+    nonisolated(unsafe) static var lightReady = false
+    static var runnerReady: Bool { lightReady || prepared }
+
+    /// تشغيل المشغّل (مثل زر Poki): تحميل الأطر + التفويض بس. وضع الأتمتة والجلسة يجون مع المهمة (beginTask)
     static func startAutomation() async -> String? {
         keeper?.cancel()
         startLifecycleLog()
-        checkHealth()
+        if runnerReady { sessionState = prepared ? sessionState : "جاهز (مفوّض، الجلسة تنفتح مع المهمة)"; startKeeper(); return nil }
+        if preparing { return "التجهيز شغّال" }
+        preparing = true
         let cfg = await XCTestProbe.connectionConfig()
-        var e: String? = nil
-        if !prepared { e = await prepare(cfg: cfg, force: true) }
+        let t = Date()
+        let err: String? = await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let loaded = XCTestProbe.loadFrameworks()
+                slog("runner: step frameworks \(Int(Date().timeIntervalSince(t) * 1000))ms")
+                if let bad = loaded.first(where: { !$0.ok && $0.name != "usr/lib" }) {
+                    cont.resume(returning: "\(bad.name): \(bad.detail.prefix(200))"); return
+                }
+                let cs = XCTestProbe.classesStep()
+                guard cs.ok else { cont.resume(returning: cs.detail); return }
+                var checks = XCTestProbe.localChecks()
+                let auth = XCTestProbe.authorizeSelf(cfg: cfg, checks: &checks)
+                slog("runner: step authorize \(auth.ok ? "ok" : "failed") \(Int(Date().timeIntervalSince(t) * 1000))ms")
+                cont.resume(returning: auth.ok ? nil : "التفويض: " + auth.detail)
+            }
+        }
+        preparing = false
+        if let err { sessionState = "فشل: " + String(err.prefix(80)); return err }
+        lightReady = true
+        sessionState = "جاهز (مفوّض، الجلسة تنفتح مع المهمة)"
+        startKeeper()
+        return nil
+    }
+
+    /// بداية مهمة: إعداد الاختبار والجلسة والوصول، بعدين وضع الأتمتة. كل خطوة بوقتها في السجل (عشان نعرف وش يعتّم)
+    static func beginTask() async -> String? {
+        let cfg = await XCTestProbe.connectionConfig()
+        let t = Date()
+        if !prepared {
+            if let e = await prepare(cfg: cfg, force: true) { return e }
+            slog("runner: step session+config ready \(Int(Date().timeIntervalSince(t) * 1000))ms")
+        }
+        if let e = await enableAutomation() { return e }
+        slog("runner: step automation enabled \(Int(Date().timeIntervalSince(t) * 1000))ms")
+        return nil
+    }
+
+    /// المراقب: يفحص الجلسة بس وقت المهمة (ما نقرأ شي والمشغّل نايم)
+    private static func startKeeper() {
+        keeper?.cancel()
         keeper = Task.detached(priority: .utility) {
             while !Task.isCancelled && automationOn {
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
                 if Task.isCancelled || !automationOn { break }
-                // فحص صحة فعلي: قراءة صغيرة جدًا (عمق ١). خطأ 41 = التفويض انتهى
-                checkHealth()
-                if !prepared && !preparing {
-                    slog("xct: keeper rebuilding session")
-                    sessionState = "تنبني من جديد…"
-                    let c = await XCTestProbe.connectionConfig()
-                    if let err = await prepare(cfg: c, force: true) { sessionState = "فشل البناء: " + String(err.prefix(80)) }
-                }
+                if automationWanted { checkHealth() }
             }
         }
-        return e
     }
 
     /// يوقف الجلسة الدائمة ويفك التفويض
     static func stopAutomation() {
         keeper?.cancel(); keeper = nil
         prepared = false
+        lightReady = false
         automationEnabled = false
         generation += 1   // أي معالج انقطاع قديم يتجاهل
         #if SAWTCTL
@@ -272,6 +319,7 @@ enum XCTBackend {
                 prepared = false
                 automationEnabled = false
                 sessionState = "انقطعت (جيل \(gen))"
+                if automationWanted { postAutomationEnded("الجلسة انقطعت") }
                 slog("xct: session invalidated gen \(gen)")
             }
             sessionState = "شغّالة (جيل \(gen))" + (watched ? "" : "؛ بدون مراقبة انقطاع")
