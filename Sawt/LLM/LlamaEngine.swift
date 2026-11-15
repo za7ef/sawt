@@ -6,19 +6,52 @@ import llama
 
 /// محرك المعالج: llama.cpp مع Gemma 4 E2B (GGUF). يشتغل على المعالج بس (بدون Metal)
 /// عشان يقدر يكمل والتطبيق في الخلفية.
-struct GGUFSpec: Sendable {
+struct GGUFSpec: Sendable, Identifiable, Hashable {
     enum Template: Sendable { case gemma, chatml }
+    let id: String
     let name: String
     let repo: String
     let file: String
     let bytes: Int64
     let template: Template
+    /// للعرض في صفحة النماذج
+    var ramGB: Double = 0
+    var speed: String = ""
+    var arabic: String = ""
+    var tag: String? = nil
 
-    static let gemma = GGUFSpec(name: "Gemma 4 E2B", repo: "unsloth/gemma-4-E2B-it-GGUF", file: "gemma-4-E2B-it-Q4_K_M.gguf",
-                                bytes: 3_106_738_272, template: .gemma)
+    static let gemma = GGUFSpec(id: "gemma", name: "Gemma 4 E2B", repo: "unsloth/gemma-4-E2B-it-GGUF", file: "gemma-4-E2B-it-Q4_K_M.gguf",
+                                bytes: 3_106_738_272, template: .gemma,
+                                ramGB: 3.4, speed: "سريع", arabic: "عربي جيد", tag: "الافتراضي")
     /// Qwen3.5-4B (هجين Gated DeltaNet) — مدعوم في llama.cpp b12387
-    static let qwen = GGUFSpec(name: "Qwen3.5-4B", repo: "unsloth/Qwen3.5-4B-GGUF", file: "Qwen3.5-4B-Q4_K_M.gguf",
-                               bytes: 2_740_937_888, template: .chatml)
+    static let qwen = GGUFSpec(id: "qwen", name: "Qwen3.5-4B", repo: "unsloth/Qwen3.5-4B-GGUF", file: "Qwen3.5-4B-Q4_K_M.gguf",
+                               bytes: 2_740_937_888, template: .chatml,
+                               ramGB: 3.3, speed: "أبطأ", arabic: "عربي ممتاز", tag: "الأذكى")
+    static let qwen2b = GGUFSpec(id: "qwen2b", name: "Qwen3.5-2B", repo: "unsloth/Qwen3.5-2B-GGUF", file: "Qwen3.5-2B-Q4_K_M.gguf",
+                                 bytes: 1_280_835_840, template: .chatml,
+                                 ramGB: 1.8, speed: "سريع جدًا", arabic: "عربي جيد", tag: "الأخف")
+    static let all: [GGUFSpec] = [.gemma, .qwen, .qwen2b]
+
+    static func == (a: GGUFSpec, b: GGUFSpec) -> Bool { a.id == b.id }
+    func hash(into h: inout Hasher) { h.combine(id) }
+
+    /// نموذج المعالج المختار (للدردشة والمكالمة والوكيل على المعالج)
+    static var active: GGUFSpec {
+        let d = UserDefaults.standard
+        if let id = d.string(forKey: "cpuModel"), let s = all.first(where: { $0.id == id }) { return s }
+        // ترحيل: أول مرة — اللي منزّل (Gemma قبل)، أو Qwen لو كان مختار للوكيل
+        let pick: GGUFSpec = gemma.isDownloaded ? gemma
+            : (qwen.isDownloaded ? qwen : gemma)
+        d.set(pick.id, forKey: "cpuModel")
+        d.removeObject(forKey: "agentModel")
+        return pick
+    }
+    /// يغيّر نموذج المعالج ويفضّي الباقي من الذاكرة
+    static func setActive(_ s: GGUFSpec) {
+        UserDefaults.standard.set(s.id, forKey: "cpuModel")
+        slog("llama: active cpu model → \(s.id)")
+        for o in all where o.id != s.id { Task { await LlamaEngine.of(o).unload() } }
+    }
 
     var url: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -35,7 +68,7 @@ struct GGUFSpec: Sendable {
 }
 
 enum LlamaModelFile {
-    static let spec = GGUFSpec.gemma
+    static var spec: GGUFSpec { .active }
     static var url: URL { spec.url }
     static var remote: URL { spec.remote }
     static var isDownloaded: Bool { spec.isDownloaded }
@@ -50,8 +83,14 @@ enum LlamaModelFile {
 /// تنزيل ملف النموذج مع التقدم
 @MainActor
 final class LlamaDownloader: NSObject, ObservableObject, URLSessionDownloadDelegate {
-    static let shared = LlamaDownloader(spec: .gemma)
+    static let gemma = LlamaDownloader(spec: .gemma)
     static let qwen = LlamaDownloader(spec: .qwen)
+    static let qwen2b = LlamaDownloader(spec: .qwen2b)
+    static func of(_ s: GGUFSpec) -> LlamaDownloader { s.id == "qwen" ? qwen : (s.id == "qwen2b" ? qwen2b : gemma) }
+    /// تنزيل النموذج المختار
+    static var shared: LlamaDownloader { of(.active) }
+    /// يصير المختار لما يخلص تنزيله («تنزيل وتشغيل»)
+    var activateWhenDone = false
     let spec: GGUFSpec
     init(spec: GGUFSpec) { self.spec = spec; super.init(); downloaded = spec.isDownloaded }
     @Published var progress: Double = 0
@@ -80,7 +119,7 @@ final class LlamaDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
 
     func delete() {
         try? FileManager.default.removeItem(at: spec.url)
-        let eng = spec.template == .chatml ? LlamaEngine.qwen : LlamaEngine.shared
+        let eng = LlamaEngine.of(spec)
         Task { await eng.unload() }
         downloaded = false; message = "انحذف"
     }
@@ -103,6 +142,8 @@ final class LlamaDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
         MainActor.assumeIsolated {
             self.running = false
             self.downloaded = self.spec.isDownloaded
+            if self.downloaded, self.activateWhenDone { GGUFSpec.setActive(self.spec) }
+            self.activateWhenDone = false
             self.message = err.map { "فشل الحفظ: \($0)" } ?? (self.downloaded ? "جاهز ✅" : "الملف ناقص، نزّله مرة ثانية")
             slog("llama: download finished ok=\(self.downloaded) \(err ?? "")")
         }
@@ -120,9 +161,12 @@ final class LlamaDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
 
 /// llama.cpp على المعالج. نخلي السياق محمّل ونعيد استخدام بداية المحادثة (prompt cache).
 actor LlamaEngine {
-    static let shared = LlamaEngine(spec: .gemma)
-    /// نموذج الوكيل الثاني (يتحمّل عند الطلب)
+    static let gemma = LlamaEngine(spec: .gemma)
     static let qwen = LlamaEngine(spec: .qwen)
+    static let qwen2b = LlamaEngine(spec: .qwen2b)
+    static func of(_ s: GGUFSpec) -> LlamaEngine { s.id == "qwen" ? qwen : (s.id == "qwen2b" ? qwen2b : gemma) }
+    /// محرك نموذج المعالج المختار — الدردشة والمكالمة والوكيل كلهم يستخدمونه
+    static var shared: LlamaEngine { of(.active) }
     let spec: GGUFSpec
     init(spec: GGUFSpec) { self.spec = spec }
 
