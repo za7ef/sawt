@@ -21,6 +21,7 @@ final class PhoneAgent: ObservableObject {
 
     private var task: Task<Void, Never>?
     private var lastFront = ""
+    private var confirmToken: UUID?
     private var firstRead = true
     private var isSelf: Bool { lastFront == Bundle.main.bundleIdentifier || lastFront.hasPrefix("com.za7ef.sawt") }
     private var activity: Activity<AgentActivityAttributes>?
@@ -77,18 +78,29 @@ final class PhoneAgent: ObservableObject {
     }
 
     // ───── التشغيل والإيقاف ─────
-    func start(_ goal: String) {
+    /// يرجع سبب الرفض لو ما بدأ (nil = بدأ)
+    @discardableResult
+    func start(_ goal: String) -> String? {
         let g = goal.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !g.isEmpty, !running else { return }
-        guard PhoneControl.available, PhoneControl.hasPairing else {
-            lastResult = "التحكم بالجوال مو جاهز (اقتران/الأداة)"
-            if let t = chatTarget { ChatStore.shared.updateText(t.msg, in: t.conv, "🤖 " + lastResult, save: true); chatTarget = nil }
-            return
+        var why: String?
+        if g.isEmpty { why = "الهدف فاضي" }
+        else if running { why = "الوكيل شغّال على مهمة ثانية — قل «وقف» أول" }
+        else if !(PhoneControl.available && PhoneControl.hasPairing) { why = "التحكم بالجوال مو جاهز (اقتران/الأداة)" }
+        if let why {
+            slog("agent: start refused: \(why)")
+            if let t = chatTarget { ChatStore.shared.updateText(t.msg, in: t.conv, "🤖 ما بديت: " + why, save: true); chatTarget = nil }
+            return why
         }
         self.goal = g; log = []; lastResult = ""; running = true; stepNo = 0; firstRead = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        // يبقى صاحي لما نطلع لتطبيقات ثانية (هنا مو داخل الحلقة عشان ما يسبق finish)
+        HostPairing.shared.keepAlive(true)
         say("الهدف: \(g)")
         surface("يبدأ…")
-        task = Task { await self.loop() }
+        // ننتظر المهمة القديمة تخلص تنظيفها (الجلسة) قبل نبدأ
+        let old = task
+        task = Task { await old?.value; await self.loop() }
+        return nil
     }
 
     func stop() {
@@ -120,18 +132,16 @@ final class PhoneAgent: ObservableObject {
 
     // ───── الحلقة ─────
     private func loop() async {
-        // يبقى صاحي لما نطلع لتطبيقات ثانية
-        HostPairing.shared.keepAlive(true)
         if Self.see == .share { ScreenShare.shared.start() }
-        let bg = UIApplication.shared.beginBackgroundTask(withName: "agent") { }
-        defer { if bg != .invalid { UIApplication.shared.endBackgroundTask(bg) } }
+        let bg = BGTask("agent")
+        defer { bg.end() }
         let tl = Date()
         // الجلسة الدائمة معطّلة افتراضيًا: قراءة الشاشة كانت تفشل معها؛ نرجع لاتصال لكل أمر مثل ١٤٣
         let liveOn = UserDefaults.standard.bool(forKey: "agentLive")
         let lo = liveOn ? await Self.exec(.liveOpen) : "{\"ok\":false,\"error\":\"disabled\"}"
         Self.useLive = lo.contains("\"ok\":true")
         slog("agent: live session \(Self.useLive ? "open" : "failed") \(Int(Date().timeIntervalSince(tl) * 1000))ms \(Self.useLive ? "" : String(lo.prefix(160)))")
-        defer { Self.useLive = false; Task { _ = await Self.exec(.liveClose) } }
+        defer { if Self.useLive { Self.useLive = false; Task { _ = await Self.exec(.liveClose) } } }
         // كل الخطوات يقررها النموذج (ما فيه اختصارات)؛ بس لو صوت قدّام نطلع للرئيسية عشان ما يلمس واجهته
         if UIApplication.shared.applicationState == .active {
             _ = await Self.exec(.keys("home"))
@@ -142,14 +152,18 @@ final class PhoneAgent: ObservableObject {
         var fails = 0
         var lastFailed = false
         var verifying = false
-        for n in 1...maxSteps {
+        var n = 0
+        while n < maxSteps {
             if Task.isCancelled { return }
             let tAX = Date()
+            // القراءة الفاشلة ما تحسب خطوة؛ والعدّاد يتصفّر بعد أي قراءة ناجحة
             guard let scr = await readScreen() else {
                 fails += 1
-                if fails >= 2 { finish("ما قدرت أقرأ الشاشة"); return }
+                if fails >= 3 { finish("ما قدرت أقرأ الشاشة"); return }
                 try? await Task.sleep(nanoseconds: 800_000_000); continue
             }
+            fails = 0
+            n += 1
             var (app, els) = scr
             if isSelf {
                 // ما نلمس واجهة صوت نفسها أبدًا: نطلع للرئيسية ونعيد القراءة
@@ -182,14 +196,18 @@ final class PhoneAgent: ObservableObject {
             let llmMs = Int(Date().timeIntervalSince(tLLM) * 1000)
             slog("agent: raw step=\(n) «\(raw.prefix(300))»")
             log.append(Step(text: "🤖 النموذج (\(llmMs)ms\(img == nil ? "" : "، مع صورة")): \(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))"))
-            guard let first = action, let kind0 = first["action"] as? String else {
+            guard action?["action"] is String else {
                 say("⚠️ رد غير مفهوم: \(raw.prefix(120))"); finish("النموذج ما رد بخطوة صالحة"); return
             }
-            _ = kind0
             let acts = Self.actions(raw)
             var actMs = 0
+            var screenChanged = false
             for action in acts {
                 guard let kind = action["action"] as? String else { continue }
+                // بعد لمس/فتح/رجوع الشاشة تغيّرت: أرقام العناصر قديمة، نوقف الدفعة ونقرأ من جديد
+                if screenChanged, kind == "tap" || kind == "done" {
+                    slog("agent: batch stopped (stale ids after screen change)"); break
+                }
                 if kind == "tap", !((action["id"] as? Int).map { els.indices.contains($0) } ?? false) {
                     say("⚠️ رقم عنصر غير موجود: \(action["id"] ?? "؟")")
                     history.append("رقم غلط \(action["id"] ?? "؟") — اختر رقم من القائمة"); lastFailed = true; break
@@ -220,8 +238,10 @@ final class PhoneAgent: ObservableObject {
                 lastFailed = !r.ok
                 if !r.ok { say("⚠️ \(r.info.prefix(160))"); break }
                 if Task.isCancelled { return }
-                // عناصر الشاشة تتغير بعد اللمس: ما نكمل بأرقام قديمة إلا للكتابة/الإدخال
-                if kind == "tap" || kind == "open" || kind == "back" || kind == "home" { if acts.count > 1 { try? await Task.sleep(nanoseconds: 400_000_000) } }
+                if ["tap", "open", "back", "home", "swipe", "url", "search"].contains(kind) {
+                    screenChanged = true
+                    if acts.count > 1 { try? await Task.sleep(nanoseconds: 400_000_000) }
+                }
             }
             slog("agent: timing step=\(n) ax=\(axMs)ms llm=\(llmMs)ms action=\(actMs)ms els=\(els.count) acts=\(acts.count)")
             try? await Task.sleep(nanoseconds: 300_000_000)
@@ -234,6 +254,13 @@ final class PhoneAgent: ObservableObject {
         confirm = q
         surface("ينتظر تأكيدك", waiting: true)
         AgentNotify.agentConfirm(q)
+        // بدون رد خلال دقيقتين = لا
+        let token = UUID(); confirmToken = token
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 120_000_000_000)
+            guard let self, self.confirmToken == token, self.confirmCont != nil else { return }
+            self.say("⏱️ ما جاء رد — اعتبرتها لا"); self.answer(false)
+        }
         return await withCheckedContinuation { c in confirmCont = c }
     }
 
@@ -260,7 +287,7 @@ final class PhoneAgent: ObservableObject {
     private func ask(_ user: String, image: URL? = nil) async -> String {
         var out = ""
         do {
-            let st = try await LLMService.shared.stream(system: Self.system, history: [], user: user, maxTokens: 60,
+            let st = try await LLMService.shared.stream(system: Self.system, history: [], user: user, maxTokens: 160,
                                                         images: image.map { [$0] } ?? [])
             for try await c in st {
                 out += c
@@ -391,7 +418,10 @@ final class PhoneAgent: ObservableObject {
             slog("agent: ax failed \(r.prefix(300)) — ocr fallback")
             // بديل: نص من صورة الشاشة (Apple Vision) مع إطاراته
             let o = await ocrElements(existing: [])
-            if o.count >= 2 { lastFront = ""; say("قراءة بالصورة (\(o.count) نص)"); return ("؟", Array(o.prefix(45))) }
+            if o.count >= 2 {
+                // ما نعرف التطبيق اللي قدّام: لو صوت نفسه قدّام نعتبره صوت (عشان ما نلمس واجهته)
+                lastFront = UIApplication.shared.applicationState == .active ? (Bundle.main.bundleIdentifier ?? "com.za7ef.sawt") : "?"
+                say("قراءة بالصورة (\(o.count) نص)"); return ("؟", Array(o.prefix(45))) }
             say("⚠️ قراءة الشاشة: \(r.prefix(160))"); return nil
         }
         if d["partial"] as? Bool == true { slog("agent: ax partial tree") }
@@ -454,11 +484,24 @@ final class PhoneAgent: ObservableObject {
                              "دفع", "buy", "شراء", "اشتر", "purchase", "subscribe", "اشترك", "transfer", "تحويل", "حوّل",
                              "call", "اتصال", "اتصل", "post", "نشر", "انشر", "confirm", "تأكيد"]
 
+    /// تطابق كلمات كاملة (مو جزء من كلمة: Display ما فيها pay، Recall ما فيها call)، مع سوابق عربية (و/ف/ب/ال)
+    static func hasWord(_ text: String, _ words: [String]) -> Bool {
+        let toks = text.lowercased().components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }
+        let ws = Set(words.map { $0.lowercased() })
+        for t in toks {
+            var forms = [t]
+            for p in ["و", "ف", "ب", "ال", "وال", "بال"] where t.hasPrefix(p) && t.count > p.count + 1 { forms.append(String(t.dropFirst(p.count))) }
+            if forms.contains(where: { ws.contains($0) }) { return true }
+        }
+        // عبارات من كلمتين
+        return words.contains { $0.contains(" ") && text.lowercased().contains($0.lowercased()) }
+    }
+
     static func sensitive(_ a: [String: Any], _ els: [Element]) -> String? {
         let k = a["action"] as? String ?? ""
         if k == "tap", let i = a["id"] as? Int, els.indices.contains(i) {
             let l = els[i].label.lowercased()
-            if l.split(separator: " ").count <= 4, riskyWords.contains(where: { l.contains($0) }) { return "خطوة حساسة (إرسال/حذف/دفع)." }
+            if l.split(separator: " ").count <= 4, Self.hasWord(l, riskyWords) { return "خطوة حساسة (إرسال/حذف/دفع)." }
         }
         if k == "type", els.contains(where: { $0.secure }) { return "فيه خانة كلمة سر على الشاشة." }
         if k == "enter" { return "زر الإدخال ممكن يرسل." }
@@ -488,9 +531,16 @@ final class PhoneAgent: ObservableObject {
         case "home":
             return ok(await Self.exec(.keys("home")))
         case "back":
-            // سحب من الحافة اليسار
-            let (x1, y) = Self.norm(CGPoint(x: 2, y: UIScreen.main.bounds.midY))
-            let (x2, _) = Self.norm(CGPoint(x: UIScreen.main.bounds.width * 0.75, y: 0))
+            // أول: زر رجوع ظاهر في أعلى الشاشة
+            let b = UIScreen.main.bounds
+            if let e = els.first(where: { ["back", "رجوع", "السابق", "عودة"].contains($0.label.lowercased().trimmingCharacters(in: .whitespaces)) && $0.frame.minY < b.height * 0.2 }) {
+                let (x, y) = Self.norm(CGPoint(x: e.frame.midX, y: e.frame.midY))
+                return ok(await Self.exec(.tap(x, y)))
+            }
+            // وإلا سحب من الحافة: اليمين لو اللغة عربية (RTL)، واليسار لو إنجليزي
+            let rtl = UIApplication.shared.userInterfaceLayoutDirection == .rightToLeft
+            let (x1, y) = Self.norm(CGPoint(x: rtl ? b.width - 2 : 2, y: b.midY))
+            let (x2, _) = Self.norm(CGPoint(x: rtl ? b.width * 0.25 : b.width * 0.75, y: 0))
             return ok(await Self.exec(.drag(x1, y, x2, y)))
         case "swipe":
             let b = UIScreen.main.bounds
@@ -571,7 +621,8 @@ final class PhoneAgent: ObservableObject {
         if let d = ScreenShare.shared.latest, let i = UIImage(data: d) { return (i, "broadcast") }
         let raw = FileManager.default.temporaryDirectory.appendingPathComponent("agent-shot.png")
         let r = await Self.exec(.shot(raw.path))
-        if r.contains("\"ok\":true"), let i = UIImage(contentsOfFile: raw.path) { return (i, "screenshot") }
+        defer { try? FileManager.default.removeItem(at: raw) }
+        if r.contains("\"ok\":true"), let d = try? Data(contentsOf: raw), let i = UIImage(data: d) { return (i, "screenshot") }
         slog("agent: shot failed \(r.prefix(200))")
         return nil
     }
@@ -615,8 +666,8 @@ final class PhoneAgent: ObservableObject {
     /// كل الكتابة عن طريق الحافظة + Cmd+V (مستقلة عن لغة الكيبورد)
     static func typeText(_ t: String) async -> String {
         // دايمًا عن طريق الحافظة: أكواد HID تعتمد على لغة الكيبورد (العربي يقلب hello لحروف عربية)
-        let hex = t.unicodeScalars.prefix(24).map { String(format: "%04X", $0.value) }.joined(separator: " ")
-        slog("agent: type via=paste text=«\(t)» u=[\(hex)]")
+        // ما نسجّل النص نفسه (ممكن كلمة سر) — بس الطول؛ والحافظة تتفضّى بعد اللصق
+        slog("agent: type via=paste chars=\(t.count)")
         return await exec(.keys("paste:" + t))
     }
 
@@ -720,7 +771,7 @@ final class PhoneAgent: ObservableObject {
             }
         }
         // ما لقينا أو رفض: بحث سبوتلايت باسم التطبيق (لصق، يشتغل على أي لغة كيبورد)
-        say("ما تأكدت من «\(name)» — أبحث عنه")
+        slog("agent: open via spotlight «\(name)»")
         _ = await Self.exec(.keys("home"))
         try? await Task.sleep(nanoseconds: 600_000_000)
         let b = UIScreen.main.bounds
@@ -1003,8 +1054,12 @@ struct PhoneAgentView: View {
 enum PhoneAgentTrigger {
     static func isStop(_ t: String) -> Bool {
         let s = t.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard s.split(separator: " ").count <= 4 else { return false }
-        return ["وقف", "وقّف", "اوقف", "أوقف", "توقف", "بس خلاص", "stop"].contains { s.contains($0) }
+        let toks = s.components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }
+        guard !toks.isEmpty, toks.count <= 3 else { return false }
+        // كلمة كاملة بس (مو «موقف» ولا «stopwatch»)
+        let stops: Set<String> = ["وقف", "وقّف", "اوقف", "أوقف", "توقف", "وقفه", "وقفها", "stop", "خلاص"]
+        if s == "بس خلاص" || s == "stop it" { return true }
+        return toks.contains { stops.contains($0) } && !(toks.count == 1 && toks[0] == "خلاص")
     }
     static let chatPrefixes = ["/جوال", "/agent", "جوال:", "نفذ على الجوال", "نفّذ على الجوال"]
     static let voicePrefixes = ["على الجوال", "نفذ على الجوال", "نفّذ على الجوال", "يا صوت نفذ", "يا صوت نفّذ", "on the phone"]
@@ -1015,5 +1070,22 @@ enum PhoneAgentTrigger {
             return g.isEmpty ? nil : g
         }
         return nil
+    }
+}
+
+
+/// وقت خلفية مع معالج انتهاء ينهيه فعلاً (بدل معالج فاضي يخلي النظام يقتل التطبيق)
+@MainActor
+final class BGTask {
+    private var id: UIBackgroundTaskIdentifier = .invalid
+    init(_ name: String) {
+        id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+            slog("bg: \(name) expired")
+            Task { @MainActor in self?.end() }
+        }
+    }
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id); id = .invalid
     }
 }

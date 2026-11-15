@@ -28,7 +28,14 @@ final class ScreenShare: @unchecked Sendable {
             p.allowLocalEndpointReuse = true
             let l = try NWListener(using: p)
             l.newConnectionHandler = { [weak self] c in self?.accept(c) }
-            l.stateUpdateHandler = { st in slog("share: listener \(st)") }
+            l.stateUpdateHandler = { [weak self] st in
+                slog("share: listener \(st)")
+                if case .failed = st {
+                    // نعيد تشغيل المستمع بعد ثانية
+                    l.cancel()
+                    self?.q.asyncAfter(deadline: .now() + 1) { self?.listener = nil; self?.start() }
+                }
+            }
             l.start(queue: q)
             listener = l
         } catch { slog("share: listen failed \(error)") }
