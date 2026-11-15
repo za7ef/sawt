@@ -18,6 +18,8 @@ final class PhoneAgent: ObservableObject {
     @Published var log: [Step] = []
     @Published var confirm: String?          // نص السؤال لما ننتظر تأكيد
     @Published var lastResult = ""
+    /// سبب آخر فشل قراءة بالطريقة المختارة (يطلع للمستخدم بدل الرجوع لطريقة ثانية)
+    private var lastReadError = ""
 
     private var task: Task<Void, Never>?
     private var lastFront = ""
@@ -153,15 +155,17 @@ final class PhoneAgent: ObservableObject {
         if Self.see == .share { ScreenShare.shared.start() }
         let bg = BGTask("agent")
         defer { bg.end() }
-        // XCTest: نجهّز الجلسة مرة وحدة (ممكن iOS يطلب رمز الجوال)؛ لو فشل نكمل بالطريقة العادية
-        if Self.see == .xct, !XCTBackend.isReady {
-            say("تجهيز XCTest… (دخّل رمز الجوال لو طلبه)")
-            let cfg = await XCTestProbe.connectionConfig()
-            var prepErr: String?
-            if XCTBackend.automationOn { prepErr = await XCTBackend.startAutomation() } else { prepErr = await XCTBackend.prepare(cfg: cfg) }
-            if let e = prepErr {
-                say("⚠️ XCTest ما جهز: \(e.prefix(140)) — أكمل بالطريقة العادية")
+        // الطريقة المختارة بس، بدون رجوع لطريقة ثانية. XCTest: نشغّل وضع الأتمتة تلقائيًا وننتظره
+        if Self.see == .xct {
+            UserDefaults.standard.set(true, forKey: "xctAutomation")
+            if !XCTBackend.isReady { say("الطريقة: XCTest — أشغّل وضع الأتمتة… (دخّل رمز الجوال لو طلبه)") }
+            if let e = await XCTBackend.startAutomation() {
+                say("✗ XCTest ما اشتغل: \(e.prefix(200))")
+                finish("وقفت: وضع الأتمتة ما اشتغل — \(e.prefix(160))"); return
             }
+            say("✓ الطريقة: XCTest — \(XCTBackend.sessionState)")
+        } else {
+            say("الطريقة: \(Self.see.title)")
         }
         if Task.isCancelled { return }
         let tl = Date()
@@ -188,6 +192,10 @@ final class PhoneAgent: ObservableObject {
             // القراءة الفاشلة ما تحسب خطوة؛ والعدّاد يتصفّر بعد أي قراءة ناجحة
             guard let scr = await readScreen() else {
                 fails += 1
+                if Self.see == .xct && fails >= 2 {
+                    say("✗ \(lastReadError)")
+                    finish("وقفت: \(lastReadError)"); return
+                }
                 if fails >= 3 { finish("ما قدرت أقرأ الشاشة"); return }
                 try? await Task.sleep(nanoseconds: 800_000_000); continue
             }
@@ -527,7 +535,7 @@ final class PhoneAgent: ObservableObject {
 
     // ───── الشاشة ─────
     private func readScreen() async -> (String, [Element])? {
-        if Self.see == .xct, XCTBackend.isReady {
+        if Self.see == .xct {
             let b = UIScreen.main.bounds
             if let s = await XCTBackend.readFront(screen: b.size) {
                 Self.searchKey = false; Self.hiddenRows = 0
@@ -540,7 +548,9 @@ final class PhoneAgent: ObservableObject {
                 els = Self.rank(els, screen: b)
                 return (s.name, els)
             }
-            slog("agent: xct read failed — fallback to sawtctl")
+            slog("agent: xct read failed: \(XCTBackend.lastAXError)")
+            lastReadError = "قراءة XCTest فشلت: " + String(XCTBackend.lastAXError.prefix(160))
+            return nil
         }
         let r = await Self.exec(.screen(firstRead ? 8000 : 5000))
         firstRead = false
@@ -953,7 +963,7 @@ final class PhoneAgent: ObservableObject {
     func openApp(_ name: String) async -> (ok: Bool, info: String) {
         let hit = Self.lookup(name)
         slog("agent: open requested=«\(name)» table=\(hit?.bundle ?? "none")")
-        if let hit, !hit.bundle.isEmpty, UserDefaults.standard.bool(forKey: "agentBundleLaunch") || XCTBackend.active {
+        if let hit, !hit.bundle.isEmpty, UserDefaults.standard.bool(forKey: "agentBundleLaunch") || PhoneAgent.see == .xct {
             let r = await Self.exec(.launch(hit.bundle))
             slog("agent: open chosen=\(hit.bundle) via=table ok=\(r.contains("\"ok\":true"))")
             if r.contains("\"ok\":true") { try? await Task.sleep(nanoseconds: 700_000_000); return (true, r) }
@@ -1018,8 +1028,9 @@ final class PhoneAgent: ObservableObject {
 
     /// ينفذ أمر sawtctl بنفس إعداد الاتصال حق شاشة الاختبار
     static func exec(_ op: PhoneControl.Op) async -> String {
-        // XCTest مختار وجاهز: اللمس والسحب والهوم وفتح التطبيق بالمعرّف عن طريقه؛ لو فشل نكمل بالعادي
-        if XCTBackend.active, let r = await XCTBackend.handle(op, screen: UIScreen.main.bounds.size) { return r }
+        // XCTest مختار: اللمس والسحب والهوم وفتح التطبيق بالمعرّف عن طريقه فقط، ونتيجته ترجع كما هي (بدون رجوع لـsawtctl).
+        // الكتابة والإدخال ما لها طريقة في XCTest، فتمشي عن طريق sawtctl مثل قبل.
+        if see == .xct, let r = await XCTBackend.handle(op, screen: UIScreen.main.bounds.size) { return r }
         let info = PhoneControl.storedInfo()
         var port: UInt16 = 0
         if info.contains("kind=RemotePairing") {

@@ -77,11 +77,62 @@ enum XCTBackend {
     /// مفتاح «وضع الأتمتة» في صفحة الوكيل
     static var automationOn: Bool { UserDefaults.standard.bool(forKey: "xctAutomation") }
 
+    // MARK: - انتهاء التفويض (خطأ 41)
+
+    /// خطأ 41 = iOS سحب تفويض اختبار الواجهة (معالج الانقطاع ما ينادى في هالحالة)
+    static func isAuthLost(_ s: String?) -> Bool {
+        guard let s else { return false }
+        return s.contains("Not authorized for performing UI testing") || (s.contains("XCTDaemonErrorDomain") && s.contains(" 41 "))
+    }
+
+    /// آخر أحداث حالة التطبيق (خلفية/قفل/رجوع) عشان نعرف ليش انتهى التفويض
+    nonisolated(unsafe) private static var lifeEvents: [String] = []
+    nonisolated(unsafe) private static var lifeObservers = false
+    private static func noteLife(_ e: String) {
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
+        lifeEvents.append("\(e) \(f.string(from: Date()))")
+        if lifeEvents.count > 6 { lifeEvents.removeFirst(lifeEvents.count - 6) }
+        slog("xct: life \(e)")
+    }
+    static func startLifecycleLog() {
+        if lifeObservers { return }
+        lifeObservers = true
+        let nc = NotificationCenter.default
+        let pairs: [(Notification.Name, String)] = [
+            (UIApplication.didEnterBackgroundNotification, "خلفية"),
+            (UIApplication.willEnterForegroundNotification, "رجع"),
+            (UIApplication.willResignActiveNotification, "فقد التركيز"),
+            (UIApplication.protectedDataWillBecomeUnavailableNotification, "قفل الشاشة"),
+            (UIApplication.protectedDataDidBecomeAvailableNotification, "فتح القفل"),
+        ]
+        for (n, label) in pairs { nc.addObserver(forName: n, object: nil, queue: nil) { _ in noteLife(label) } }
+    }
+
+    /// يعلّم الجلسة منتهية (مرة وحدة لكل جيل) ويسجّل السبب المحتمل
+    static func markAuthLost(_ where_: String) {
+        guard prepared else { return }
+        prepared = false
+        generation += 1
+        let recent = lifeEvents.isEmpty ? "ما فيه أحداث خلفية/قفل مسجّلة" : lifeEvents.joined(separator: "، ")
+        sessionState = "انتهى التفويض (\(where_)) — آخر الأحداث: \(recent)"
+        slog("xct: auth lost at \(where_); recent: \(recent)")
+    }
+
+    /// يعيد التفويض ووضع الأتمتة (ممكن يطلب الرمز). true لو رجعت الجلسة
+    static func reauthorize() async -> Bool {
+        let cfg = await XCTestProbe.connectionConfig()
+        let e = await prepare(cfg: cfg, force: true)
+        if let e { slog("xct: reauth failed: \(e)") }
+        return e == nil
+    }
+
     // MARK: - وضع الأتمتة (جلسة دائمة)
 
     /// يشغّل الجلسة ويبدأ مراقب يعيد بناءها لو انقطعت (كل ١٥ ثانية). يرجع سبب الفشل أو nil
     static func startAutomation() async -> String? {
         keeper?.cancel()
+        startLifecycleLog()
+        checkHealth()
         let cfg = await XCTestProbe.connectionConfig()
         var e: String? = nil
         if !prepared { e = await prepare(cfg: cfg, force: true) }
@@ -89,6 +140,8 @@ enum XCTBackend {
             while !Task.isCancelled && automationOn {
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
                 if Task.isCancelled || !automationOn { break }
+                // فحص صحة فعلي: قراءة صغيرة جدًا (عمق ١). خطأ 41 = التفويض انتهى
+                checkHealth()
                 if !prepared && !preparing {
                     slog("xct: keeper rebuilding session")
                     sessionState = "تنبني من جديد…"
@@ -406,33 +459,27 @@ enum XCTBackend {
         return Screen(name: shown, bundle: bundle, isSelf: false, nodes: nodes, raw: raw, ms: ms)
     }
 
-    /// يقرأ التطبيق اللي قدّام: عميل الوصول أول (أسرع)، وإلا لقطة XCUIApplication القديمة بحد زمني
+    /// يقرأ التطبيق اللي قدّام عبر عميل الوصول فقط (بدون رجوع لطريقة ثانية). لو التفويض انتهى نعيده ونحاول مرة.
+    /// الفشل: nil والسبب في lastAXError
     static func readFront(screen: CGSize) async -> Screen? {
-        guard prepared else { return nil }
-        if let s = await readFrontAX(screen: screen) { return s }
-        slog("xct: ax read failed → old snapshot")
-        let me = Bundle.main.bundleIdentifier ?? "com.za7ef.sawt"
-        let myPid = getpid()
-        let r: Screen?? = await onMainTimed(10) { () -> Screen? in
-            let t = Date()
-            guard let f = frontApp() else { slog("xct: no front app"); return nil }
-            let (app, pid, bundle) = f
-            if pid == myPid || bundle == me {
-                return Screen(name: "صوت", bundle: me, isSelf: true, nodes: [], raw: 0, ms: Int(Date().timeIntervalSince(t) * 1000))
-            }
-            let (snap, err) = snapshot(app)
-            guard let snap else {
-                slog("xct: snapshot \(bundle) failed: \(err ?? "")")
-                pidApps[pid] = nil   // ممكن العملية تغيّرت
-                return nil
-            }
-            let (name, nodes, raw) = flatten(snap, screen: screen)
-            let ms = Int(Date().timeIntervalSince(t) * 1000)
-            let shown = bundle == "com.apple.springboard" ? "الشاشة الرئيسية" : (name.isEmpty ? bundle : name)
-            slog("xct: read \(bundle) raw=\(raw) els=\(nodes.count) \(ms)ms")
-            return Screen(name: shown, bundle: bundle, isSelf: false, nodes: nodes, raw: raw, ms: ms)
+        if !prepared && !preparing {
+            guard await reauthorize() else { lastAXError = "الجلسة مو جاهزة وفشلت إعادة التفويض"; return nil }
         }
-        return r ?? nil
+        guard prepared else { lastAXError = "الجلسة مو جاهزة"; return nil }
+        if let s = await readFrontAX(screen: screen) { return s }
+        if isAuthLost(lastAXError) {
+            markAuthLost("قراءة")
+            guard await reauthorize() else { lastAXError = "انتهى التفويض وفشلت إعادته"; return nil }
+            return await readFrontAX(screen: screen)
+        }
+        return nil
+    }
+
+    /// فحص صحة سريع للجلسة (قراءة بعمق ١). لو رجع 41 نعلّمها منتهية
+    static func checkHealth() {
+        guard prepared, !preparing, let pid = activePIDs().first else { return }
+        var why: NSString?
+        if SawtXCTAXRead(pid, 1, 1, 3, &why) == nil, isAuthLost(why as String?) { markAuthLost("فحص الصحة") }
     }
 
     // MARK: - الأفعال
@@ -476,38 +523,29 @@ enum XCTBackend {
         }
     }
 
-    /// لمسة على نقطة بالنقاط (إحداثيات الشاشة): الحدث المركّب أول، ولو ما انقبل نجرّب XCUICoordinate
+    /// لمسة على نقطة بالنقاط (إحداثيات الشاشة) بحدث مركّب. لو التفويض انتهى (41) نعيده ونحاول مرة وحدة.
+    /// ما فيه رجوع لأي طريقة ثانية: الفشل يرجع بسببه
     static func tap(_ p: CGPoint) async -> String {
         let t = Date()
-        guard let e = await synth([p], duration: 0.05, timeout: 5) else { return result(nil, "tap(synth) \(Int(p.x)),\(Int(p.y))", t) }
-        slog("xct: synth tap failed: \(e) → coordinate")
-        let r: String? = await onMainTimed(10) { () -> String in
-            var err: String?
-            if let exc = SawtTryCatch({
-                if let c = coordinate(p) { err = callVoid(c, "tap") } else { err = "ما قدر يسوي إحداثية" }
-            }) { err = exc }
-            return result(err.map { "synth: \(e)؛ coordinate: \($0)" }, "tap(coordinate) \(Int(p.x)),\(Int(p.y))", t)
+        var err = await synth([p], duration: 0.05, timeout: 5)
+        if isAuthLost(err) {
+            markAuthLost("لمس")
+            if await reauthorize() { err = await synth([p], duration: 0.05, timeout: 5) }
+            else { err = "انتهى التفويض وفشلت إعادته: \(err ?? "")" }
         }
-        return r ?? result("synth: \(e)؛ coordinate: انتهى الوقت", "tap", t)
+        return result(err.map { "اللمس المركّب فشل: \($0)" }, "tap \(Int(p.x)),\(Int(p.y))", t)
     }
 
-    /// سحب من نقطة لنقطة
+    /// سحب من نقطة لنقطة بحدث مركّب (نفس قواعد اللمس)
     static func drag(_ a: CGPoint, _ b: CGPoint) async -> String {
         let t = Date()
-        guard let e = await synth([a, b], duration: 0.3, timeout: 5) else { return result(nil, "drag(synth) \(Int(a.x)),\(Int(a.y))→\(Int(b.x)),\(Int(b.y))", t) }
-        slog("xct: synth drag failed: \(e) → coordinate")
-        let r: String? = await onMainTimed(10) { () -> String in
-            var err: String?
-            if let exc = SawtTryCatch({
-                guard let c1 = coordinate(a), let c2 = coordinate(b) else { err = "ما قدر يسوي إحداثية"; return }
-                let sel = NSSelectorFromString("pressForDuration:thenDragToCoordinate:")
-                guard c1.responds(to: sel), let imp = c1.method(for: sel) else { err = "السحب مو مدعوم"; return }
-                typealias DragFn = @convention(c) (AnyObject, Selector, Double, AnyObject) -> Void
-                unsafeBitCast(imp, to: DragFn.self)(c1, sel, 0.05, c2)
-            }) { err = exc }
-            return result(err.map { "synth: \(e)؛ coordinate: \($0)" }, "drag(coordinate)", t)
+        var err = await synth([a, b], duration: 0.3, timeout: 5)
+        if isAuthLost(err) {
+            markAuthLost("سحب")
+            if await reauthorize() { err = await synth([a, b], duration: 0.3, timeout: 5) }
+            else { err = "انتهى التفويض وفشلت إعادته: \(err ?? "")" }
         }
-        return r ?? result("synth: \(e)؛ coordinate: انتهى الوقت", "drag", t)
+        return result(err.map { "السحب المركّب فشل: \($0)" }, "drag \(Int(a.x)),\(Int(a.y))→\(Int(b.x)),\(Int(b.y))", t)
     }
 
     /// زر الهوم
@@ -543,21 +581,27 @@ enum XCTBackend {
         !s.contains(" ") && s.split(separator: ".").count >= 3 && s.allSatisfy { $0.isASCII }
     }
 
-    /// يحاول ينفذ أمر sawtctl بـXCTest. nil = ما يخصنا أو فشل (يرجع للطريقة العادية)
+    /// ينفّذ أوامر اللمس والسحب والهوم وفتح التطبيق بالمعرّف بـXCTest، ويرجع النتيجة نجحت أو فشلت (بدون رجوع لـsawtctl).
+    /// nil = نوع أمر ما تسويه XCTest (مثل الكتابة)
     static func handle(_ op: PhoneControl.Op, screen: CGSize) async -> String? {
-        guard active else { return nil }
         func den(_ x: UInt16, _ y: UInt16) -> CGPoint {
             CGPoint(x: Double(x) / 65535 * screen.width, y: Double(y) / 65535 * screen.height)
         }
-        let r: String
         switch op {
-        case .tap(let x, let y): r = await tap(den(x, y))
-        case .drag(let a, let b, let x, let y): r = await drag(den(a, b), den(x, y))
-        case .keys(let w) where w == "home": r = await home()
-        case .launch(let q) where looksLikeBundle(q): r = await open(bundle: q)
+        case .tap, .drag, .keys("home"): break
+        case .launch(let q) where looksLikeBundle(q): break
         default: return nil
         }
-        return r.contains("\"ok\":true") ? r : nil
+        if !prepared && !preparing {
+            let ok = await reauthorize()
+            if !ok { return result("جلسة XCTest مو جاهزة وفشلت إعادة التفويض", "op", Date()) }
+        }
+        switch op {
+        case .tap(let x, let y): return await tap(den(x, y))
+        case .drag(let a, let b, let x, let y): return await drag(den(a, b), den(x, y))
+        case .launch(let q): return await open(bundle: q)
+        default: return await home()
+        }
     }
 
     // MARK: - اختبار الضغط
@@ -574,6 +618,7 @@ enum XCTBackend {
         }
         func start(_ name: String) { slog("xct: tapTest start \(name)"); onLine("… \(name): بدأ") }
 
+        startLifecycleLog()
         // ١) التجهيز مع تفويض جديد (الجلسة القديمة ممكن تنرفض: XCTDaemonErrorDomain 41)
         var t = Date()
         start("prepare")
@@ -609,7 +654,23 @@ enum XCTBackend {
                 let sample = fl.nodes.prefix(6).map { "\($0.kind):\($0.label.prefix(20))" }.joined(separator: "، ")
                 return (true, "\(fl.raw) عقدة، \(fl.nodes.count) عنصر؛ \(sample)")
             }
-            guard let s else { add(false, "snapshot\(i)", t, "انتهى الوقت (٢٠ ثانية)"); return false }
+            guard var s else { add(false, "snapshot\(i)", t, "انتهى الوقت (٢٠ ثانية)"); return false }
+            if !s.0 && isAuthLost(s.1) {
+                add(false, "snapshot\(i)", t, s.1)
+                markAuthLost("اختبار")
+                onLine("… التفويض انتهى: \(sessionState)؛ نعيد التفويض")
+                t = Date()
+                guard await reauthorize() else { add(false, "reauth", t, "فشل إعادة التفويض"); return false }
+                add(true, "reauth", t, "\(sessionState)؛ وضع الأتمتة: \(automation)")
+                t = Date()
+                s = await onMainTimed(20) { () -> (Bool, String) in
+                    guard let sb = app(bundle: "com.apple.springboard") else { return (false, "XCUIApplication") }
+                    let (snap, err) = snapshot(sb)
+                    guard let snap else { return (false, err ?? "؟") }
+                    let fl = flatten(snap, screen: screen)
+                    return (true, "\(fl.raw) عقدة، \(fl.nodes.count) عنصر (بعد إعادة التفويض)")
+                } ?? (false, "انتهى الوقت")
+            }
             add(s.0, "snapshot\(i)", t, s.1)   // فشلها ما يوقف الاختبار (مقارنة بس)
         }
 
