@@ -77,7 +77,7 @@ actor LLMService {
 
     /// اختبار قصير للمعالج: يرجع nil إذا نجح، أو رسالة الخطأ
     func cpuSelfTest() async -> (ok: Bool, info: String) {
-        guard container != nil else { return (false, "النموذج مو محمّل") }
+        guard LlamaModelFile.isDownloaded else { return (false, "نموذج المعالج مو منزّل") }
         return await ComputeMode.$forced.withValue("cpu") {
             let t0 = Date()
             do {
@@ -135,6 +135,13 @@ actor LLMService {
     func stream(system: String, history: [Chat.Message], user: String, maxTokens: Int = 400, reuse: Bool = false,
                 images: [URL] = [], think: Bool = false,
                 onThink: (@Sendable (String) -> Void)? = nil) throws -> AsyncThrowingStream<String, Error> {
+        // المعالج = llama.cpp (MLX على المعالج ما يطلع شي في iOS)
+        if ComputeMode.device(for: ComputeMode.forced ?? ComputeMode.current) == "cpu" {
+            slog("llm: cpu → llama.cpp (mlx loaded=\(container != nil) avail=\(RAM.availableMB)MB)")
+            callSession = nil; callTurns = 0
+            return LlamaEngine.shared.stream(system: system, history: history, user: user,
+                                             maxTokens: ThermalWatch.isHot ? min(200, maxTokens) : maxTokens)
+        }
         guard let container else { throw SawtError.notReady("النموذج اللغوي") }
         var params = GenerateParameters()
         params.maxTokens = ThermalWatch.isHot ? min(200, maxTokens) : maxTokens
@@ -186,6 +193,7 @@ actor LLMService {
         // جلسة جديدة (أو انفقدت بعد خطأ/مقاطعة) = العداد يبدأ من الصفر
         if !reuse || !hadSession { callTurns = 0 }
 
+        let maxTok = params.maxTokens ?? 400
         return AsyncThrowingStream { cont in
             // أولوية userInitiated (مو background) عشان المعالج يشتغل بسرعة في الخلفية والمايك مفتوح
             let task = Task(priority: .userInitiated) {
@@ -286,9 +294,15 @@ actor LLMService {
                     if interrupted {
                         // تلقائي وما طلع شي: نعيد الدور على المعالج
                         if mode == "auto", !anyYielded, round == 1, !Task.isCancelled {
-                            slog("llm: background → retry on cpu")
-                            dev = "cpu"
-                            continue
+                            slog("llm: background → retry on cpu (llama.cpp)")
+                            do {
+                                for try await c in LlamaEngine.shared.stream(system: system, history: history, user: user,
+                                                                             maxTokens: maxTok) {
+                                    cont.yield(c)
+                                }
+                                cont.finish()
+                            } catch { cont.finish(throwing: error) }
+                            return
                         }
                         slog("llm: interrupted (background)")
                         cont.finish(throwing: BackgroundPause())
