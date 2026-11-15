@@ -24,9 +24,10 @@ final class HostPairing: NSObject, ObservableObject, NetServiceDelegate {
     private var service: NetService?
     private var engine: AVAudioEngine?
 
+    private var pairAlive = false
     func start() {
         guard !running else { return }
-        running = true; pin = ""; result = ""
+        running = true; pin = ""; result = ""; pairAlive = false
         status = "أجهّز…"
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         let cfg = PhoneControl.config(host: "10.7.0.1", rpPort: 0, rpHost: "")
@@ -43,7 +44,7 @@ final class HostPairing: NSObject, ObservableObject, NetServiceDelegate {
             s.delegate = self
             s.publish()
             service = s
-            keepAlive(true)
+            keepAlive(true); pairAlive = true
             status = "جاهز. روح للإعدادات واختر «Sawt» من الأجهزة القريبة للاقتران، وبيطلع لك رمز هنا وبإشعار."
             let res = await Task.detached { () -> String in
                 HostPairing.call { c_accept(cfg, 300) }
@@ -67,7 +68,8 @@ final class HostPairing: NSObject, ObservableObject, NetServiceDelegate {
 
     private func finish(_ msg: String) {
         service?.stop(); service = nil
-        keepAlive(false)
+        // بس لو شغّلناه (فشل التجهيز ما شغّله) — عشان العدّاد ما ينقص غلط
+        if pairAlive { keepAlive(false); pairAlive = false }
         result = msg; status = ""; running = false
     }
 
@@ -83,10 +85,32 @@ final class HostPairing: NSObject, ObservableObject, NetServiceDelegate {
     private var aliveCount = 0
     private var player: AVAudioPlayerNode?
     private var savedAudio: (AVAudioSession.Category, AVAudioSession.Mode, AVAudioSession.CategoryOptions)?
+    private var observers: [NSObjectProtocol] = []
+    /// بعد مقاطعة (اتصال/سيري) أو تغيير السماعة: نرجّع المحرك يشتغل
+    private func watchAudio() {
+        guard observers.isEmpty else { return }
+        let nc = NotificationCenter.default
+        for name in [AVAudioSession.interruptionNotification, AVAudioSession.routeChangeNotification, AVAudioSession.mediaServicesWereResetNotification] {
+            observers.append(nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] n in
+                MainActor.assumeIsolated {
+                    guard let self, self.aliveCount > 0, let e = self.engine, let p = self.player else { return }
+                    if n.name == AVAudioSession.interruptionNotification,
+                       (n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt) == AVAudioSession.InterruptionType.began.rawValue { return }
+                    if !e.isRunning {
+                        try? AVAudioSession.sharedInstance().setActive(true)
+                        do { try e.start(); p.play(); Log.shared("keepAlive: restarted after \(n.name.rawValue)") }
+                        catch { Log.shared("keepAlive: restart failed \(error)") }
+                    }
+                }
+            })
+        }
+    }
+
     func keepAlive(_ on: Bool) {
         if on {
             aliveCount += 1
             guard aliveCount == 1 else { return }
+            watchAudio()
             let s = AVAudioSession.sharedInstance()
             if s.category == .playAndRecord {
                 // المكالمة شغّالة: صوتها يكفي يخلي التطبيق صاحي — ما نلمس الجلسة
