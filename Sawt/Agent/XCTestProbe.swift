@@ -123,13 +123,15 @@ enum XCTestProbe {
             let (sess, e) = call(sessCls as AnyObject, "sharedSession")
             if let e { out.append(Step(name: "testmanagerd", ok: false, detail: "sharedSession: " + e)) }
             else if let sess = sess as? NSObject {
-                var info: [String] = []
-                for key in ["daemonProtocolVersion", "daemonCapabilities"] {
-                    var v: Any?
-                    let ex = SawtTryCatch { v = sess.value(forKey: key) }
-                    info.append(ex == nil ? "\(key)=\(v.map { "\($0)" } ?? "nil")" : "\(key) ✗ \(ex!)")
+                // أسماء الخصائص تختلف بين الإصدارات، فنقرأ القائمة الفعلية بدل KVC بأسماء ثابتة
+                var count: UInt32 = 0
+                var names: [String] = []
+                if let props = class_copyPropertyList(type(of: sess), &count) {
+                    for i in 0..<Int(count) { names.append(String(cString: property_getName(props[i]))) }
+                    free(props)
                 }
-                out.append(Step(name: "testmanagerd", ok: true, detail: info.joined(separator: "؛ ")))
+                let wanted = names.filter { $0.localizedCaseInsensitiveContains("version") || $0.localizedCaseInsensitiveContains("capabilit") }
+                out.append(Step(name: "testmanagerd", ok: true, detail: "الجلسة موجودة؛ \(names.count) خاصية" + (wanted.isEmpty ? "" : "؛ " + wanted.prefix(6).joined(separator: "، "))))
             } else {
                 out.append(Step(name: "testmanagerd", ok: false, detail: "sharedSession رجع فاضي (غالبًا ما فيه اتصال)"))
             }
@@ -293,12 +295,15 @@ enum XCTestProbe {
                 let auth = authorizeSelf(cfg: cfg, checks: &checks)
                 add(auth, Int(Date().timeIntervalSince(t) * 1000))
                 onChecks(checks)
-                sessionSteps().forEach { add($0, 0) }
+                // XCTest يسجّل test observers وقت الإعداد واللقطة، وهذا لازم على الخيط الرئيسي.
+                // احنا هنا على خيط خلفي، فـmain.sync آمن (ما فيه deadlock)، وXCTest يدوّر الـrunloop وهو ينتظر.
+                let session: [Step] = DispatchQueue.main.sync { sessionSteps() }
+                session.forEach { add($0, 0) }
                 // لو اللقطة طوّلت أكثر من ٥ ثواني غالبًا iOS يطلب الرمز
                 let waiting = DispatchWorkItem { slog("xct: snapshot slow → probably waiting for passcode"); onWaiting() }
                 DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: waiting)
                 t = Date()
-                let s = snapshotSpringboard()
+                let s: Step = DispatchQueue.main.sync { snapshotSpringboard() }
                 waiting.cancel()
                 add(s, Int(Date().timeIntervalSince(t) * 1000))
                 cont.resume(returning: lines)
