@@ -132,22 +132,10 @@ final class PhoneAgent: ObservableObject {
         Self.useLive = lo.contains("\"ok\":true")
         slog("agent: live session \(Self.useLive ? "open" : "failed") \(Int(Date().timeIntervalSince(tl) * 1000))ms \(Self.useLive ? "" : String(lo.prefix(160)))")
         defer { Self.useLive = false; Task { _ = await Self.exec(.liveClose) } }
-        let ready = UserDefaults.standard.bool(forKey: "agentShortcuts")
-        if ready, await webShortcut() { return }
-        if ready, await shortcut() { return }
-        let pre = Self.mentionedApp(goal)
-        if pre == nil, UIApplication.shared.applicationState == .active {
-            // صوت قدّام: نطلع للرئيسية قبل أول قراءة (ما نقرأ ولا نلمس واجهة صوت)
+        // كل الخطوات يقررها النموذج (ما فيه اختصارات)؛ بس لو صوت قدّام نطلع للرئيسية عشان ما يلمس واجهته
+        if UIApplication.shared.applicationState == .active {
             _ = await Self.exec(.keys("home"))
             try? await Task.sleep(nanoseconds: 600_000_000)
-        }
-        // اختصار: لو الهدف يذكر تطبيق معروف نفتحه مباشرة قبل النموذج
-        if let app = Self.mentionedApp(goal) {
-            let t = Date()
-            let o = await openApp(app)
-            say("1. ⚡ افتح \(app) (اختصار)" + (o.ok ? "" : " ⚠️"))
-            slog("agent: timing pre-open action=\(Int(Date().timeIntervalSince(t) * 1000))ms")
-            if o.ok, Self.isOnlyOpen(goal) { finish("✅ فتحت \(app)"); return }
         }
         if Task.isCancelled { return }
         var history: [String] = []
@@ -257,7 +245,9 @@ final class PhoneAgent: ObservableObject {
     {"action":"type","text":"النص"}   (يكتب في الخانة المفتوحة؛ اضغط على الخانة أول لو ما كانت مفتوحة)
     {"action":"enter"}               (زر الإدخال/إرسال في الكيبورد)
     {"action":"swipe","dir":"up"}     (up يمرر لتحت المحتوى، down لفوق، left، right)
-    {"action":"open","app":"WhatsApp"}
+    {"action":"open","app":"اسم التطبيق"}   (يروح للرئيسية ويبحث عن التطبيق ويفتحه)
+    {"action":"url","url":"https://..."}    (يفتح رابط في المتصفح)
+    {"action":"search","q":"نص البحث"}      (بحث قوقل في المتصفح — بس لو المطلوب بحث في الويب، مو داخل تطبيق)
     {"action":"back"}
     {"action":"home"}
     {"action":"done","summary":"وش سويت باختصار"}
@@ -291,7 +281,7 @@ final class PhoneAgent: ObservableObject {
     }
     static func valid(_ o: [String: Any]) -> Bool {
         guard let k = o["action"] as? String else { return false }
-        return ["tap", "type", "enter", "swipe", "open", "back", "home", "done"].contains(k)
+        return ["tap", "type", "enter", "swipe", "open", "url", "search", "back", "home", "done"].contains(k)
     }
 
     /// أي تطبيق من الجدول مذكور في الهدف (بعد فعل أو بأي مكان ككلمة/كلمتين)
@@ -388,7 +378,7 @@ final class PhoneAgent: ObservableObject {
         guard let o = try? JSONSerialization.jsonObject(with: Data(j.utf8)) as? [String: Any] else { return nil }
         if let arr = o["actions"] as? [[String: Any]], let f = arr.first(where: { valid($0) }) { return f }
         guard let k = o["action"] as? String,
-              ["tap", "type", "enter", "swipe", "open", "back", "home", "done"].contains(k) else { return nil }
+              ["tap", "type", "enter", "swipe", "open", "url", "search", "back", "home", "done"].contains(k) else { return nil }
         return o
     }
 
@@ -451,6 +441,8 @@ final class PhoneAgent: ObservableObject {
         case "enter": return "إدخال"
         case "swipe": return "سحب \(a["dir"] as? String ?? "")"
         case "open": return "افتح \(a["app"] as? String ?? "")"
+        case "url": return "افتح الرابط \(a["url"] as? String ?? "")"
+        case "search": return "ابحث في الويب «\(a["q"] as? String ?? "")»"
         case "back": return "رجوع"
         case "home": return "الشاشة الرئيسية"
         case "done": return "خلصت"
@@ -517,6 +509,15 @@ final class PhoneAgent: ObservableObject {
             let app = (a["app"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !app.isEmpty else { return (false, "اسم التطبيق فاضي") }
             return await openApp(app)
+        case "url", "search":
+            var u: URL?
+            if kind == "search", let q = (a["q"] as? String)?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed), !q.isEmpty {
+                u = URL(string: "https://www.google.com/search?q=\(q)")
+            } else if let t = a["url"] as? String {
+                u = URL(string: t.lowercased().hasPrefix("http") ? t : "https://\(t)")
+            }
+            guard let u else { return (false, "رابط غير صالح") }
+            return await openURL(u)
         default:
             return (false, "خطوة غير معروفة")
         }
@@ -692,7 +693,7 @@ final class PhoneAgent: ObservableObject {
     func openApp(_ name: String) async -> (ok: Bool, info: String) {
         let hit = Self.lookup(name)
         slog("agent: open requested=«\(name)» table=\(hit?.bundle ?? "none")")
-        if let hit, !hit.bundle.isEmpty {
+        if let hit, !hit.bundle.isEmpty, UserDefaults.standard.bool(forKey: "agentBundleLaunch") {
             let r = await Self.exec(.launch(hit.bundle))
             slog("agent: open chosen=\(hit.bundle) via=table ok=\(r.contains("\"ok\":true"))")
             if r.contains("\"ok\":true") { try? await Task.sleep(nanoseconds: 700_000_000); return (true, r) }
@@ -732,6 +733,25 @@ final class PhoneAgent: ObservableObject {
         slog("agent: open chosen=spotlight «\(q)»")
         try? await Task.sleep(nanoseconds: 1_000_000_000)
         return (r2.contains("\"ok\":true"), r2)
+    }
+
+    /// يفتح رابط: لو صوت قدّام نفتحه مباشرة، وإلا من سبوتلايت (لصق الرابط + إدخال)
+    func openURL(_ u: URL) async -> (ok: Bool, info: String) {
+        slog("agent: open url \(u.absoluteString)")
+        if UIApplication.shared.applicationState == .active, await UIApplication.shared.open(u) {
+            try? await Task.sleep(nanoseconds: 1_000_000_000); return (true, "opened")
+        }
+        _ = await Self.exec(.keys("home"))
+        try? await Task.sleep(nanoseconds: 600_000_000)
+        let b = UIScreen.main.bounds
+        let (x, y1) = Self.norm(CGPoint(x: b.midX, y: b.height * 0.4)), (_, y2) = Self.norm(CGPoint(x: 0, y: b.height * 0.65))
+        _ = await Self.exec(.drag(x, y1, x, y2))
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        _ = await Self.typeText(u.absoluteString.removingPercentEncoding ?? u.absoluteString)
+        try? await Task.sleep(nanoseconds: 700_000_000)
+        let r = await Self.exec(.keys("return"))
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        return (r.contains("\"ok\":true"), r)
     }
 
     /// اختصار الويب: «ابحث عن …» أو «ادخل موقع x.com» → نفتح الرابط مباشرة في سفاري (صوت لازم يكون قدّام)
@@ -913,7 +933,6 @@ struct PhoneAgentView: View {
     @State private var see = PhoneAgent.see
     @AppStorage("agentMaxSteps") private var maxSteps = 10
     @State private var testOut = ""
-    @AppStorage("agentShortcuts") private var shortcuts = false
     @State private var shareLive = false
 
     var body: some View {
@@ -927,7 +946,6 @@ struct PhoneAgentView: View {
                 } else {
                     Button("ابدأ") { agent.start(goal) }.disabled(goal.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                Toggle("الخطوات الجاهزة (اختصارات بدون النموذج)", isOn: $shortcuts)
                 Picker("أقصى عدد خطوات", selection: $maxSteps) {
                     ForEach([10, 20, 30], id: \.self) { Text("\($0)").tag($0) }
                 }
