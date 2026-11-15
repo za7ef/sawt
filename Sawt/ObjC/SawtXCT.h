@@ -14,6 +14,9 @@ FOUNDATION_EXPORT NSString * _Nullable SawtXCTEnableAutomation(void);
 /// ينادى من خيط خلفي (ينتظر الرد بحد timeout). يرجع nil لو انقبل الحدث، وإلا السبب.
 FOUNDATION_EXPORT NSString * _Nullable SawtXCTSynthesize(NSArray<NSValue *> *points, double duration, double timeout);
 
+/// يطفّي وضع الأتمتة ويخلي الجلسة (disableAutomationModeWithError: أو _XCT_disableAutomationModeWithReply:). يرجع وش صار، ويبدأ بـ✗ لو فشل
+FOUNDATION_EXPORT NSString *SawtXCTDisableAutomation(void);
+
 /// وش مصدر عميل الوصول اللي انلقى (للسجل)
 FOUNDATION_EXPORT NSString *SawtXCTAXSource(void);
 

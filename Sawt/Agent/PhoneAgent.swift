@@ -28,7 +28,7 @@ final class PhoneAgent: ObservableObject {
     private var firstRead = true
     private var isSelf: Bool { lastFront == Bundle.main.bundleIdentifier || lastFront.hasPrefix("com.za7ef.sawt") }
     private var activity: Activity<AgentActivityAttributes>?
-    private var stepNo = 0
+    private(set) var stepNo = 0
     private var obs: NSObjectProtocol?
 
     private init() {
@@ -141,6 +141,7 @@ final class PhoneAgent: ObservableObject {
         unsurface()
         AgentNotify.done(r)
         HostPairing.shared.keepAlive(false)
+        if XCTBackend.automationWanted || XCTBackend.automationEnabled { Task { await XCTBackend.disableAutomation() } }
         slog("agent: finish \(r)")
     }
 
@@ -157,13 +158,16 @@ final class PhoneAgent: ObservableObject {
         defer { bg.end() }
         // الطريقة المختارة بس، بدون رجوع لطريقة ثانية. XCTest: نشغّل وضع الأتمتة تلقائيًا وننتظره
         if Self.see == .xct {
-            UserDefaults.standard.set(true, forKey: "xctAutomation")
-            if !XCTBackend.isReady { say("الطريقة: XCTest — أشغّل وضع الأتمتة… (دخّل رمز الجوال لو طلبه)") }
-            if let e = await XCTBackend.startAutomation() {
+            if !XCTBackend.isReady || !Runner.isOn { say("الطريقة: XCTest — أشغّل المشغّل… (دخّل رمز الجوال لو طلبه)") }
+            if let e = await Runner.set(true) {
                 say("✗ XCTest ما اشتغل: \(e.prefix(200))")
-                finish("وقفت: وضع الأتمتة ما اشتغل — \(e.prefix(160))"); return
+                finish("وقفت: المشغّل ما اشتغل — \(e.prefix(160))"); return
             }
-            say("✓ الطريقة: XCTest — \(XCTBackend.sessionState)")
+            if let e = await XCTBackend.enableAutomation() {
+                say("✗ \(e.prefix(200))")
+                finish("وقفت: \(e.prefix(160))"); return
+            }
+            say("✓ الطريقة: XCTest — \(XCTBackend.sessionState)؛ وضع الأتمتة مفعّل")
         } else {
             say("الطريقة: \(Self.see.title)")
         }
@@ -1305,34 +1309,23 @@ struct PhoneAgentView: View {
                 if xctWaiting { Text("دورك: دخّل رمز الجوال لو طلبه iOS").foregroundStyle(.orange) }
                 if !xctOut.isEmpty { Text(xctOut).font(.footnote.monospaced()).textSelection(.enabled) }
                 // وضع الأتمتة: جلسة XCTest دائمة تنبني من جديد لحالها لو انقطعت
-                Toggle(isOn: $xctAuto) {
+                Toggle(isOn: Binding(get: { xctAuto }, set: { on in
+                    autoBusy = true
+                    Task { @MainActor in
+                        let e = await Runner.set(on)
+                        autoStatus = e.map { "✗ " + String($0.prefix(120)) } ?? XCTBackend.sessionState
+                        autoBusy = false
+                    }
+                })) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("وضع الأتمتة")
+                        Text("المشغّل (وضع الأتمتة مع المهام)")
                         Text(autoBusy ? "يجهّز… (دخّل رمز الجوال لو طلبه)" : autoStatus).font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 .disabled(autoBusy)
-                .onChange(of: xctAuto) { _, on in
-                    if on {
-                        autoBusy = true
-                        Task { @MainActor in
-                            let e = await XCTBackend.startAutomation()
-                            autoStatus = e.map { "✗ " + String($0.prefix(120)) } ?? XCTBackend.sessionState
-                            autoBusy = false
-                        }
-                    } else {
-                        XCTBackend.stopAutomation()
-                        autoStatus = XCTBackend.sessionState
-                    }
-                }
                 .task {
                     // يحدّث الحالة كل ثانيتين، ويرجّع الجلسة لو المفتاح شغّال من قبل
-                    if xctAuto && !XCTBackend.isReady && !autoBusy {
-                        autoBusy = true
-                        let e = await XCTBackend.startAutomation()
-                        autoStatus = e.map { "✗ " + String($0.prefix(120)) } ?? XCTBackend.sessionState
-                        autoBusy = false
-                    }
+                    await Runner.resume()
                     while !Task.isCancelled {
                         if !autoBusy { autoStatus = XCTBackend.sessionState }
                         try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -1447,5 +1440,88 @@ final class BGTask {
     func end() {
         guard id != .invalid else { return }
         UIApplication.shared.endBackgroundTask(id); id = .invalid
+    }
+}
+
+
+/// مشغّل الأتمتة (مثل زر Poki): مصدر واحد للحالة (xctAutomation) يستخدمه زر الشريط الجانبي ومفتاح صفحة الوكيل.
+/// التشغيل يجهّز جلسة XCTest ويخلي التطبيق صاحي في الخلفية بس، بدون تفعيل وضع الأتمتة؛
+/// وضع الأتمتة (التعتيم والعلامة) يتفعّل لما تبدأ مهمة وينطفي لما تخلص.
+@MainActor
+enum Runner {
+    private static var alive = false
+    static var isOn: Bool { UserDefaults.standard.bool(forKey: "xctAutomation") }
+
+    /// يشغّل أو يطفّي. يرجع سبب الفشل لو ما اشتغل
+    @discardableResult
+    static func set(_ on: Bool) async -> String? {
+        UserDefaults.standard.set(on, forKey: "xctAutomation")
+        if on {
+            PhoneAgent.see = .xct
+            if !alive { alive = true; HostPairing.shared.keepAlive(true) }
+            return await XCTBackend.startAutomation()
+        } else {
+            if alive { alive = false; HostPairing.shared.keepAlive(false) }
+            if PhoneAgent.shared.running { PhoneAgent.shared.stop() }
+            await XCTBackend.disableAutomation()
+            XCTBackend.stopAutomation()
+            return nil
+        }
+    }
+
+    /// عند فتح التطبيق: لو كان شغّال نرجّعه
+    static func resume() async {
+        if isOn && !XCTBackend.isReady { await set(true) }
+        else if isOn && !alive { alive = true; HostPairing.shared.keepAlive(true) }
+    }
+
+    /// نص الحالة القصير للزر
+    static var stateText: String {
+        if !isOn { return "متوقف" }
+        if PhoneAgent.shared.running { return "شغّال: الخطوة \(PhoneAgent.shared.stepNo)" }
+        return XCTBackend.isReady ? "شغّال (نايم)" : "يجهّز…"
+    }
+}
+
+/// زر تشغيل المشغّل (مثل زر Poki): برتقالي «متوقف» / أخضر «شغّال»
+struct RunnerPill: View {
+    @AppStorage("xctAutomation") private var on = false
+    @State private var busy = false
+    @State private var text = Runner.stateText
+    @State private var error: String?
+
+    var body: some View {
+        Button {
+            guard !busy else { return }
+            busy = true
+            let target = !on
+            Task { @MainActor in
+                error = await Runner.set(target).map { String($0.prefix(140)) }
+                busy = false
+                text = Runner.stateText
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: busy ? "hourglass" : "power")
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(busy ? "يجهّز… (دخّل رمز الجوال لو طلبه)" : text).font(.subheadline.bold())
+                    if let error, !busy { Text("✗ " + error).font(.caption2).lineLimit(2) }
+                }
+                Spacer(minLength: 0)
+                Text("المشغّل").font(.caption).opacity(0.8)
+            }
+            .foregroundStyle(.white)
+            .padding(.vertical, 10).padding(.horizontal, 14)
+            .frame(maxWidth: .infinity)
+            .background(Capsule().fill(on ? Color.green : Color.orange))
+        }
+        .buttonStyle(.plain)
+        .task {
+            await Runner.resume()
+            while !Task.isCancelled {
+                if !busy { text = Runner.stateText }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
     }
 }

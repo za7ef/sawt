@@ -36,6 +36,34 @@ static BOOL SawtHas(id obj, SEL s) {
     @try { return [obj methodSignatureForSelector:s] != nil; } @catch (__unused NSException *e) { return NO; }
 }
 
+NSString *SawtXCTDisableAutomation(void) {
+    @try {
+        NSString *why = nil;
+        id session = SawtSharedSession(&why);
+        if (!session) return [@"✗ " stringByAppendingString:why ?: @"ما فيه جلسة"];
+        SEL direct = NSSelectorFromString(@"disableAutomationModeWithError:");
+        if ([session respondsToSelector:direct]) {
+            NSError *err = nil;
+            BOOL ok = ((BOOL (*)(id, SEL, NSError **))objc_msgSend)(session, direct, &err);
+            return ok ? @"disableAutomationModeWithError:" :
+                [NSString stringWithFormat:@"✗ disableAutomationModeWithError: %@", err.localizedDescription ?: @"رجع NO"];
+        }
+        SEL proxySel = NSSelectorFromString(@"daemonProxy");
+        id proxy = [session respondsToSelector:proxySel] ? ((id (*)(id, SEL))objc_msgSend)(session, proxySel) : nil;
+        SEL msg = NSSelectorFromString(@"_XCT_disableAutomationModeWithReply:");
+        NSMethodSignature *sig = proxy ? [proxy methodSignatureForSelector:msg] : nil;
+        if (!sig || sig.numberOfArguments != 3) return @"✗ ما فيه دالة لإطفاء وضع الأتمتة";
+        dispatch_semaphore_t done = dispatch_semaphore_create(0);
+        __block BOOL answered = NO;
+        void (^reply)(void) = ^{ answered = YES; dispatch_semaphore_signal(done); };
+        ((void (*)(id, SEL, id))objc_msgSend)(proxy, msg, reply);
+        dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC));
+        return answered ? @"_XCT_disableAutomationModeWithReply:" : @"✗ _XCT_disableAutomationModeWithReply: ما رد";
+    } @catch (NSException *e) {
+        return [NSString stringWithFormat:@"✗ %@: %@", e.name, e.reason ?: @""];
+    }
+}
+
 NSString * _Nullable SawtXCTSynthesize(NSArray<NSValue *> *points, double duration, double timeout) {
     if (points.count == 0) return @"ما فيه نقاط";
     @try {

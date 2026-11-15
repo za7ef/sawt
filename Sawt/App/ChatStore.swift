@@ -217,7 +217,8 @@ final class ChatStore: ObservableObject {
         guard !t.isEmpty || !attachments.isEmpty, !isGenerating else { return }
         if t.isEmpty { t = attachments.contains { $0.kind == .image } ? "وش تشوف في الصورة؟" : "لخّص لي الملف باختصار." }
         // أمر للوكيل: "/جوال افتح الملاحظات..." أو "جوال: ..."
-        if let g = PhoneAgentTrigger.goal(t) {
+        // المشغّل شغّال (مثل Poki): أي رسالة نصية بدون مرفقات تروح للوكيل كمهمة
+        if let g = PhoneAgentTrigger.goal(t) ?? (attachments.isEmpty && UserDefaults.standard.bool(forKey: "xctAutomation") ? t : nil) {
             append(Message(role: .user, text: t))
             let bubble = Message(role: .assistant, text: "تمام، جاري تنفيذ المهمة…")
             append(bubble)

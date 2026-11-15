@@ -112,6 +112,7 @@ enum XCTBackend {
     static func markAuthLost(_ where_: String) {
         guard prepared else { return }
         prepared = false
+        automationEnabled = false
         generation += 1
         let recent = lifeEvents.isEmpty ? "ما فيه أحداث خلفية/قفل مسجّلة" : lifeEvents.joined(separator: "، ")
         sessionState = "انتهى التفويض (\(where_)) — آخر الأحداث: \(recent)"
@@ -121,9 +122,47 @@ enum XCTBackend {
     /// يعيد التفويض ووضع الأتمتة (ممكن يطلب الرمز). true لو رجعت الجلسة
     static func reauthorize() async -> Bool {
         let cfg = await XCTestProbe.connectionConfig()
-        let e = await prepare(cfg: cfg, force: true)
-        if let e { slog("xct: reauth failed: \(e)") }
-        return e == nil
+        if let e = await prepare(cfg: cfg, force: true) { slog("xct: reauth failed: \(e)"); return false }
+        if automationWanted, let e = await enableAutomation() { slog("xct: reauth enable failed: \(e)"); return false }
+        return true
+    }
+
+    // MARK: - تفعيل وإطفاء وضع الأتمتة (مع المهمة)
+
+    /// وضع الأتمتة مفعّل الحين (الشاشة معتّمة + العلامة)
+    nonisolated(unsafe) static var automationEnabled = false
+    /// المهمة تبيه مفعّل (عشان إعادة التفويض ترجّعه)
+    nonisolated(unsafe) static var automationWanted = false
+
+    /// يفعّل وضع الأتمتة (ممكن يطلب رمز الجوال). nil = تفعّل
+    static func enableAutomation() async -> String? {
+        automationWanted = true
+        if automationEnabled { return nil }
+        let e: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTEnableAutomation()) }
+        }
+        if let e {
+            automation = "✗ " + e
+            slog("xct: enableAutomation failed: \(e)")
+            if isAuthLost(e) { markAuthLost("تفعيل الأتمتة") }
+            return "تفعيل وضع الأتمتة: " + e
+        }
+        automationEnabled = true
+        automation = "مفعّل"
+        slog("xct: automation enabled")
+        return nil
+    }
+
+    /// يطفّي وضع الأتمتة بعد المهمة ويخلي الجلسة جاهزة (الشاشة ترجع طبيعية)
+    static func disableAutomation() async {
+        automationWanted = false
+        guard automationEnabled else { return }
+        let how: String = await withCheckedContinuation { (c: CheckedContinuation<String, Never>) in
+            DispatchQueue.global(qos: .utility).async { c.resume(returning: SawtXCTDisableAutomation()) }
+        }
+        automationEnabled = false
+        automation = how.hasPrefix("✗") ? "إطفاء فشل: \(how)" : "مطفي (\(how))"
+        slog("xct: automation disable: \(how)")
     }
 
     // MARK: - وضع الأتمتة (جلسة دائمة)
@@ -157,6 +196,7 @@ enum XCTBackend {
     static func stopAutomation() {
         keeper?.cancel(); keeper = nil
         prepared = false
+        automationEnabled = false
         generation += 1   // أي معالج انقطاع قديم يتجاهل
         #if SAWTCTL
         c_xct_release_backend()
@@ -215,13 +255,9 @@ enum XCTBackend {
                 if let c = session.first(where: { $0.name == "config" }), !c.ok {
                     cont.resume(returning: "الإعداد: " + c.detail); return
                 }
-                // وضع الأتمتة: enableAutomationModeWithError: وحده (ممكن يطلب رمز الجوال)
-                if let e = SawtXCTEnableAutomation() {
-                    automation = "✗ " + e
-                    slog("xct: enableAutomation failed: \(e)")
-                } else {
-                    automation = "مفعّل"
-                }
+                // وضع الأتمتة ما يتفعّل هنا: يتفعّل لما تبدأ مهمة (enableAutomation) مثل Poki
+                automationEnabled = false
+                automation = "مطفي (يتفعّل مع المهمة)"
                 cont.resume(returning: nil)
             }
         }
@@ -234,6 +270,7 @@ enum XCTBackend {
                 // الجلسة انقطعت: نعلّمها، والمراقب يعيد بناءها لو وضع الأتمتة شغّال
                 guard gen == generation else { return }
                 prepared = false
+                automationEnabled = false
                 sessionState = "انقطعت (جيل \(gen))"
                 slog("xct: session invalidated gen \(gen)")
             }
@@ -627,6 +664,11 @@ enum XCTBackend {
         guard let prepRes = prep else { add(false, "prepare", t, "انتهى الوقت (٩٠ ثانية)؛ غالبًا الاتصال المحلي أو رمز الجوال"); return false }
         if let e = prepRes { add(false, "prepare", t, e); return false }
         add(true, "prepare", t, "\(keep ? "الجلسة الدائمة" : "تفويض جديد")؛ \(sessionState)؛ وضع الأتمتة: \(automation)؛ الوصول: \(axLoaded)؛ انتظار الهدوء: \(quiescenceOff ?? "؟")")
+        t = Date()
+        start("automation")
+        if let e = await enableAutomation() { add(false, "automation", t, e); return false }
+        add(true, "automation", t, "وضع الأتمتة مفعّل (ينطفي آخر الاختبار)")
+        defer { Task { await disableAutomation() } }
 
         // ٢أ) القراءة السريعة عبر عميل الوصول (مرتين: الثانية ساخنة)
         for i in 1...2 {

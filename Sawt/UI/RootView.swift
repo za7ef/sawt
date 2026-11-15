@@ -159,6 +159,8 @@ struct DrawerView: View {
             }
             .scrollIndicators(.hidden)
 
+            RunnerPill().padding(.bottom, 8)
+
             GlassEffectContainer(spacing: 10) {
                 HStack(spacing: 10) {
                     Button { showModels = true } label: {
