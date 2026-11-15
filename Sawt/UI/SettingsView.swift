@@ -14,6 +14,7 @@ struct SettingsView: View {
     /// خطوات توليد نماء: أقل = أسرع وجودة أقل. "جرّب" يستخدم نفس الاختيار عشان تقارن بأذنك
     @AppStorage("namaaSteps") private var namaaSteps = 7
     @AppStorage("llmDevice") private var llmDevice = "gpu"
+    @ObservedObject private var llamaDL = LlamaDownloader.shared
     @State private var cpuWarn = false
     @State private var cpuTest: String?
     @ObservedObject private var memory = MemoryStore.shared
@@ -103,15 +104,38 @@ struct SettingsView: View {
                             Task {
                                 let r = await LLMService.shared.cpuSelfTest()
                                 cpuTest = r.ok ? "المعالج يشتغل (\(r.info))" : "المعالج ما اشتغل: \(r.info)"
-                                if !r.ok && r.info != "النموذج مو محمّل" { llmDevice = "gpu" }
+                                if !r.ok && r.info != "نموذج المعالج مو منزّل" { llmDevice = "gpu" }
                             }
                         }
+                    }
+                    if llmDevice != "gpu" {
+                        if llamaDL.downloaded {
+                            HStack {
+                                Text("نموذج المعالج جاهز (\(LlamaModelFile.sizeText))")
+                                Spacer()
+                                Button("احذف", role: .destructive) { llamaDL.delete() }.buttonStyle(.borderless)
+                            }
+                        } else if llamaDL.running {
+                            ProgressView(value: llamaDL.progress) { Text("ينزّل نموذج المعالج… \(Int(llamaDL.progress * 100))٪") }
+                            Button("إلغاء", role: .destructive) { llamaDL.cancel() }
+                        } else {
+                            Button("نزّل نموذج المعالج (\(LlamaModelFile.sizeText))") { llamaDL.start() }
+                            Text("المتوفر: \(ByteCountFormatter.string(fromByteCount: LlamaModelFile.freeBytes, countStyle: .file))").font(.footnote).foregroundStyle(.secondary)
+                        }
+                        if !llamaDL.message.isEmpty { Text(llamaDL.message).font(.footnote) }
+                        Button("اختبر المعالج") {
+                            cpuTest = "يختبر المعالج…"
+                            Task {
+                                let r = await LLMService.shared.cpuSelfTest()
+                                cpuTest = r.ok ? "المعالج يشتغل (\(r.info))" : "المعالج ما اشتغل: \(r.info)"
+                            }
+                        }.disabled(!llamaDL.downloaded)
                     }
                 } header: {
                     Text("تشغيل النموذج")
                 } footer: {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("المعالج: يشتغل في الخلفية لكن بطيء. كرت الشاشة: سريع وسلس لكن ما يشتغل في الخلفية. تلقائي: كرت الشاشة والتطبيق قدّامك، والمعالج لما تقفل الشاشة أو تطلع من التطبيق.")
+                        Text("المعالج يستخدم نموذج خاص فيه (Gemma 4 E2B بصيغة GGUF، ينزل مرة وحدة). المعالج: يشتغل في الخلفية لكن أبطأ. كرت الشاشة: سريع وسلس لكن ما يشتغل في الخلفية. تلقائي: كرت الشاشة والتطبيق قدّامك، والمعالج لما تقفل الشاشة أو تطلع من التطبيق.")
                         if let cpuTest { Text(cpuTest).foregroundStyle(cpuTest.contains("ما اشتغل") ? .red : .secondary) }
                     }
                 }
