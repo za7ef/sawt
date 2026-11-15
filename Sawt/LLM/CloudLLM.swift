@@ -38,58 +38,121 @@ enum CloudLLM {
         }
     }
 
-    /// تدفق الرد (SSE) من المزوّد
+    /// حالة مشتركة بين التدفق والمراقب (وصول أول بايت / انتهاء المهلة)
+    private final class Watch: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _first = false, _timedOut: String?
+        var first: Bool { lock.lock(); defer { lock.unlock() }; return _first }
+        func gotFirst() { lock.lock(); _first = true; lock.unlock() }
+        var timedOut: String? { lock.lock(); defer { lock.unlock() }; return _timedOut }
+        func timeout(_ m: String) { lock.lock(); _timedOut = m; lock.unlock() }
+    }
+
+    static let firstByteTimeout: UInt64 = 20
+    static let overallTimeout: UInt64 = 150
+
+    /// تدفق الرد (SSE) من المزوّد — ما يعلق أبدًا: مهلة لأول رد ومهلة كاملة
     static func stream(_ p: CloudProvider, system: String, history: [Chat.Message], user: String,
                        maxTokens: Int, images: [URL]) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { cont in
+            let watch = Watch()
             let task = Task {
-                do {
-                    let req = try request(p, system: system, history: history, user: user, maxTokens: maxTokens, images: images)
-                    let (bytes, resp) = try await URLSession.shared.bytes(for: req)
-                    let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-                    if code != 200 {
-                        var body = Data()
-                        for try await b in bytes { body.append(b); if body.count > 20_000 { break } }
-                        let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
-                        // جيميناي في البث يرجع الخطأ أحيانًا كمصفوفة
-                        let j = json ?? ((try? JSONSerialization.jsonObject(with: body)) as? [[String: Any]])?.first
-                        throw CloudAgent.Failure(message: CloudAgent.errorText(p, code: code, json: j))
-                    }
-                    var any = false
-                    for try await line in bytes.lines {
-                        if Task.isCancelled { break }
-                        guard line.hasPrefix("data:") else { continue }
-                        let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-                        if payload == "[DONE]" { break }
-                        guard let d = payload.data(using: .utf8),
-                              let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else { continue }
-                        if let e = j["error"] as? [String: Any] {
-                            throw CloudAgent.Failure(message: "\(p.short): \((e["message"] as? String ?? "خطأ").prefix(160))")
+                var model = p.model
+                var triedFallback = false
+                while true {
+                    do {
+                        try await run(p, model: model, system: system, history: history, user: user,
+                                      maxTokens: maxTokens, images: images, watch: watch, cont: cont)
+                        cont.finish()
+                        return
+                    } catch let f as CloudAgent.Failure {
+                        // Gemini عليه ضغط: نجرّب الموديل الاحتياطي مرة وحدة (قبل ما يطلع أي نص)
+                        if f.code == 503, p.isGemini, !triedFallback, !watch.first, model != CloudAgent.geminiFallback {
+                            triedFallback = true
+                            model = CloudAgent.geminiFallback
+                            slog("llm: gemini 503 → fallback \(model)")
+                            continue
                         }
-                        let piece = delta(p, j)
-                        if !piece.isEmpty { any = true; cont.yield(piece) }
+                        slog("llm: cloud error \(p.rawValue) \(f.code)")
+                        cont.finish(throwing: f)
+                        return
+                    } catch {
+                        if let t = watch.timedOut {
+                            slog("llm: cloud timeout \(p.rawValue)")
+                            cont.finish(throwing: CloudAgent.Failure(message: t, code: -1))
+                            return
+                        }
+                        let ns = error as NSError
+                        if error is CancellationError || ns.code == NSURLErrorCancelled { cont.finish(); return }
+                        slog("llm: cloud net error \(p.rawValue) \(ns.code)")
+                        let msg: String
+                        switch ns.code {
+                        case NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost: msg = "ما فيه إنترنت — النموذج السحابي يحتاج اتصال"
+                        case NSURLErrorTimedOut: msg = "\(p.short) ما رد بالوقت — جرّب بعد شوي أو غيّر الموديل"
+                        default: msg = "تعذّر الاتصال بـ\(p.short)"
+                        }
+                        cont.finish(throwing: CloudAgent.Failure(message: msg))
+                        return
                     }
-                    if !any && !Task.isCancelled { throw CloudAgent.Failure(message: "\(p.short) ما رجّع رد") }
-                    cont.finish()
-                } catch is CancellationError {
-                    cont.finish()
-                } catch let f as CloudAgent.Failure {
-                    slog("llm: cloud error \(p.rawValue)")
-                    cont.finish(throwing: f)
-                } catch {
-                    let ns = error as NSError
-                    slog("llm: cloud net error \(p.rawValue) \(ns.code)")
-                    if ns.code == NSURLErrorCancelled { cont.finish(); return }
-                    let msg: String
-                    switch ns.code {
-                    case NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost: msg = "ما فيه إنترنت — النموذج السحابي يحتاج اتصال"
-                    case NSURLErrorTimedOut: msg = "\(p.short) ما رد بالوقت"
-                    default: msg = "تعذّر الاتصال بـ\(p.short)"
-                    }
-                    cont.finish(throwing: CloudAgent.Failure(message: msg))
                 }
             }
-            cont.onTermination = { _ in task.cancel() }
+            // المراقب: لو ما وصل شي خلال ٢٠ ثانية، أو طوّل الرد كله، نوقف بدل ما تبقى «...» للأبد
+            let watchdog = Task {
+                try? await Task.sleep(nanoseconds: firstByteTimeout * 1_000_000_000)
+                if Task.isCancelled { return }
+                if !watch.first {
+                    watch.timeout("\(p.short) ما رد خلال \(firstByteTimeout) ثانية — غالبًا عليه ضغط. جرّب بعد شوي أو غيّر الموديل")
+                    task.cancel(); return
+                }
+                try? await Task.sleep(nanoseconds: (overallTimeout - firstByteTimeout) * 1_000_000_000)
+                if Task.isCancelled { return }
+                watch.timeout("\(p.short) طوّل بالرد أكثر من اللازم — وقفته")
+                task.cancel()
+            }
+            cont.onTermination = { _ in task.cancel(); watchdog.cancel() }
+        }
+    }
+
+    private static func run(_ p: CloudProvider, model: String, system: String, history: [Chat.Message], user: String,
+                            maxTokens: Int, images: [URL], watch: Watch,
+                            cont: AsyncThrowingStream<String, Error>.Continuation) async throws {
+        let req = try request(p, model: model, system: system, history: history, user: user, maxTokens: maxTokens, images: images)
+        let (bytes, resp) = try await URLSession.shared.bytes(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        if !(200...299).contains(code) {
+            // البث وفيه خطأ: نقرا جسم الخطأ (JSON) ونطلع رسالة واضحة
+            var body = Data()
+            for try await b in bytes { body.append(b); if body.count > 20_000 { break } }
+            let any = try? JSONSerialization.jsonObject(with: body)
+            let j = (any as? [String: Any]) ?? (any as? [[String: Any]])?.first
+            throw CloudAgent.Failure(message: CloudAgent.errorText(p, code: code, json: j), code: code)
+        }
+        var got = false
+        var raw = ""   // لو الرد مو SSE (JSON عادي) نقراه بالنهاية
+        for try await line in bytes.lines {
+            if Task.isCancelled { throw CancellationError() }
+            guard line.hasPrefix("data:") else { if raw.count < 20_000 { raw += line }; continue }
+            let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            if payload == "[DONE]" { break }
+            guard let d = payload.data(using: .utf8),
+                  let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else { continue }
+            if let e = j["error"] as? [String: Any] {
+                let c = (e["code"] as? Int) ?? 0
+                throw CloudAgent.Failure(message: CloudAgent.errorText(p, code: c == 0 ? 500 : c, json: j), code: c)
+            }
+            let piece = delta(p, j)
+            if !piece.isEmpty { got = true; watch.gotFirst(); cont.yield(piece) }
+        }
+        if Task.isCancelled { throw CancellationError() }
+        if !got {
+            if let d = raw.data(using: .utf8), let any = try? JSONSerialization.jsonObject(with: d) {
+                let j = (any as? [String: Any]) ?? (any as? [[String: Any]])?.first
+                if j?["error"] != nil {
+                    let c = ((j?["error"] as? [String: Any])?["code"] as? Int) ?? 500
+                    throw CloudAgent.Failure(message: CloudAgent.errorText(p, code: c, json: j), code: c)
+                }
+            }
+            throw CloudAgent.Failure(message: "\(p.short) رجّع رد فاضي — جرّب مرة ثانية أو غيّر الموديل", code: 0)
         }
     }
 
@@ -109,7 +172,7 @@ enum CloudLLM {
         }
     }
 
-    private static func request(_ p: CloudProvider, system: String, history: [Chat.Message], user: String,
+    private static func request(_ p: CloudProvider, model: String, system: String, history: [Chat.Message], user: String,
                                 maxTokens: Int, images: [URL]) throws -> URLRequest {
         guard let key = p.key else { throw CloudAgent.Failure(message: "ما فيه مفتاح لـ\(p.short) — حطه في صفحة النماذج ← السحابية") }
         // السجل: مستخدم/مساعد بالتناوب
@@ -132,7 +195,7 @@ enum CloudLLM {
             var content: [[String: Any]] = [["type": "text", "text": user]]
             for (mt, b) in imgs { content.append(["type": "image_url", "image_url": ["url": "data:\(mt);base64,\(b)"]]) }
             msgs.append(["role": "user", "content": content])
-            body = ["model": p.model, "messages": msgs, "stream": true]
+            body = ["model": model, "messages": msgs, "stream": true]
             body[or ? "max_tokens" : "max_completion_tokens"] = or ? tokens : tokens * 3
         case .anthropic:
             req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
@@ -142,9 +205,9 @@ enum CloudLLM {
             var content: [[String: Any]] = imgs.map { ["type": "image", "source": ["type": "base64", "media_type": $0.0, "data": $0.1]] }
             content.append(["type": "text", "text": user])
             msgs.append(["role": "user", "content": content])
-            body = ["model": p.model, "max_tokens": tokens * 2, "system": system, "messages": msgs, "stream": true]
+            body = ["model": model, "max_tokens": tokens * 2, "system": system, "messages": msgs, "stream": true]
         case .gemini, .geminiPaid:
-            let m = p.model.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? p.model
+            let m = model.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? model
             req = URLRequest(url: URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(m):streamGenerateContent?alt=sse")!)
             req.setValue(key, forHTTPHeaderField: "x-goog-api-key")
             var contents: [[String: Any]] = hist.map { ["role": $0.role == .assistant ? "model" : "user", "parts": [["text": $0.content]]] }
