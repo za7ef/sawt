@@ -55,7 +55,9 @@ final class LlamaDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
     let spec: GGUFSpec
     init(spec: GGUFSpec) { self.spec = spec; super.init(); downloaded = spec.isDownloaded }
     @Published var progress: Double = 0
-    @Published var running = false
+    @Published var running = false {
+        didSet { if running != oldValue { Storage.otherDownloads += running ? 1 : -1 } }   // مسح الكاش ما يلمس التنزيل
+    }
     @Published var message = ""
     @Published var downloaded = false
     private var task: URLSessionDownloadTask?
