@@ -112,6 +112,15 @@ jobs:
             grep -E "^error" -A8 rust.log | head -150 || true
           fi
 
+      - name: تنزيل llama.cpp (محرك المعالج)
+        run: |
+          mkdir -p Frameworks
+          curl -sL --retry 3 -o /tmp/llama.zip https://github.com/ggml-org/llama.cpp/releases/download/b12387/llama-b12387-xcframework.zip
+          unzip -q /tmp/llama.zip -d /tmp/llama && mv /tmp/llama/build-apple/llama.xcframework Frameworks/
+          ls Frameworks/llama.xcframework
+          python3 -c "p='project.yml';s=open(p).read();s=s.replace('      - target: SawtWidgets\n        embed: true','      - target: SawtWidgets\n        embed: true\n      - framework: Frameworks/llama.xcframework\n        embed: true',1);s=s.replace('        OTHER_LDFLAGS:','        OTHER_SWIFT_FLAGS: [\"\$(inherited)\", \"-DLLAMA\"]\n        OTHER_LDFLAGS:',1);open(p,'w').write(s)"
+          grep -nE "llama|LLAMA" project.yml
+
       - name: توليد المشروع
         run: xcodegen generate
 
@@ -150,6 +159,7 @@ jobs:
           </dict></plist>
           PL
           sed -i '' 's/^          //' ent.plist
+          for f in Payload/Sawt.app/Frameworks/*.framework; do [ -d "$f" ] && codesign -f -s - "$f"; done || true
           for x in Payload/Sawt.app/PlugIns/*.appex; do [ -d "$x" ] && codesign -f -s - "$x"; done || true
           ls Payload/Sawt.app/PlugIns || true
           codesign -f -s - --entitlements ent.plist Payload/Sawt.app || echo "codesign skipped"
