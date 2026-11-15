@@ -122,23 +122,29 @@ enum SearchQuery {
 enum ForgetCues {
     /// كلمات كاملة (مو جزء من كلمة: "الانسان" ما تحسب)، وتقبل و/ف قبلها.
     static let forgetWords: Set<String> = [
-        "انس", "انسى", "انسَ", "انسي", "انساه", "انساها", "انسه", "انسها", "انسيها",
-        "امسح", "امسحه", "امسحها", "احذف", "احذفه", "احذفها", "غلط", "خطأ", "خطا",
-        "forget", "wrong", "incorrect", "delete", "remove",
+        "انس", "انسى", "انسَ", "انسي", "انساه", "انساها", "انسه", "انسها", "انسيها", "forget",
     ]
+    /// كلمات عامة: تحسب بس لو الرسالة قصيرة (≤٤ كلمات) أو فيها ذكر للذاكرة
+    static let weakWords: Set<String> = ["امسح", "امسحه", "امسحها", "احذف", "احذفه", "احذفها", "غلط", "خطأ", "خطا",
+                                         "wrong", "incorrect", "delete", "remove"]
+    static let memoryWords = ["ذاكرة", "ذاكره", "الذاكرة", "تذكر", "تتذكر", "حفظت", "تحفظ", "معلومة", "المعلومة", "memory", "remember", "saved"]
     static let forgetPhrases = ["مو صحيح", "مب صحيح", "مش صحيح", "غير صحيح", "مو صح", "مب صح", "لا تتذكر",
                                 "لا تحفظ", "ما عاد", "ماعاد", "not true", "no longer", "don't remember"]
 
     static func matches(_ s: String) -> Bool {
+        let s = s.replacingOccurrences(of: "\u{2019}", with: "'").replacingOccurrences(of: "\u{2018}", with: "'")
         let l = " " + s.lowercased().components(separatedBy: CharacterSet.letters.union(.whitespaces).union(CharacterSet(charactersIn: "'\u{064E}")).inverted).joined(separator: " ") + " "
         let words = l.split(separator: " ").map(String.init)
+        let weakOK = words.count <= 4 || words.contains { w in memoryWords.contains { w.contains($0) } }
         for w in words {
-            if forgetWords.contains(w) { return true }
-            if let f = w.first, "وف".contains(f), forgetWords.contains(String(w.dropFirst())) { return true }
+            let bare = (w.first.map { "وف".contains($0) } ?? false) ? String(w.dropFirst()) : w
+            if forgetWords.contains(w) || forgetWords.contains(bare) { return true }
+            if weakOK, weakWords.contains(w) || weakWords.contains(bare) { return true }
         }
         let spaced = words.joined(separator: " ")
         let padded = " " + spaced + " "
-        return forgetPhrases.contains { padded.contains(" " + $0) }
+        // عبارة كاملة («ما عاد» مو «ما عادي»)
+        return forgetPhrases.contains { padded.contains(" " + $0 + " ") }
     }
 }
 
@@ -156,7 +162,9 @@ enum MemoryLine: Equatable {
         let line = raw.trimmingCharacters(in: .whitespaces)
         guard let first = line.first else { return nil }
         let body = String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
-        if body.contains("لا شيء") { return nil }
+        // السطر كله «لا شيء» (مو ذكرى فيها الكلمة: «ما يحب لا شيء حار»)
+        let bare = body.trimmingCharacters(in: CharacterSet(charactersIn: " .،,:|-"))
+        if bare == "لا شيء" || bare == "لاشيء" || line == "لا شيء" { return nil }
         switch first {
         case "+", "-", "•":
             let parts = body.split(separator: "|", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
@@ -296,6 +304,33 @@ enum ThinkHeuristic {
 }
 
 /// وضع البحث التلقائي: هل السؤال يحتاج معلومة حديثة من الإنترنت؟
+/// مطابقة كلمات/عبارات كاملة (مو جزء من كلمة: «الجو» ما تطابق «الجوال»، current ما تطابق concurrent)
+/// مع سابقة عربية وحدة اختيارية (و/ب/ف/ل/ك) على أول كلمة
+enum PhraseMatch {
+    static func words(_ t: String) -> [String] {
+        t.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+    }
+    static func contains(_ text: String, _ phrase: String) -> Bool { contains(words(text), phrase) }
+    static func contains(_ ws: [String], _ phrase: String) -> Bool {
+        let p = words(phrase)
+        guard !p.isEmpty, ws.count >= p.count else { return false }
+        for i in 0...(ws.count - p.count) {
+            var ok = true
+            for j in 0..<p.count {
+                let w = ws[i + j]
+                if w == p[j] { continue }
+                if j == 0, let f = w.first, "وبفلك".contains(f), String(w.dropFirst()) == p[j] { continue }
+                ok = false; break
+            }
+            if ok { return true }
+        }
+        return false
+    }
+    static func any(_ text: String, _ phrases: [String]) -> Bool {
+        let ws = words(text); return phrases.contains { contains(ws, $0) }
+    }
+}
+
 enum SearchHeuristic {
     static let cues = ["اليوم", "الآن", "هالأيام", "آخر أخبار", "أخبار", "اخبار", "أحدث", "احدث", "آخر إصدار", "اخر اصدار",
                        "سعر", "أسعار", "اسعار", "بكم", "طقس", "الجو بكرة", "الجو اليوم", "درجة الحرارة", "مباراة", "مباراه",
@@ -308,8 +343,11 @@ enum SearchHeuristic {
 
     static func verdict(_ text: String) -> Verdict {
         let t = " " + text.lowercased() + " "
-        if cues.contains(where: { t.contains($0) }) { return .yes }
+        // كلمات وقت عامة: ما تكفي لحالها مع دردشة («كيف حالك اليوم» مو بحث)
+        let weak: Set<String> = ["اليوم", "الآن", "هالأيام", "today", "current", "الجو"]
+        if PhraseMatch.any(text, cues.filter { !weak.contains($0) }) { return .yes }
         if ThinkHeuristic.isSmallTalk(text) { return .no }
+        if PhraseMatch.any(text, Array(weak)) { return .yes }
         let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let words = s.split(separator: " ").count
         if words <= 3 || ThinkHeuristic.smallTalk.contains(where: { t.contains($0) }) { return .no }
@@ -323,8 +361,8 @@ enum LiveIntent {
     static let weatherWords = ["طقس", "الجو", "جو ", "حرارة", "حراره", "مطر", "أمطار", "امطار", "غبار", "رطوبة", "weather", "temperature", "rain", "forecast"]
     static let currencyWords = ["سعر الصرف", "صرف", "الدولار", "دولار", "اليورو", "يورو", "بالريال", "كم الريال", "عملة", "عملات", "currency", "exchange rate", "usd", "eur"]
 
-    static func isWeather(_ t: String) -> Bool { weatherWords.contains { (" " + t + " ").contains($0) } }
-    static func isCurrency(_ t: String) -> Bool { currencyWords.contains { t.contains($0) } }
+    static func isWeather(_ t: String) -> Bool { PhraseMatch.any(t, weatherWords) }
+    static func isCurrency(_ t: String) -> Bool { PhraseMatch.any(t, currencyWords) }
 
     /// كلمات بعد "في"/"ب" أو كلمة مستقلة: نجرب أول 4 مرشحين في الترميز الجغرافي
     static func placeCandidates(_ text: String) -> [String] {
