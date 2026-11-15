@@ -153,6 +153,15 @@ final class PhoneAgent: ObservableObject {
         if Self.see == .share { ScreenShare.shared.start() }
         let bg = BGTask("agent")
         defer { bg.end() }
+        // XCTest: نجهّز الجلسة مرة وحدة (ممكن iOS يطلب رمز الجوال)؛ لو فشل نكمل بالطريقة العادية
+        if Self.see == .xct, !XCTBackend.isReady {
+            say("تجهيز XCTest… (دخّل رمز الجوال لو طلبه)")
+            let cfg = await XCTestProbe.connectionConfig()
+            if let e = await XCTBackend.prepare(cfg: cfg) {
+                say("⚠️ XCTest ما جهز: \(e.prefix(140)) — أكمل بالطريقة العادية")
+            }
+        }
+        if Task.isCancelled { return }
         let tl = Date()
         // الجلسة الدائمة معطّلة افتراضيًا: قراءة الشاشة كانت تفشل معها؛ نرجع لاتصال لكل أمر مثل ١٤٣
         let liveOn = UserDefaults.standard.bool(forKey: "agentLive")
@@ -516,6 +525,21 @@ final class PhoneAgent: ObservableObject {
 
     // ───── الشاشة ─────
     private func readScreen() async -> (String, [Element])? {
+        if Self.see == .xct, XCTBackend.isReady {
+            let b = UIScreen.main.bounds
+            if let s = await XCTBackend.readFront(screen: b.size) {
+                Self.searchKey = false; Self.hiddenRows = 0
+                lastFront = s.bundle
+                slog("agent: frontmost=\(s.bundle) via=xct \(s.ms)ms raw=\(s.raw)")
+                if s.isSelf { return (s.name, []) }
+                var els = s.nodes.map { Element(kind: $0.kind, label: $0.label, value: $0.value, frame: $0.frame, secure: $0.secure) }
+                els = els.filter { $0.frame.intersects(b) }
+                Self.searchKey = els.contains { $0.kind == "key" && ["search", "بحث", "ابحث"].contains($0.label.lowercased().trimmingCharacters(in: .whitespaces)) }
+                els = Self.rank(els, screen: b)
+                return (s.name, els)
+            }
+            slog("agent: xct read failed — fallback to sawtctl")
+        }
         let r = await Self.exec(.screen(firstRead ? 8000 : 5000))
         firstRead = false
         Self.searchKey = false; Self.hiddenRows = 0   // مسار OCR ما يعرف الكيبورد ولا الصفوف المخفية
@@ -750,8 +774,14 @@ final class PhoneAgent: ObservableObject {
 
     // ───── النظر ─────
     /// طريقة رؤية الشاشة: قراءة النصوص (الافتراضي) أو مشاركة الشاشة (صورة + أرقام العناصر)
-    enum See: String, CaseIterable { case ax, share
-        var title: String { self == .ax ? "قراءة النصوص" : "مشاركة الشاشة" }
+    enum See: String, CaseIterable { case ax, share, xct
+        var title: String {
+            switch self {
+            case .ax: return "قراءة النصوص"
+            case .share: return "مشاركة الشاشة"
+            case .xct: return "XCTest (بدون بث)"
+            }
+        }
     }
     static var see: See {
         get { See(rawValue: UserDefaults.standard.string(forKey: "agentSee") ?? "") ?? .ax }
@@ -921,7 +951,7 @@ final class PhoneAgent: ObservableObject {
     func openApp(_ name: String) async -> (ok: Bool, info: String) {
         let hit = Self.lookup(name)
         slog("agent: open requested=«\(name)» table=\(hit?.bundle ?? "none")")
-        if let hit, !hit.bundle.isEmpty, UserDefaults.standard.bool(forKey: "agentBundleLaunch") {
+        if let hit, !hit.bundle.isEmpty, UserDefaults.standard.bool(forKey: "agentBundleLaunch") || XCTBackend.active {
             let r = await Self.exec(.launch(hit.bundle))
             slog("agent: open chosen=\(hit.bundle) via=table ok=\(r.contains("\"ok\":true"))")
             if r.contains("\"ok\":true") { try? await Task.sleep(nanoseconds: 700_000_000); return (true, r) }
@@ -986,6 +1016,8 @@ final class PhoneAgent: ObservableObject {
 
     /// ينفذ أمر sawtctl بنفس إعداد الاتصال حق شاشة الاختبار
     static func exec(_ op: PhoneControl.Op) async -> String {
+        // XCTest مختار وجاهز: اللمس والسحب والهوم وفتح التطبيق بالمعرّف عن طريقه؛ لو فشل نكمل بالعادي
+        if XCTBackend.active, let r = await XCTBackend.handle(op, screen: UIScreen.main.bounds.size) { return r }
         let info = PhoneControl.storedInfo()
         var port: UInt16 = 0
         if info.contains("kind=RemotePairing") {
@@ -1100,6 +1132,10 @@ struct PhoneAgentView: View {
     @State private var xctRunning = false
     @State private var xctWaiting = false
     @State private var xctChecks = XCTestProbe.localChecks()
+    @State private var tapOut = ""
+    @State private var tapRunning = false
+    @State private var tapHits = 0
+    @State private var targetFrame = CGRect.zero
     @State private var shareLive = false
     @AppStorage("agentModelPick") private var agentPick = ""
     @State private var keysVersion = 0
@@ -1196,7 +1232,7 @@ struct PhoneAgentView: View {
                     }
                 }
             } footer: {
-                Text("«مشاركة الشاشة»: يرسل صورة الشاشة مع أرقام العناصر لنموذج الرؤية (لو البث طافي ياخذ لقطة). الصورة تشتغل على كرت الشاشة بس؛ على المعالج نص فقط.\nيقرأ الشاشة ويختار خطوة وحدة كل مرة (الحد حسب الإعداد). أي إرسال أو حذف أو دفع أو كلمة سر يوقف ويسألك. تقدر توقفه بأي وقت.")
+                Text("«XCTest»: يقرأ شجرة التطبيق اللي قدّام ويلمس عن طريق أدوات الاختبار بدون بث (يحتاج LocalDevVPN، وأول مرة ممكن يطلب رمز الجوال). لو فشل يرجع للطريقة العادية لحاله.\n«مشاركة الشاشة»: يرسل صورة الشاشة مع أرقام العناصر لنموذج الرؤية (لو البث طافي ياخذ لقطة). الصورة تشتغل على كرت الشاشة بس؛ على المعالج نص فقط.\nيقرأ الشاشة ويختار خطوة وحدة كل مرة (الحد حسب الإعداد). أي إرسال أو حذف أو دفع أو كلمة سر يوقف ويسألك. تقدر توقفه بأي وقت.")
             }
             if let q = agent.confirm {
                 Section("يحتاج تأكيد") {
@@ -1252,8 +1288,39 @@ struct PhoneAgentView: View {
                 }
                 if xctWaiting { Text("دورك: دخّل رمز الجوال لو طلبه iOS").foregroundStyle(.orange) }
                 if !xctOut.isEmpty { Text(xctOut).font(.footnote.monospaced()).textSelection(.enabled) }
+                // اختبار الضغط: XCTest يلمس الهدف هذا، ولو العدّاد زاد يعني اللمس وصل فعلًا
+                Button("🎯 هدف الضغط: \(tapHits)") { tapHits += 1 }
+                    .buttonStyle(.bordered)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { targetFrame = $0 }
+                Button {
+                    guard !tapRunning, targetFrame != .zero else { return }
+                    tapRunning = true
+                    tapOut = ""
+                    slog("xct: tap test tapped")
+                    Task { @MainActor in
+                        let before = tapHits
+                        let cfg = await XCTestProbe.connectionConfig()
+                        let target = CGPoint(x: targetFrame.midX, y: targetFrame.midY)
+                        var lines = await XCTBackend.tapTest(cfg: cfg, target: target, screen: UIScreen.main.bounds.size)
+                        // اللمسة توصل للواجهة بعد ما يرجع الخيط الرئيسي: ننتظر شوي ونشيك العدّاد
+                        try? await Task.sleep(nanoseconds: 1_200_000_000)
+                        let hit = tapHits > before
+                        let l = "\(hit ? "✓" : "✗") target: " + (hit ? "الهدف انضغط (\(before) → \(tapHits))" : "العدّاد ما تغيّر")
+                        slog("xct: tapTest \(l)")
+                        lines.append(l)
+                        tapOut = lines.joined(separator: "\n")
+                        tapRunning = false
+                    }
+                } label: {
+                    HStack {
+                        Text(tapRunning ? "جاري اختبار الضغط…" : "اختبار الضغط")
+                        if tapRunning { Spacer(); ProgressView() }
+                    }
+                }
+                .disabled(tapRunning || xctRunning)
+                if !tapOut.isEmpty { Text(tapOut).font(.footnote.monospaced()).textSelection(.enabled) }
             } footer: {
-                Text("يجرب طريقة التحكم الجديدة: يطلب من testmanagerd عبر الاتصال المحلي يفوّض صوت لاختبار الواجهة، بعدين يحمّل أدوات الاختبار ويقرأ الشاشة الرئيسية. ممكن يطلب iOS رمز الجوال لتفعيل الأتمتة.")
+                Text("«اختبار الضغط»: يجهّز الجلسة، يقيس سرعة قراءة الشاشة، ويخلي XCTest يلمس زر «هدف الضغط»؛ لو العدّاد زاد يعني اللمس شغّال.\nيجرب طريقة التحكم الجديدة: يطلب من testmanagerd عبر الاتصال المحلي يفوّض صوت لاختبار الواجهة، بعدين يحمّل أدوات الاختبار ويقرأ الشاشة الرئيسية. ممكن يطلب iOS رمز الجوال لتفعيل الأتمتة.")
             }
             if !agent.log.isEmpty {
                 Section("الخطوات") {

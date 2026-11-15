@@ -1,0 +1,413 @@
+import Foundation
+import UIKit
+import CoreGraphics
+import Darwin
+import ObjectiveC
+
+/// طريقة التحكم XCTest للوكيل: نقرأ شجرة التطبيق اللي قدّام ونلمس ونسحب ونضغط الأزرار عن طريق أطر الاختبار
+/// (بدون بث الشاشة). كل نداء لأطر XCTest يصير على الخيط الرئيسي (شرط XCTest) عن طريق main.sync
+/// من خيط خلفي، فما فيه deadlock، وكل نداء داخل SawtTryCatch عشان أي استثناء يصير خطأ بدل كراش.
+/// الجلسة (تحميل الأطر + التفويض + الإعداد) تنجهز مرة وحدة بكل تشغيل للتطبيق، وكائنات التطبيقات تنحفظ.
+enum XCTBackend {
+    /// عنصر من الشجرة بعد التصفية (الوكيل يحوّله لعنصره)
+    struct Node: Sendable { let kind: String; let label: String; let value: String; let frame: CGRect; let secure: Bool }
+    /// نتيجة قراءة الشاشة
+    struct Screen: Sendable { let name: String; let bundle: String; let isSelf: Bool; let nodes: [Node]; let raw: Int; let ms: Int }
+
+    nonisolated(unsafe) private static var prepared = false
+    nonisolated(unsafe) private static var preparing = false
+    nonisolated(unsafe) private static var apps: [String: NSObject] = [:]     // حسب المعرّف
+    nonisolated(unsafe) private static var pidApps: [Int32: (NSObject, String)] = [:]
+
+    static var isReady: Bool { prepared }
+    /// الوكيل مختار XCTest والجلسة جاهزة
+    static var active: Bool { prepared && UserDefaults.standard.string(forKey: "agentSee") == "xct" }
+
+    // MARK: - تشغيل على الخيط الرئيسي
+
+    /// يشغّل عمل XCTest على الخيط الرئيسي من خيط خلفي (المنادي ينتظر بدون ما يقفل الخيط الرئيسي)
+    private static func onMain<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { (cont: CheckedContinuation<T, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let r = DispatchQueue.main.sync { work() }
+                cont.resume(returning: r)
+            }
+        }
+    }
+
+    // MARK: - تجهيز الجلسة
+
+    /// يحمّل الأطر ويفوّض العملية ويجهّز إعداد الاختبار (مرة وحدة). يرجع nil لو جاهز، وإلا سبب الفشل
+    static func prepare(cfg: String) async -> String? {
+        if prepared { return nil }
+        if preparing { return "التجهيز شغّال" }
+        preparing = true
+        defer { preparing = false }
+        let t = Date()
+        let err: String? = await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let loaded = XCTestProbe.loadFrameworks()
+                if let bad = loaded.first(where: { !$0.ok && $0.name != "usr/lib" }) {
+                    cont.resume(returning: "\(bad.name): \(bad.detail.prefix(200))"); return
+                }
+                let cs = XCTestProbe.classesStep()
+                guard cs.ok else { cont.resume(returning: cs.detail); return }
+                var checks = XCTestProbe.localChecks()
+                let auth = XCTestProbe.authorizeSelf(cfg: cfg, checks: &checks)
+                guard auth.ok else { cont.resume(returning: "التفويض: " + auth.detail); return }
+                let session: [XCTestProbe.Step] = DispatchQueue.main.sync { XCTestProbe.sessionSteps() }
+                if let c = session.first(where: { $0.name == "config" }), !c.ok {
+                    cont.resume(returning: "الإعداد: " + c.detail); return
+                }
+                cont.resume(returning: nil)
+            }
+        }
+        if err == nil { prepared = true }
+        slog("xct: prepare \(err == nil ? "ok" : "failed: \(err!)") \(Int(Date().timeIntervalSince(t) * 1000))ms")
+        return err
+    }
+
+    // MARK: - أدوات Objective-C
+
+    private static func send0(_ target: AnyObject, _ selName: String) -> AnyObject? {
+        let sel = NSSelectorFromString(selName)
+        guard target.responds(to: sel) else { return nil }
+        return target.perform(sel)?.takeUnretainedValue()
+    }
+
+    private static func kvc(_ o: NSObject, _ key: String) -> Any? {
+        var v: Any?
+        _ = SawtTryCatch { v = o.value(forKey: key) }
+        return v
+    }
+
+    /// XCUIApplication بمعرّف الحزمة (محفوظ)
+    private static func app(bundle: String) -> NSObject? {
+        if let a = apps[bundle] { return a }
+        guard let cls = NSClassFromString("XCUIApplication") as? NSObject.Type else { return nil }
+        let initSel = NSSelectorFromString("initWithBundleIdentifier:")
+        guard let m = class_getInstanceMethod(cls, initSel) else { return nil }
+        typealias InitFn = @convention(c) (AnyObject, Selector, NSString) -> Unmanaged<AnyObject>?
+        let initFn = unsafeBitCast(method_getImplementation(m), to: InitFn.self)
+        var out: NSObject?
+        let exc = SawtTryCatch {
+            // alloc يرجع +1 والـinit يستهلكه (نفس طريقة التجربة اللي اشتغلت)
+            let raw: AnyObject = cls.perform(NSSelectorFromString("alloc")).takeUnretainedValue()
+            out = initFn(raw, initSel, bundle as NSString)?.takeRetainedValue() as? NSObject
+        }
+        if let exc { slog("xct: app(\(bundle)) \(exc)") }
+        if let out { apps[bundle] = out }
+        return out
+    }
+
+    /// XCUIApplication برقم العملية (محفوظ) + معرّف الحزمة
+    private static func app(pid: Int32) -> (NSObject, String)? {
+        if let a = pidApps[pid] { return a }
+        guard let cls = NSClassFromString("XCUIApplication") else { return nil }
+        typealias PidFn = @convention(c) (AnyObject, Selector, Int32) -> Unmanaged<AnyObject>?
+        for name in ["applicationWithPID:", "appWithPID:"] {
+            let sel = NSSelectorFromString(name)
+            guard let m = class_getClassMethod(cls, sel) else { continue }
+            let fn = unsafeBitCast(method_getImplementation(m), to: PidFn.self)
+            var obj: NSObject?
+            if let exc = SawtTryCatch({ obj = fn(cls as AnyObject, sel, pid)?.takeUnretainedValue() as? NSObject }) {
+                slog("xct: \(name) \(exc)"); continue
+            }
+            guard let obj else { continue }
+            let bundle = (kvc(obj, "bundleID") as? String) ?? (kvc(obj, "bundleIdentifier") as? String) ?? ""
+            pidApps[pid] = (obj, bundle)
+            return (obj, bundle)
+        }
+        return nil
+    }
+
+    /// أرقام عمليات التطبيقات النشطة (اللي قدّام) من عميل الوصول حق XCTest
+    private static func activePIDs() -> [Int32] {
+        guard let cls = NSClassFromString("XCAXClient_iOS") else { return [] }
+        var pids: [Int32] = []
+        let exc = SawtTryCatch {
+            guard let client = send0(cls as AnyObject, "sharedClient"),
+                  let list = send0(client, "activeApplications") as? [NSObject] else { return }
+            for e in list {
+                if let n = kvc(e, "processIdentifier") as? NSNumber { pids.append(n.int32Value) }
+            }
+        }
+        if let exc { slog("xct: activeApplications \(exc)") }
+        return pids
+    }
+
+    /// التطبيق اللي قدّام: نفضّل أي تطبيق غير SpringBoard
+    private static func frontApp() -> (NSObject, Int32, String)? {
+        var found: [(NSObject, Int32, String)] = []
+        for pid in activePIDs() {
+            if let ab = app(pid: pid) { found.append((ab.0, pid, ab.1)) }
+        }
+        if let f = found.first(where: { $0.2 != "com.apple.springboard" }) { return f }
+        if let f = found.first { return f }
+        // ما قدرنا نعرف: الشاشة الرئيسية
+        if let sb = app(bundle: "com.apple.springboard") { return (sb, 0, "com.apple.springboard") }
+        return nil
+    }
+
+    // MARK: - اللقطة
+
+    private static func snapshot(_ app: NSObject) -> (NSObject?, String?) {
+        let sel = NSSelectorFromString("snapshotWithError:")
+        guard app.responds(to: sel), let imp = app.method(for: sel) else { return (nil, "snapshotWithError: مو مدعوم") }
+        typealias SnapFn = @convention(c) (AnyObject, Selector, AutoreleasingUnsafeMutablePointer<NSError?>?) -> AnyObject?
+        let fn = unsafeBitCast(imp, to: SnapFn.self)
+        var err: NSError?
+        var snap: AnyObject?
+        if let exc = SawtTryCatch({ snap = fn(app, sel, &err) }) { return (nil, exc) }
+        guard let s = snap as? NSObject else {
+            return (nil, err.map { "\($0.domain) \($0.code) \($0.localizedDescription)" } ?? "رجع فاضي")
+        }
+        return (s, nil)
+    }
+
+    /// أنواع XCUIElementType → أسماء عناصر الوكيل
+    static func kind(_ t: Int) -> String? {
+        switch t {
+        case 9, 14, 16, 17, 44, 80: return "button"
+        case 49, 52: return "field"
+        case 50: return "field"
+        case 45: return "search"
+        case 48: return "text"
+        case 40, 41, 12: return "switch"
+        case 42: return "link"
+        case 43: return "image"
+        case 20: return "key"
+        case 75, 27, 30: return "cell"
+        case 33, 39, 37: return "control"
+        default: return nil
+        }
+    }
+
+    /// أنواع حاويات نتجاهلها (نمشي على أولادها بس)
+    private static let containers: Set<Int> = [0, 1, 2, 3, 4, 19, 21, 24, 26, 32, 46, 64, 76]
+
+    private static func frame(_ v: Any?) -> CGRect? {
+        if let v = v as? NSValue { return v.cgRectValue }
+        if let d = v as? NSDictionary { return CGRect(dictionaryRepresentation: d as CFDictionary) }
+        if let s = v as? String { return NSCoder.cgRect(for: s) }
+        return nil
+    }
+
+    private static func text(_ v: Any?) -> String {
+        if let s = v as? String { return s.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if let n = v as? NSNumber { return n.stringValue }
+        return ""
+    }
+
+    /// يحوّل شجرة اللقطة لعناصر: العناصر اللي لها نص أو قابلة للتفاعل، بدون تكرار نص الأب
+    private static func flatten(_ root: NSObject, screen: CGSize) -> (name: String, nodes: [Node], raw: Int) {
+        var nodes: [Node] = []
+        var raw = 0
+        let b = CGRect(origin: .zero, size: screen)
+        let rootName = text(kvc(root, "label"))
+        func walk(_ s: NSObject, parentLabel: String, depth: Int) {
+            raw += 1
+            guard raw < 1500, depth < 60 else { return }
+            let type = (kvc(s, "elementType") as? NSNumber)?.intValue ?? 0
+            if type == 25 { return }   // شريط الحالة: الوقت والبطارية بس
+            var label = text(kvc(s, "label"))
+            var value = text(kvc(s, "value"))
+            if value.isEmpty { value = text(kvc(s, "placeholderValue")) }
+            if label.isEmpty && value.isEmpty { label = text(kvc(s, "identifier")) }
+            let f = frame(kvc(s, "frame")) ?? .zero
+            var myLabel = parentLabel
+            let visible = f.width > 1 && f.height > 1 && f.intersects(b)
+            if visible {
+                let k = kind(type) ?? ((label.isEmpty && value.isEmpty) || containers.contains(type) ? nil : "other")
+                // نص داخل زر/صف بنفس الاسم: تكرار
+                let dup = type == 48 && !label.isEmpty && label == parentLabel
+                // بدون أي نص: نخلي بس الخانات والمفاتيح والمفاتيح الثنائية (الباقي ما يقدر النموذج يميّزه)
+                let blank = label.isEmpty && value.isEmpty && !["field", "search", "switch", "key"].contains(k ?? "")
+                if let k, !dup, !blank {
+                    nodes.append(Node(kind: k, label: label, value: value, frame: f, secure: type == 50))
+                    if !label.isEmpty { myLabel = label }
+                }
+            }
+            if let kids = kvc(s, "children") as? [NSObject] {
+                for c in kids { walk(c, parentLabel: myLabel, depth: depth + 1) }
+            }
+        }
+        if let exc = SawtTryCatch({ walk(root, parentLabel: "", depth: 0) }) { slog("xct: walk \(exc)") }
+        return (rootName, nodes, raw)
+    }
+
+    /// يقرأ التطبيق اللي قدّام. لو صوت نفسه قدّام ما نصوّره (خيطه الرئيسي مشغول بالانتظار) ونرجّع isSelf
+    static func readFront(screen: CGSize) async -> Screen? {
+        guard prepared else { return nil }
+        let me = Bundle.main.bundleIdentifier ?? "com.za7ef.sawt"
+        let myPid = getpid()
+        return await onMain { () -> Screen? in
+            let t = Date()
+            guard let f = frontApp() else { slog("xct: no front app"); return nil }
+            let (app, pid, bundle) = f
+            if pid == myPid || bundle == me {
+                return Screen(name: "صوت", bundle: me, isSelf: true, nodes: [], raw: 0, ms: Int(Date().timeIntervalSince(t) * 1000))
+            }
+            let (snap, err) = snapshot(app)
+            guard let snap else {
+                slog("xct: snapshot \(bundle) failed: \(err ?? "")")
+                pidApps[pid] = nil   // ممكن العملية تغيّرت
+                return nil
+            }
+            let (name, nodes, raw) = flatten(snap, screen: screen)
+            let ms = Int(Date().timeIntervalSince(t) * 1000)
+            let shown = bundle == "com.apple.springboard" ? "الشاشة الرئيسية" : (name.isEmpty ? bundle : name)
+            slog("xct: read \(bundle) raw=\(raw) els=\(nodes.count) \(ms)ms")
+            return Screen(name: shown, bundle: bundle, isSelf: false, nodes: nodes, raw: raw, ms: ms)
+        }
+    }
+
+    // MARK: - الأفعال
+
+    private typealias VecFn = @convention(c) (AnyObject, Selector, CGVector) -> Unmanaged<AnyObject>?
+    private typealias VoidFn = @convention(c) (AnyObject, Selector) -> Void
+
+    /// إحداثية مطلقة على الشاشة (بالنقاط) عن طريق عنصر SpringBoard
+    private static func coordinate(_ p: CGPoint) -> NSObject? {
+        guard let sb = app(bundle: "com.apple.springboard") else { return nil }
+        let s1 = NSSelectorFromString("coordinateWithNormalizedOffset:")
+        guard sb.responds(to: s1), let i1 = sb.method(for: s1) else { return nil }
+        guard let origin = unsafeBitCast(i1, to: VecFn.self)(sb, s1, CGVector(dx: 0, dy: 0))?.takeUnretainedValue() as? NSObject else { return nil }
+        let s2 = NSSelectorFromString("coordinateWithOffset:")
+        guard origin.responds(to: s2), let i2 = origin.method(for: s2) else { return nil }
+        return unsafeBitCast(i2, to: VecFn.self)(origin, s2, CGVector(dx: p.x, dy: p.y))?.takeUnretainedValue() as? NSObject
+    }
+
+    private static func callVoid(_ o: NSObject, _ name: String) -> String? {
+        let sel = NSSelectorFromString(name)
+        guard o.responds(to: sel), let imp = o.method(for: sel) else { return "\(name) مو مدعوم" }
+        return SawtTryCatch { unsafeBitCast(imp, to: VoidFn.self)(o, sel) }
+    }
+
+    private static func result(_ err: String?, _ what: String, _ t: Date) -> String {
+        let ms = Int(Date().timeIntervalSince(t) * 1000)
+        slog("xct: \(what) \(err == nil ? "ok" : "failed: \(err!)") \(ms)ms")
+        if let err {
+            let e = err.replacingOccurrences(of: "\"", with: "'")
+            return "{\"ok\":false,\"via\":\"xct\",\"error\":\"\(e.prefix(200))\"}"
+        }
+        return "{\"ok\":true,\"via\":\"xct\",\"ms\":\(ms)}"
+    }
+
+    /// لمسة على نقطة بالنقاط (إحداثيات الشاشة)
+    static func tap(_ p: CGPoint) async -> String {
+        await onMain { () -> String in
+            let t = Date()
+            var err: String?
+            if let exc = SawtTryCatch({
+                if let c = coordinate(p) { err = callVoid(c, "tap") } else { err = "ما قدر يسوي إحداثية" }
+            }) { err = exc }
+            return result(err, "tap \(Int(p.x)),\(Int(p.y))", t)
+        }
+    }
+
+    /// سحب من نقطة لنقطة
+    static func drag(_ a: CGPoint, _ b: CGPoint) async -> String {
+        await onMain { () -> String in
+            let t = Date()
+            var err: String?
+            if let exc = SawtTryCatch({
+                guard let c1 = coordinate(a), let c2 = coordinate(b) else { err = "ما قدر يسوي إحداثية"; return }
+                let sel = NSSelectorFromString("pressForDuration:thenDragToCoordinate:")
+                guard c1.responds(to: sel), let imp = c1.method(for: sel) else { err = "السحب مو مدعوم"; return }
+                typealias DragFn = @convention(c) (AnyObject, Selector, Double, AnyObject) -> Void
+                unsafeBitCast(imp, to: DragFn.self)(c1, sel, 0.05, c2)
+            }) { err = exc }
+            return result(err, "drag \(Int(a.x)),\(Int(a.y))→\(Int(b.x)),\(Int(b.y))", t)
+        }
+    }
+
+    /// زر الهوم
+    static func home() async -> String {
+        await onMain { () -> String in
+            let t = Date()
+            var err: String?
+            if let exc = SawtTryCatch({
+                guard let cls = NSClassFromString("XCUIDevice"), let dev = send0(cls as AnyObject, "sharedDevice") as? NSObject else { err = "XCUIDevice مو موجود"; return }
+                let sel = NSSelectorFromString("pressButton:")
+                guard dev.responds(to: sel), let imp = dev.method(for: sel) else { err = "pressButton: مو مدعوم"; return }
+                typealias BtnFn = @convention(c) (AnyObject, Selector, Int) -> Void
+                unsafeBitCast(imp, to: BtnFn.self)(dev, sel, 1)   // XCUIDeviceButtonHome = 1
+            }) { err = exc }
+            return result(err, "home", t)
+        }
+    }
+
+    /// يفتح تطبيق بمعرّف الحزمة
+    static func open(bundle: String) async -> String {
+        await onMain { () -> String in
+            let t = Date()
+            var err: String?
+            if let exc = SawtTryCatch({
+                if let a = app(bundle: bundle) { err = callVoid(a, "activate") } else { err = "ما قدر يسوي XCUIApplication" }
+            }) { err = exc }
+            return result(err, "open \(bundle)", t)
+        }
+    }
+
+    /// معرّف حزمة؟ (com.apple.x) — بدون مسافات وفيه نقطتين على الأقل
+    static func looksLikeBundle(_ s: String) -> Bool {
+        !s.contains(" ") && s.split(separator: ".").count >= 3 && s.allSatisfy { $0.isASCII }
+    }
+
+    /// يحاول ينفذ أمر sawtctl بـXCTest. nil = ما يخصنا أو فشل (يرجع للطريقة العادية)
+    static func handle(_ op: PhoneControl.Op, screen: CGSize) async -> String? {
+        guard active else { return nil }
+        func den(_ x: UInt16, _ y: UInt16) -> CGPoint {
+            CGPoint(x: Double(x) / 65535 * screen.width, y: Double(y) / 65535 * screen.height)
+        }
+        let r: String
+        switch op {
+        case .tap(let x, let y): r = await tap(den(x, y))
+        case .drag(let a, let b, let x, let y): r = await drag(den(a, b), den(x, y))
+        case .keys(let w) where w == "home": r = await home()
+        case .launch(let q) where looksLikeBundle(q): r = await open(bundle: q)
+        default: return nil
+        }
+        return r.contains("\"ok\":true") ? r : nil
+    }
+
+    // MARK: - اختبار الضغط
+
+    /// يجهّز الجلسة، يقيس لقطة SpringBoard (ساخنة)، يعرف اللي قدّام، ويلمس الهدف. يرجع سطور السجل
+    static func tapTest(cfg: String, target: CGPoint, screen: CGSize) async -> [String] {
+        var lines: [String] = []
+        func add(_ ok: Bool, _ name: String, _ ms: Int, _ d: String) {
+            let l = "\(ok ? "✓" : "✗") \(name) (\(ms)ms): \(d)"
+            slog("xct: tapTest \(l)"); lines.append(l)
+        }
+        var t = Date()
+        let wasReady = prepared
+        if let e = await prepare(cfg: cfg) { add(false, "prepare", Int(Date().timeIntervalSince(t) * 1000), e); return lines }
+        add(true, "prepare", Int(Date().timeIntervalSince(t) * 1000), wasReady ? "جاهزة من قبل" : "جاهزة")
+        // لقطة SpringBoard مرتين: الأولى ممكن تطوّل، الثانية تقيس السرعة الفعلية
+        for i in 1...2 {
+            t = Date()
+            let s: (Bool, String) = await onMain { () -> (Bool, String) in
+                guard let sb = app(bundle: "com.apple.springboard") else { return (false, "XCUIApplication") }
+                let (snap, err) = snapshot(sb)
+                guard let snap else { return (false, err ?? "؟") }
+                let fl = flatten(snap, screen: screen)
+                let sample = fl.nodes.prefix(6).map { "\($0.kind):\($0.label.prefix(20))" }.joined(separator: "، ")
+                return (true, "\(fl.raw) عقدة، \(fl.nodes.count) عنصر؛ \(sample)")
+            }
+            add(s.0, "snapshot\(i)", Int(Date().timeIntervalSince(t) * 1000), s.1)
+        }
+        t = Date()
+        let front: String = await onMain { () -> String in
+            let pids = activePIDs()
+            guard let f = frontApp() else { return "ما عرف (\(pids.count) نشط)" }
+            return "\(f.2) pid \(f.1)؛ نشط: \(pids.count)"
+        }
+        add(!front.hasPrefix("ما"), "front", Int(Date().timeIntervalSince(t) * 1000), front)
+        t = Date()
+        let r = await tap(target)
+        add(r.contains("\"ok\":true"), "tap", Int(Date().timeIntervalSince(t) * 1000), "(\(Int(target.x)), \(Int(target.y))) " + r)
+        return lines
+    }
+}
