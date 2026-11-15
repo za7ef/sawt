@@ -190,6 +190,9 @@ struct PhoneControlView: View {
     @State private var countdown = 0
     @State private var output = ""
     @State private var typeText = "مرحبا من صوت"
+    @State private var targetHits = 0
+    @State private var targetFrame: CGRect = .zero
+    @State private var inAppText = ""
 
     var body: some View {
         Form {
@@ -235,10 +238,38 @@ struct PhoneControlView: View {
                     go(.keys("paste:" + typeText), delay: true, label: "paste")
                 }
                 Button("اكتب hello حرف حرف (بعد ٥ ثواني)") { go(.keys("hello"), delay: true, label: "type") }
+                Button("زر الهوم (بعد ٥ ثواني)") { go(.keys("home"), delay: true, label: "home-delayed") }
             } header: {
                 Text("اختبارات")
             } footer: {
                 Text("بعد ما تضغط، روح للتطبيق اللي تبي تجرّب عليه خلال ٥ ثواني. النتيجة تنحفظ في السجل وتنسخ تلقائيًا.")
+            }
+            .disabled(busy || !PhoneControl.available || !hasPairing)
+
+            Section {
+                Button("هدف اللمس — انضغط \(targetHits) مرة") { targetHits += 1 }
+                    .background(GeometryReader { g in
+                        Color.clear
+                            .onAppear { targetFrame = g.frame(in: .global) }
+                            .onChange(of: g.frame(in: .global)) { _, f in targetFrame = f }
+                    })
+                Button("المس الهدف (داخل صوت، بعد ٣ ثواني)") {
+                    let b = UIScreen.main.bounds
+                    let nx = UInt16(max(0, min(65535, targetFrame.midX / b.width * 65535)))
+                    let ny = UInt16(max(0, min(65535, targetFrame.midY / b.height * 65535)))
+                    go(.tap(nx, ny), delay: true, label: "tap-inapp", stay: true)
+                }
+                TextField("اضغط هنا قبل ما يخلص العد", text: $inAppText)
+                Button("اكتب hello في الخانة اللي فوق (بعد ٣ ثواني)") {
+                    go(.keys("hello"), delay: true, label: "type-inapp", stay: true)
+                }
+                Button("الصق النص في الخانة اللي فوق (بعد ٣ ثواني)") {
+                    go(.keys("paste:" + typeText), delay: true, label: "paste-inapp", stay: true)
+                }
+            } header: {
+                Text("اختبار داخل صوت")
+            } footer: {
+                Text("خلك داخل صوت. للكتابة: اضغط الزر، بعدين اضغط على الخانة عشان يطلع الكيبورد قبل ما يخلص العد.")
             }
             .disabled(busy || !PhoneControl.available || !hasPairing)
 
@@ -296,7 +327,7 @@ struct PhoneControlView: View {
         .onAppear { hasPairing = PhoneControl.hasPairing }
     }
 
-    private func go(_ op: PhoneControl.Op, delay: Bool, label: String) {
+    private func go(_ op: PhoneControl.Op, delay: Bool, label: String, stay: Bool = false) {
         busy = true
         output = ""
         let h = host
@@ -314,7 +345,7 @@ struct PhoneControlView: View {
                 }
             }
             if delay {
-                for i in stride(from: 5, through: 1, by: -1) {
+                for i in stride(from: stay ? 3 : 5, through: 1, by: -1) {
                     countdown = i
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }
