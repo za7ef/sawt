@@ -112,6 +112,11 @@ final class CallController: ObservableObject {
     @MainActor func start(seed: [Turn] = []) {
         guard state == .idle else { return }
         turns = seed
+        // على المعالج: نسخّن llama ونعالج التعليمات مسبقًا عشان أول رد ما يتأخر
+        if LLMService.onCPU, LlamaModelFile.isDownloaded {
+            let sys = AppSettings.shared.systemPrompt(chat: false, query: "", memory: false)
+            Task.detached(priority: .userInitiated) { await LlamaEngine.shared.prewarm(system: sys) }
+        }
         let mm = ModelManager.shared
         guard mm.allReady else {
             error = mm.llm.isBusy || mm.stt.isBusy
