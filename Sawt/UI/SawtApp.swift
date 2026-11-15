@@ -28,6 +28,13 @@ struct SawtApp: App {
             MainActor.assumeIsolated { CallActivity.endSync() }
         }
         Task { @MainActor in CallActivity.cleanupOrphans() }
+        // تسخين صامت عند الرجوع للتطبيق (أول سؤال بعدها يطلع أسرع)
+        nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { _ in
+            Task.detached(priority: .utility) {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                await LLMService.shared.warmUp(reason: "active")
+            }
+        }
         if #available(iOS 26.0, *) {
             slog("bg: continued-processing gpu=\(BGTaskScheduler.supportedResources.contains(.gpu)) llmDevice=\(ComputeMode.current)")
         }

@@ -97,6 +97,7 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     .onChange(of: llmDevice) { _, v in
+                        Task.detached(priority: .utility) { await LLMService.shared.warmUp(reason: "switch \(v)") }
                         slog("settings: llmDevice=\(v)")
                         if v == "cpu" { cpuWarn = true }
                         if v != "gpu" {
@@ -129,6 +130,10 @@ struct SettingsView: View {
                                 let r = await LLMService.shared.cpuSelfTest()
                                 cpuTest = r.ok ? "المعالج يشتغل (\(r.info))" : "المعالج ما اشتغل: \(r.info)"
                             }
+                        }.disabled(!llamaDL.downloaded)
+                        Button("اختبر سرعة الخيوط (٢/٤/٦)") {
+                            cpuTest = "يقيس السرعة… (دقيقة تقريبًا)"
+                            Task { cpuTest = await LLMService.shared.cpuThreadBench() }
                         }.disabled(!llamaDL.downloaded)
                     }
                 } header: {
