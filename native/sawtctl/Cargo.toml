@@ -13,7 +13,7 @@ crate-type = ["staticlib", "rlib"]
 idevice = { git = "https://github.com/jkcoxson/idevice", rev = "89702099f4d7552f704f93b4526756abda319ceb", default-features = false, features = [
   "ring", "tcp", "core_device_proxy", "tunnel_tcp_stack", "rsd", "xpc", "core_device", "display_stream", "dvt", "remote_pairing",
 ] }
-tokio = { version = "1", features = ["rt", "time", "macros", "io-util", "net"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "macros", "io-util", "net"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
