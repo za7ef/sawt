@@ -4,10 +4,14 @@ use std::sync::{Mutex, OnceLock};
 
 static BUF: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 static INIT: OnceLock<bool> = OnceLock::new();
+/// السجل المفصّل يشتغل بس وقت الاقتران/التشخيص
+static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub fn enable(on: bool) { ENABLED.store(on, std::sync::atomic::Ordering::SeqCst) }
 
 struct W;
 impl Write for W {
     fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        if !ENABLED.load(std::sync::atomic::Ordering::Relaxed) { return Ok(b.len()) }
         if let Ok(mut v) = BUF.lock() {
             if v.len() < 256 * 1024 { v.extend_from_slice(b) }
         }

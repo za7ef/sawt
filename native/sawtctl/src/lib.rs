@@ -104,7 +104,6 @@ async fn connect_lockdown(cfg: &Config, bytes: &[u8], steps: &mut Vec<Json>) -> 
 async fn connect_rp(cfg: &Config, bytes: &[u8], steps: &mut Vec<Json>) -> Res<Session> {
     use idevice::remote_pairing::{RemotePairingClient, RpPairingFile, RpPairingSocket, connect_tls_psk_tunnel_native};
     let t0 = Instant::now();
-    let _ = tlog::install();
     let mut rpf = RpPairingFile::from_bytes(bytes).map_err(|e| format!("ملف الاقتران (RP): {e:?}"))?;
     tlog::clear();   // سجل القراءة فيه المفاتيح: نمسحه
     {
@@ -260,6 +259,9 @@ pub extern "C" fn sawtctl_pair(cfg: *const c_char) -> *mut c_char {
     run(cfg, async |cfg, steps| {
         use idevice::remote_pairing::{RemotePairingClient, RpPairingFile, RpPairingSocket};
         let _ = tlog::install();
+        tlog::enable(true);
+        struct Off; impl Drop for Off { fn drop(&mut self) { tlog::enable(false) } }
+        let _off = Off;
         let ip: std::net::IpAddr = cfg.host.parse().map_err(|e| format!("العنوان: {e:?}"))?;
         let mut ports: Vec<u16> = Vec::new();
         if cfg.rp_port != 0 { ports.push(cfg.rp_port) }
@@ -422,7 +424,13 @@ pub extern "C" fn sawtctl_keys(cfg: *const c_char, what: *const c_char) -> *mut 
             what = "paste".into();
             pbc = Some(pb);
         }
-        let inp = open_input(&mut s, steps).await?;
+        let inp = match open_input(&mut s, steps).await {
+            Ok(i) => i,
+            Err(e) => {
+                if let Some(mut pb) = pbc { let _ = pb.set_text("", idevice::core_device::GENERAL_PASTEBOARD).await; }
+                return Err(e);
+            }
+        };
         let r: Res<()> = async {
             if what == "home" {
                 let mut ind = IndigoHidClient::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("indigo: {e:?}"))?;
@@ -439,14 +447,7 @@ pub extern "C" fn sawtctl_keys(cfg: *const c_char, what: *const c_char) -> *mut 
             tokio::time::sleep(Duration::from_millis(250)).await;
             let res: Res<()> = async {
                 match what.as_str() {
-                    "paste" => {
-                        kb_press(&mut hid, &mut kb, &[0xE3], 0x19, 50).await?;
-                        // نفضّي الحافظة بعد اللصق (ممكن فيها كلمة سر)
-                        if let Some(pb) = pbc.as_mut() {
-                            tokio::time::sleep(Duration::from_millis(400)).await;
-                            let _ = pb.set_text("", idevice::core_device::GENERAL_PASTEBOARD).await;
-                        }
-                    }
+                    "paste" => kb_press(&mut hid, &mut kb, &[0xE3], 0x19, 50).await?,
                     "return" => kb_press(&mut hid, &mut kb, &[], 0x28, 30).await?,
                     text => {
                         for ch in text.chars() {
@@ -464,6 +465,12 @@ pub extern "C" fn sawtctl_keys(cfg: *const c_char, what: *const c_char) -> *mut 
             let _ = hid.remove_main_keyboard(&mut kb).await;
             res
         }.await;
+        // نفضّي الحافظة دايمًا (نجح أو فشل) — ممكن فيها كلمة سر
+        if let Some(mut pb) = pbc {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            let _ = pb.set_text("", idevice::core_device::GENERAL_PASTEBOARD).await;
+            steps.push(json!({"step": "pasteboard_cleared"}));
+        }
         close_input(inp).await;
         r?;
         Ok(json!({"sent": what}))
@@ -606,6 +613,9 @@ pub extern "C" fn sawtctl_host_accept(cfg: *const c_char, timeout_s: u32, pin_cb
     run(cfg, async move |cfg, steps| {
         use idevice::remote_pairing::{PairableHost, RpPairingSocket};
         let _ = tlog::install();
+        tlog::enable(true);
+        struct Off; impl Drop for Off { fn drop(&mut self) { tlog::enable(false) } }
+        let _off = Off;
         let HostPairing { listener, mut rpf, info } = HOST_PAIRING.lock().map_err(|_| "lock")?.take().ok_or("ما فيه اقتران مجهّز")?;
         let listener = tokio::net::TcpListener::from_std(listener).map_err(|e| format!("{e}"))?;
         let deadline = Instant::now() + Duration::from_secs(timeout_s.max(10) as u64);
@@ -616,7 +626,11 @@ pub extern "C" fn sawtctl_host_accept(cfg: *const c_char, timeout_s: u32, pin_cb
                 Ok(Ok((st, p))) => {
                     // بس الجوال نفسه (نفس العنوان أو loopback) — نرفض أي جهاز ثاني في الشبكة
                     let local = st.local_addr().ok().map(|a| a.ip());
-                    if p.ip().is_loopback() || Some(p.ip()) == local { break (st, p) }
+                    // الجوال نفسه: loopback أو نفس العنوان، أو من نفق LocalDevVPN (10.7.0.x)
+                    // 10.7.0.x مقبول بس لو اتصالنا نفسه على عنوان النفق 10.7.0.1
+                    let on_tun = local == Some(std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 7, 0, 1)));
+                    let vpn = on_tun && matches!(p.ip(), std::net::IpAddr::V4(v) if v.octets()[0] == 10 && v.octets()[1] == 7 && v.octets()[2] == 0);
+                    if p.ip().is_loopback() || Some(p.ip()) == local || vpn { break (st, p) }
                     steps.push(json!({"step": "host_reject_peer", "peer": p.ip().to_string()}));
                     drop(st);
                     continue
@@ -745,6 +759,12 @@ async fn live_step(l: &mut Live, o: &Json, steps: &mut Vec<Json>) -> Res<Json> {
                 pb.set_text(&t, idevice::core_device::GENERAL_PASTEBOARD).await.map_err(|e| format!("pasteboard set: {e:?}"))?;
                 steps.push(json!({"step": "pasteboard_set", "chars": t.chars().count()}));
                 what = "paste".into();
+                // نضغط Cmd+V ونفضّي الحافظة في كل الحالات
+                let r = kb_press(&mut l.hid, &mut l.kb, &[0xE3], 0x19, 40).await;
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                let _ = pb.set_text("", idevice::core_device::GENERAL_PASTEBOARD).await;
+                r?;
+                return Ok(json!({"sent": "paste"}));
             }
             match what.as_str() {
                 "home" => {
