@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import UserNotifications
 import ActivityKit
+import Vision
 
 /// الوكيل: يقرأ الشاشة → النموذج المحلي يختار خطوة وحدة (JSON) → ننفذها → نعيد. حد أقصى ١٠ خطوات.
 /// أي إرسال/حذف/دفع/كلمة سر يوقف ويطلب تأكيد.
@@ -302,7 +303,13 @@ final class PhoneAgent: ObservableObject {
         }
         let b = UIScreen.main.bounds
         els = els.filter { $0.frame.intersects(b) }
-        return (app, Array(els.prefix(40)))
+        els = Array(els.prefix(40))
+        // مشاركة الشاشة + المعالج (خلفية): ما فيه رؤية للنموذج، فنقرأ النص من الصورة ونضيفه كعناصر قابلة للضغط
+        if Self.see == .share, LLMService.onCPU {
+            let extra = await ocrElements(existing: els)
+            els += extra.prefix(max(0, 55 - els.count))
+        }
+        return (app, els)
     }
 
     static func describe(app: String, _ els: [Element]) -> String {
@@ -414,16 +421,8 @@ final class PhoneAgent: ObservableObject {
         guard Self.see == .share else { return nil }
         if LLMService.onCPU { slog("agent: vision skipped (cpu/llama.cpp, no mmproj) — text only"); return nil }
         guard await ModelManager.shared.ensureVision() else { slog("agent: vision unavailable"); return nil }
-        var img: UIImage?
-        var src = "broadcast"
-        if let d = ScreenShare.shared.latest { img = UIImage(data: d) }
-        if img == nil {
-            src = "screenshot"
-            let raw = FileManager.default.temporaryDirectory.appendingPathComponent("agent-shot.png")
-            let r = await Self.exec(.shot(raw.path))
-            if r.contains("\"ok\":true") { img = UIImage(contentsOfFile: raw.path) } else { slog("agent: shot failed \(r.prefix(200))") }
-        }
-        guard let img else { return nil }
+        guard let fr = await currentFrame() else { return nil }
+        let (img, src) = fr
         let mode = src
         let w: CGFloat = 448
         let size = CGSize(width: w, height: (img.size.height / img.size.width * w).rounded())
@@ -448,6 +447,52 @@ final class PhoneAgent: ObservableObject {
         guard let d = out.jpegData(compressionQuality: 0.8), (try? d.write(to: url)) != nil else { return nil }
         slog("agent: vision on (\(mode)) \(Int(size.width))x\(Int(size.height)) \(d.count / 1024)KB els=\(els.count)")
         return url
+    }
+
+    /// آخر إطار من البث، وإلا لقطة شاشة
+    private func currentFrame() async -> (UIImage, String)? {
+        if let d = ScreenShare.shared.latest, let i = UIImage(data: d) { return (i, "broadcast") }
+        let raw = FileManager.default.temporaryDirectory.appendingPathComponent("agent-shot.png")
+        let r = await Self.exec(.shot(raw.path))
+        if r.contains("\"ok\":true"), let i = UIImage(contentsOfFile: raw.path) { return (i, "screenshot") }
+        slog("agent: shot failed \(r.prefix(200))")
+        return nil
+    }
+
+    /// OCR (Apple Vision، عربي + إنجليزي) على صورة الشاشة → عناصر نص جديدة ما تكررت مع عناصر الوصول
+    private func ocrElements(existing: [Element]) async -> [Element] {
+        guard let fr = await currentFrame(), let cg = fr.0.cgImage else { return [] }
+        let src = fr.1
+        let t0 = Date()
+        func run(cpu: Bool) throws -> [VNRecognizedTextObservation] {
+            let req = VNRecognizeTextRequest()
+            req.recognitionLevel = .fast
+            req.recognitionLanguages = ["ar-SA", "en-US"]
+            req.usesLanguageCorrection = false
+            if cpu { req.usesCPUOnly = true }
+            try VNImageRequestHandler(cgImage: cg, options: [:]).perform([req])
+            return req.results ?? []
+        }
+        var obs: [VNRecognizedTextObservation] = []
+        var how = "default"
+        do { obs = try run(cpu: false) } catch {
+            slog("agent: ocr error (default) \(error) — retry cpu-only")
+            how = "cpu"
+            do { obs = try run(cpu: true) } catch { slog("agent: ocr error (cpu) \(error)"); return [] }
+        }
+        let b = UIScreen.main.bounds
+        var out: [Element] = []
+        for o in obs {
+            guard let t = o.topCandidates(1).first?.string.trimmingCharacters(in: .whitespaces), t.count >= 2 else { continue }
+            let r = o.boundingBox  // مطبّع، الأصل تحت يسار
+            let f = CGRect(x: r.minX * b.width, y: (1 - r.maxY) * b.height, width: r.width * b.width, height: r.height * b.height)
+            let dup = existing.contains { e in
+                (!e.label.isEmpty && (e.label.contains(t) || t.contains(e.label))) && e.frame.intersects(f)
+            }
+            if !dup { out.append(Element(kind: "ocr", label: String(t.prefix(40)), value: "", frame: f, secure: false)) }
+        }
+        slog("agent: ocr src=\(src) via=\(how) \(Int(Date().timeIntervalSince(t0) * 1000))ms found=\(obs.count) added=\(out.count)")
+        return out
     }
 
     /// كل الكتابة عن طريق الحافظة + Cmd+V (مستقلة عن لغة الكيبورد)
