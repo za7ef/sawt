@@ -9,6 +9,7 @@ mod tlog;
 use idevice::{
     IdeviceService, RsdService,
     core_device::{ButtonState, IndigoHidClient, UniversalHidServiceClient},
+    core_device::hid::{KeyboardUsage, MainKeyboardService, TOUCHSCREEN_STATE_CONTACT, TOUCHSCREEN_STATE_RELEASE},
     core_device_proxy::CoreDeviceProxy,
     pairing_file::PairingFile,
     provider::TcpProvider,
@@ -308,21 +309,48 @@ pub extern "C" fn sawtctl_probe(cfg: *const c_char) -> *mut c_char {
     })
 }
 
+/// جلسة إدخال: بث الشاشة لازم يكون شغال عشان dtuhidd يقبل أحداث اللمس والكيبورد.
+/// نفرّغ حزم UDP أول بأول (وإلا تتكدس)، وننتظر ثانية كاملة قبل أول حدث.
+struct Input {
+    client: idevice::core_device::DisplayServiceClient<Box<dyn idevice::ReadWrite>>,
+    drains: Vec<tokio::task::JoinHandle<()>>,
+}
+async fn open_input(s: &mut Session, steps: &mut Vec<Json>) -> Res<Input> {
+    let st = stream::start_screen_media_stream(&mut s.adapter, &mut s.rsd, 1).await?;
+    steps.push(json!({"step": "media_stream"}));
+    let mut drains = Vec::new();
+    for sock in [st.audio_udp, st.video_udp] {
+        drains.push(tokio::spawn(async move { while sock.recv().await.is_ok() {} }));
+    }
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    Ok(Input { client: st.client, drains })
+}
+async fn close_input(mut i: Input) {
+    let _ = tokio::time::timeout(Duration::from_secs(2), i.client.stop_media_stream()).await;
+    for d in i.drains { d.abort(); }
+}
+
+type Uhid = UniversalHidServiceClient<Box<dyn idevice::ReadWrite>>;
+
 /// لمسة بإحداثيات طبيعية 0..65535
 #[unsafe(no_mangle)]
 pub extern "C" fn sawtctl_tap(cfg: *const c_char, x: u16, y: u16) -> *mut c_char {
     run(cfg, async move |cfg, steps| {
         let mut s = connect(&cfg, steps).await?;
-        let st = stream::start_screen_media_stream(&mut s.adapter, &mut s.rsd, 1).await?;
-        steps.push(json!({"step": "media_stream"}));
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        let mut hid = UniversalHidServiceClient::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("hid: {e:?}"))?;
-        hid.tap(x, y).await.map_err(|e| format!("tap: {e:?}"))?;
-        steps.push(json!({"step": "tap"}));
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let mut client = st.client;
-        let _ = client.stop_media_stream().await;
-        drop((st.audio_udp, st.video_udp));
+        let inp = open_input(&mut s, steps).await?;
+        let r: Res<()> = async {
+            let mut hid = Uhid::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("hid: {e:?}"))?;
+            hid.send_touchscreen(TOUCHSCREEN_STATE_CONTACT, x, y, None).await.map_err(|e| format!("touch down: {e:?}"))?;
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            hid.send_touchscreen(TOUCHSCREEN_STATE_RELEASE, x, y, None).await.map_err(|e| format!("touch up: {e:?}"))?;
+            steps.push(json!({"step": "tap"}));
+            // الجوال أحيانًا يتجاهل لمسة لو انقفل الاتصال بعدها مباشرة
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            drop(hid);
+            Ok(())
+        }.await;
+        close_input(inp).await;
+        r?;
         Ok(json!({"tapped": [x, y]}))
     })
 }
@@ -332,27 +360,48 @@ pub extern "C" fn sawtctl_tap(cfg: *const c_char, x: u16, y: u16) -> *mut c_char
 pub extern "C" fn sawtctl_drag(cfg: *const c_char, x1: u16, y1: u16, x2: u16, y2: u16) -> *mut c_char {
     run(cfg, async move |cfg, steps| {
         let mut s = connect(&cfg, steps).await?;
-        let st = stream::start_screen_media_stream(&mut s.adapter, &mut s.rsd, 1).await?;
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        let mut hid = UniversalHidServiceClient::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("hid: {e:?}"))?;
-        hid.drag(x1, y1, x2, y2, 30, 20).await.map_err(|e| format!("drag: {e:?}"))?;
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let mut client = st.client;
-        let _ = client.stop_media_stream().await;
-        drop((st.audio_udp, st.video_udp));
+        let inp = open_input(&mut s, steps).await?;
+        let r: Res<()> = async {
+            let mut hid = Uhid::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("hid: {e:?}"))?;
+            hid.drag(x1, y1, x2, y2, 20, 16).await.map_err(|e| format!("drag: {e:?}"))?;
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            drop(hid);
+            Ok(())
+        }.await;
+        close_input(inp).await;
+        r?;
         Ok(json!({"dragged": [x1, y1, x2, y2]}))
     })
 }
 
-/// زر (home / lock) أو مفاتيح لوحة (usage codes) — paste = Cmd+V
+/// كيبورد افتراضي (UniversalHID mainKeyboard): نسجّله، نضغط، ونشيله
+async fn kb_press(hid: &mut Uhid, kb: &mut MainKeyboardService, mods: &[u16], key: u16, gap: u64) -> Res<()> {
+    let e = |e| format!("kbd: {e:?}");
+    let mut held = Vec::new();
+    for m in mods {
+        let u = KeyboardUsage::new(*m).map_err(e)?;
+        hid.main_keyboard_key_down(kb, u).await.map_err(e)?;
+        held.push(u);
+        tokio::time::sleep(Duration::from_millis(gap)).await;
+    }
+    let k = KeyboardUsage::new(key).map_err(e)?;
+    hid.main_keyboard_key_down(kb, k).await.map_err(e)?;
+    tokio::time::sleep(Duration::from_millis(gap)).await;
+    hid.main_keyboard_key_up(kb, k).await.map_err(e)?;
+    for u in held.into_iter().rev() {
+        tokio::time::sleep(Duration::from_millis(gap)).await;
+        hid.main_keyboard_key_up(kb, u).await.map_err(e)?;
+    }
+    tokio::time::sleep(Duration::from_millis(gap)).await;
+    Ok(())
+}
+
+/// زر (home) أو كتابة: paste / paste:<نص> = Cmd+V، return، أو نص إنجليزي حرف حرف
 #[unsafe(no_mangle)]
 pub extern "C" fn sawtctl_keys(cfg: *const c_char, what: *const c_char) -> *mut c_char {
     let what = cstr(what);
     run(cfg, async move |cfg, steps| {
         let mut s = connect(&cfg, steps).await?;
-        let st = stream::start_screen_media_stream(&mut s.adapter, &mut s.rsd, 1).await?;
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        // paste:<نص> → نحط النص في حافظة الجوال عبر pasteboardservice، بعدين Cmd+V
         let mut what = what;
         if let Some(t) = what.strip_prefix("paste:").map(|x| x.to_string()) {
             let mut pb = idevice::core_device::PasteboardServiceClient::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("pasteboard: {e:?}"))?;
@@ -360,44 +409,43 @@ pub extern "C" fn sawtctl_keys(cfg: *const c_char, what: *const c_char) -> *mut 
             steps.push(json!({"step": "pasteboard_set", "chars": t.chars().count()}));
             what = "paste".into();
         }
-        let mut ind = IndigoHidClient::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("indigo: {e:?}"))?;
-        let e = |e| format!("key: {e:?}");
-        match what.as_str() {
-            "home" => {
+        let inp = open_input(&mut s, steps).await?;
+        let r: Res<()> = async {
+            if what == "home" {
+                let mut ind = IndigoHidClient::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("indigo: {e:?}"))?;
+                let e = |e| format!("key: {e:?}");
                 ind.send_button(0x0C, 0x40, ButtonState::Down).await.map_err(e)?;
                 tokio::time::sleep(Duration::from_millis(80)).await;
                 ind.send_button(0x0C, 0x40, ButtonState::Up).await.map_err(e)?;
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                return Ok(());
             }
-            "paste" => {
-                // Cmd (Left GUI 0xE3) + V (0x19)
-                ind.send_keyboard(0xE3, ButtonState::Down).await.map_err(e)?;
-                tokio::time::sleep(Duration::from_millis(60)).await;
-                ind.send_keyboard(0x19, ButtonState::Down).await.map_err(e)?;
-                tokio::time::sleep(Duration::from_millis(60)).await;
-                ind.send_keyboard(0x19, ButtonState::Up).await.map_err(e)?;
-                tokio::time::sleep(Duration::from_millis(60)).await;
-                ind.send_keyboard(0xE3, ButtonState::Up).await.map_err(e)?;
-            }
-            "return" => {
-                ind.send_keyboard(0x28, ButtonState::Down).await.map_err(e)?;
-                ind.send_keyboard(0x28, ButtonState::Up).await.map_err(e)?;
-            }
-            text => {
-                for ch in text.chars() {
-                    let Some((u, shift)) = ascii_usage(ch) else { continue };
-                    if shift { ind.send_keyboard(0xE1, ButtonState::Down).await.map_err(e)?; }
-                    ind.send_keyboard(u, ButtonState::Down).await.map_err(e)?;
-                    ind.send_keyboard(u, ButtonState::Up).await.map_err(e)?;
-                    if shift { ind.send_keyboard(0xE1, ButtonState::Up).await.map_err(e)?; }
-                    tokio::time::sleep(Duration::from_millis(25)).await;
+            let mut hid = Uhid::connect_rsd(&mut s.adapter, &mut s.rsd).await.map_err(|e| format!("hid: {e:?}"))?;
+            let mut kb = hid.create_main_keyboard().await.map_err(|e| format!("kbd create: {e:?}"))?;
+            steps.push(json!({"step": "keyboard_attached"}));
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let res: Res<()> = async {
+                match what.as_str() {
+                    "paste" => kb_press(&mut hid, &mut kb, &[0xE3], 0x19, 50).await?,
+                    "return" => kb_press(&mut hid, &mut kb, &[], 0x28, 30).await?,
+                    text => {
+                        for ch in text.chars() {
+                            let Some((u, shift)) = ascii_usage(ch) else { continue };
+                            let mods: &[u16] = if shift { &[0xE1] } else { &[] };
+                            kb_press(&mut hid, &mut kb, mods, u as u16, 12).await?;
+                        }
+                    }
                 }
-            }
-        }
-        steps.push(json!({"step": "keys"}));
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let mut client = st.client;
-        let _ = client.stop_media_stream().await;
-        drop((st.audio_udp, st.video_udp));
+                Ok(())
+            }.await;
+            let _ = hid.set_main_keyboard_usages(&mut kb, []).await;
+            steps.push(json!({"step": "keys", "ok": res.is_ok()}));
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let _ = hid.remove_main_keyboard(&mut kb).await;
+            res
+        }.await;
+        close_input(inp).await;
+        r?;
         Ok(json!({"sent": what}))
     })
 }
