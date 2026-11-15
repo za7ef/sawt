@@ -49,23 +49,34 @@ enum AppleSTT {
         req.endAudio()
 
         let text: String = try await withCheckedThrowingContinuation { cont in
-            var done = false
+            // مرة وحدة بس (الرد أو المهلة)، بقفل لأن الاستدعاءات تجي من طوابير مختلفة
+            let once = OnceFlag()
             let task = rec.recognitionTask(with: req) { result, error in
-                if done { return }
                 if let result, result.isFinal {
-                    done = true
-                    cont.resume(returning: result.bestTranscription.formattedString)
+                    if once.take() { cont.resume(returning: result.bestTranscription.formattedString) }
                 } else if let error {
-                    done = true
+                    guard once.take() else { return }
                     // "No speech detected" يعتبر نص فاضي مو خطأ
                     let ns = error as NSError
                     if ns.code == 1110 || ns.code == 203 { cont.resume(returning: "") } else { cont.resume(throwing: error) }
                 }
             }
-            _ = task
+            // مهلة: آبل أحيانًا ما يرجع أبد
+            DispatchQueue.global().asyncAfter(deadline: .now() + 30) {
+                guard once.take() else { return }
+                task.cancel()
+                cont.resume(throwing: SawtError.failed("سمع آبل ما رد خلال ٣٠ ثانية."))
+            }
         }
         return (text, language ?? "ar")
     }
+}
+
+/// علم يُؤخذ مرة وحدة (آمن بين الطوابير)
+final class OnceFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var used = false
+    func take() -> Bool { lock.lock(); defer { lock.unlock() }; if used { return false }; used = true; return true }
 }
 
 /// تمييز آبل بالبث: نعطيه الصوت أول بأول وهو يتكلم، فلما يسكت يكون النص شبه جاهز.

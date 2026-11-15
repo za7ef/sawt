@@ -66,19 +66,24 @@ final class SpeechSynth {
     private func load(_ voice: VoiceOption) {
         if loadedVoice == voice.id { return }
         sherpa = nil
-        loadedVoice = voice.id
-        guard let root = Catalog.voicesRoot else { return }
+        loadedVoice = nil
+        guard let root = Catalog.voicesRoot else { slog("tts: voices folder missing → retry next time"); return }
         let dir = Catalog.voiceDir(voice.folder)
         let espeak = root.appendingPathComponent("espeak-ng-data").path
+        if voice.kind != .apple, voice.kind != .namaa, !FileManager.default.fileExists(atPath: dir.appendingPathComponent("tokens.txt").path) {
+            slog("tts: \(voice.id) files missing → retry next time"); return
+        }
         // خيطين بس عشان ما يسخن الجوال ويخلي المعالج للنموذج اللغوي
         let threads = ThermalWatch.isHot ? 1 : 2
         slog("tts load \(voice.id) threads=\(threads)")
         switch voice.kind {
         case .apple:
+            loadedVoice = voice.id
             return
         case .namaa:
             // نحمّله مع تجهيز المكالمة بدل أول جملة
             NamaaEngine.shared.preload()
+            loadedVoice = voice.id
             return
         case .piper(let onnx):
             let vits = sherpaOnnxOfflineTtsVitsModelConfig(
@@ -98,7 +103,9 @@ final class SpeechSynth {
                                                  maxNumSentences: 1, silenceScale: 0.2)
             sherpa = SherpaOnnxOfflineTtsWrapper(config: &cfg)
         }
-        slog("tts loaded \(voice.id)")
+        // بس لو نجح التحميل نعتبره محمّل؛ غير كذا نعيد المحاولة الجملة الجاية
+        if sherpa != nil { loadedVoice = voice.id; slog("tts loaded \(voice.id)") }
+        else { slog("tts: load failed \(voice.id) → retry next time") }
     }
 
     /// يحوّل جملة لصوت. يُستدعى من أي خيط ويرجع على خيط خلفي.
