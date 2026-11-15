@@ -16,6 +16,9 @@ import Security
 @_silgen_name("sawtctl_drag") private func c_drag(_ cfg: UnsafePointer<CChar>, _ x1: UInt16, _ y1: UInt16, _ x2: UInt16, _ y2: UInt16) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("sawtctl_launch") private func c_launch(_ cfg: UnsafePointer<CChar>, _ q: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("sawtctl_shot") private func c_shot(_ cfg: UnsafePointer<CChar>, _ path: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
+@_silgen_name("sawtctl_live_open") private func c_live_open(_ cfg: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
+@_silgen_name("sawtctl_live_close") private func c_live_close() -> UnsafeMutablePointer<CChar>?
+@_silgen_name("sawtctl_live") private func c_live(_ cfg: UnsafePointer<CChar>, _ op: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("sawtctl_free") private func c_free(_ p: UnsafeMutablePointer<CChar>?)
 #endif
 
@@ -183,7 +186,7 @@ enum PhoneControl {
         return String(decoding: data, as: UTF8.self)
     }
 
-    enum Op: Sendable { case probe, pair, ax(UInt32), tap(UInt16, UInt16), keys(String), screen(UInt32), drag(UInt16, UInt16, UInt16, UInt16), launch(String), shot(String) }
+    enum Op: Sendable { case probe, pair, ax(UInt32), tap(UInt16, UInt16), keys(String), screen(UInt32), drag(UInt16, UInt16, UInt16, UInt16), launch(String), shot(String), liveOpen, liveClose, live(String) }
 
     nonisolated(unsafe) static var lastRPHost = ""
 
@@ -250,6 +253,9 @@ enum PhoneControl {
                 case .drag(let a, let b, let x, let y): return c_drag(c, a, b, x, y)
                 case .launch(let q): return q.withCString { c_launch(c, $0) }
                 case .shot(let path): return path.withCString { c_shot(c, $0) }
+                case .liveOpen: return c_live_open(c)
+                case .liveClose: return c_live_close()
+                case .live(let j): return j.withCString { c_live(c, $0) }
                 }
             }
             guard let p else { return "{\"ok\":false,\"error\":\"null\"}" }
