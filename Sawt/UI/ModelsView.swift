@@ -11,7 +11,7 @@ struct ModelsView: View {
     @State private var confirmAll = false
     @State private var files: [Storage.ModelFolder] = []
     /// تبويب النماذج اللغوية: كرت الشاشة (MLX) أو المعالج (llama.cpp)
-    @State private var tab = UserDefaults.standard.string(forKey: "llmDevice") == "cpu" ? "cpu" : "gpu"
+    @State private var tab = CloudLLM.active != nil ? "cloud" : (UserDefaults.standard.string(forKey: "llmDevice") == "cpu" ? "cpu" : "gpu")
 
     private let ramGB = Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824
 
@@ -22,13 +22,16 @@ struct ModelsView: View {
                     Picker("نوع التشغيل", selection: $tab) {
                         Text("كرت الشاشة").tag("gpu")
                         Text("المعالج").tag("cpu")
+                        Text("النماذج السحابية").tag("cloud")
                     }
                     .pickerStyle(.segmented)
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())
                 }
 
-                if tab == "cpu" {
+                if tab == "cloud" {
+                    CloudSections(showActivate: true)
+                } else if tab == "cpu" {
                     Section {
                         ForEach(GGUFSpec.all) { CPUModelRow(spec: $0, ramGB: ramGB) }
                     } header: {

@@ -9,6 +9,7 @@ struct ChatView: View {
     var openDrawer: () -> Void
 
     @State private var draft = ""
+    @State private var cloudTick = 0
     /// يزيد مع كل إرسال: نتيجة إملاء صوتي متأخرة من قبل الإرسال ما ترجع تنكتب
     @State private var sendGen = 0
     @State private var voiceMode = false
@@ -65,8 +66,12 @@ struct ChatView: View {
                 attaching = false
             }
         }
+        .onChange(of: showModels) { _, _ in cloudTick += 1 }
         .onChange(of: dictation.error) { _, e in if let e { store.error = e; dictation.error = nil } }
         .alert("تنبيه", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
+            if CloudLLM.active != nil {
+                Button("ارجع للنموذج المحلي") { CloudLLM.setActive(nil); cloudTick += 1; if models.llm == .idle { models.loadAll() } }
+            }
             Button("تمام", role: .cancel) {}
         } message: { Text(store.error ?? "") }
     }
@@ -121,6 +126,10 @@ struct ChatView: View {
     }
 
     @ViewBuilder private var statusDot: some View {
+        let _ = cloudTick
+        if CloudLLM.active != nil {
+            Image(systemName: "cloud.fill").foregroundStyle(.blue).font(.caption)
+        } else {
         switch models.llm {
         case .ready: EmptyView()
         case .loading(let p):
@@ -128,6 +137,7 @@ struct ChatView: View {
         case .preparing: ProgressView().controlSize(.mini)
         case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
         case .idle: Image(systemName: "arrow.down.circle").foregroundStyle(.secondary)
+        }
         }
     }
 
@@ -348,7 +358,7 @@ struct ChatView: View {
     }
 
     private func send() {
-        guard models.llm.isReady else {
+        guard models.llm.isReady || CloudLLM.active != nil else {
             store.error = models.llm.isBusy ? "النموذج للحين يتجهز، لحظات." : "اختر نموذج ونزّله من شاشة النماذج أول."
             if !models.llm.isBusy { showModels = true }
             return
