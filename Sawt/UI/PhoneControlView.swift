@@ -269,6 +269,7 @@ struct PhoneControlView: View {
     @State private var targetHits = 0
     @State private var targetFrame: CGRect = .zero
     @State private var inAppText = ""
+    @State private var repairing = false
     @FocusState private var inAppFocused: Bool
 
     var body: some View {
@@ -294,10 +295,15 @@ struct PhoneControlView: View {
                     }
                     Text(hostPair.status)
                     Button("إلغاء", role: .destructive) { hostPair.cancel() }
+                } else if hasPairing && !repairing {
+                    LabeledContent("الحالة", value: "مقترن ✅")
+                    if !hostPair.result.isEmpty { Text(hostPair.result).font(.footnote).textSelection(.enabled) }
+                    Button("إعادة الاقتران") { repairing = true }.font(.footnote)
                 } else {
                     Button("سوّ ملف اقتران من الجوال") { hostPair.start() }
                     if !hostPair.result.isEmpty { Text(hostPair.result).font(.footnote).textSelection(.enabled) }
                     Button("اقتران مباشر (الطريقة القديمة)") { go(.pair, delay: false, label: "pair") }
+                    if hasPairing { Button("رجوع", role: .cancel) { repairing = false } }
                 }
             } header: {
                 Text("اقتران من الجوال (iOS 27)")
@@ -424,7 +430,10 @@ struct PhoneControlView: View {
                     }
             }
         }
-        .onAppear { hasPairing = PhoneControl.hasPairing }
+        .onAppear { hasPairing = PhoneControl.hasPairing; repairing = false }
+        .onChange(of: hostPair.running) { _, r in
+            if !r { hasPairing = PhoneControl.hasPairing; if hostPair.result.contains("✅") { repairing = false } }
+        }
     }
 
     private func go(_ op: PhoneControl.Op, delay: Bool, label: String, stay: Bool = false, after: (@MainActor () -> String)? = nil) {
