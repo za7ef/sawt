@@ -78,7 +78,7 @@ final class HostPairing: NSObject, ObservableObject, NetServiceDelegate {
     }
 
     /// صوت صامت عشان التطبيق يبقى صاحي وأنت في الإعدادات
-    private func keepAlive(_ on: Bool) {
+    func keepAlive(_ on: Bool) {
         if on {
             let s = AVAudioSession.sharedInstance()
             try? s.setCategory(.playback, options: [.mixWithOthers])

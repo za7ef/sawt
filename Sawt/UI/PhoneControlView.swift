@@ -232,9 +232,9 @@ struct PhoneControlView: View {
                 Button("زر الهوم") { go(.keys("home"), delay: false, label: "home") }
                 TextField("نص للكتابة", text: $typeText)
                 Button("كتابة النص (بعد ٥ ثواني)") {
-                    UIPasteboard.general.string = typeText
-                    go(.keys("paste"), delay: true, label: "paste")
+                    go(.keys("paste:" + typeText), delay: true, label: "paste")
                 }
+                Button("اكتب hello حرف حرف (بعد ٥ ثواني)") { go(.keys("hello"), delay: true, label: "type") }
             } header: {
                 Text("اختبارات")
             } footer: {
@@ -301,6 +301,18 @@ struct PhoneControlView: View {
         output = ""
         let h = host
         Task { @MainActor in
+            // لما تطلع من التطبيق iOS يوقفه، فالأوامر ما توصل لين ترجع؛ نخليه صاحي بصوت صامت + وقت خلفية
+            var bgID = UIBackgroundTaskIdentifier.invalid
+            if delay {
+                HostPairing.shared.keepAlive(true)
+                bgID = UIApplication.shared.beginBackgroundTask(withName: "phonectl") { }
+            }
+            defer {
+                if delay {
+                    HostPairing.shared.keepAlive(false)
+                    if bgID != .invalid { UIApplication.shared.endBackgroundTask(bgID) }
+                }
+            }
             if delay {
                 for i in stride(from: 5, through: 1, by: -1) {
                     countdown = i
