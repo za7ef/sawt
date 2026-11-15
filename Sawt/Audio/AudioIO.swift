@@ -64,6 +64,9 @@ final class AudioIO {
         conv?.downmix = true
         micConverter = conv
 
+        // لو محاولة سابقة فشلت بعد التركيب: نشيل التابات القديمة (تركيب تاب ثاني على نفس الباص = كراش)
+        input.removeTap(onBus: 0)
+        player.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 512, format: inFormat) { [weak self] buffer, _ in
             self?.handleMic(buffer)
         }
@@ -73,7 +76,12 @@ final class AudioIO {
         }
 
         engine.prepare()
-        try engine.start()
+        do { try engine.start() } catch {
+            input.removeTap(onBus: 0)
+            player.removeTap(onBus: 0)
+            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            throw error
+        }
         player.play()
         isRunning = true
         observe()
