@@ -744,8 +744,10 @@ final class CallController: ObservableObject {
                     await MainActor.run { PhoneAgent.shared.stop() }
                     userText = "[المستخدم طلب إيقاف الوكيل وانوقف الحين. رد بكلمة قصيرة: وقفت.]\n" + text
                 } else if let g = PhoneAgentTrigger.goal(text, voice: true) {
-                    await MainActor.run { PhoneAgent.shared.start(g) }
-                    userText = "[المستخدم طلب تنفيذ مهمة على الجوال وبدأ الوكيل ينفذها الحين. رد بجملة قصيرة جدًا إنك بديت.]\n" + text
+                    let why = await MainActor.run { PhoneAgent.shared.start(g) }
+                    userText = (why == nil
+                        ? "[المستخدم طلب تنفيذ مهمة على الجوال وبدأ الوكيل ينفذها الحين. رد بجملة قصيرة جدًا إنك بديت.]\n"
+                        : "[المستخدم طلب مهمة على الجوال لكن الوكيل ما بدأ: \(why!). قل له السبب بجملة قصيرة.]\n") + text
                 }
                 if frame != nil {
                     userText = "[مرفقة صورة من كاميرا المستخدم الحين. استخدمها إذا كلامه عنها، وصف باختصار.]\n" + userText
