@@ -5,6 +5,7 @@
 mod ax;
 mod stream;
 mod tlog;
+mod xct;
 
 use idevice::{
     IdeviceService, RsdService,
@@ -827,4 +828,16 @@ async fn live_step(l: &mut Live, o: &Json, steps: &mut Vec<Json>) -> Res<Json> {
         }
         other => Err(format!("op غير معروف: {other}")),
     }
+}
+
+/// تفويض جلسة اختبار الواجهة لرقم عملية صوت (يبقى الاتصال مفتوح لين sawtctl_xct_release)
+#[unsafe(no_mangle)]
+pub extern "C" fn sawtctl_xct_authorize(cfg: *const c_char, pid: u32) -> *mut c_char {
+    run(cfg, async move |cfg, steps| xct::authorize(&cfg, pid, steps).await)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sawtctl_xct_release() {
+    let h = xct::HOLD.lock().unwrap().take();
+    if let Some(h) = h { runtime().block_on(async move { drop(h) }) }
 }

@@ -2,6 +2,11 @@ import Foundation
 import Darwin
 import ObjectiveC
 
+#if SAWTCTL
+@_silgen_name("sawtctl_xct_authorize") private func c_xct_authorize(_ cfg: UnsafePointer<CChar>, _ pid: UInt32) -> UnsafeMutablePointer<CChar>?
+@_silgen_name("sawtctl_free") private func c_xfree(_ p: UnsafeMutablePointer<CChar>?)
+#endif
+
 /// تجربة (M0) لطريقة التحكم XCTest داخل تطبيق صوت نفسه — بدون تطبيق ثاني.
 /// نحمّل أطر XCTest من صورة المطوّر المركّبة على الجوال (/System/Developer) وقت التشغيل
 /// (ما نربطها وقت البناء، عشان التطبيق يفتح عادي لو الصورة مو موجودة)، وبعدين نطلب لقطة
@@ -98,6 +103,11 @@ enum XCTestProbe {
                         let (_, e) = call(fresh, sel, val)
                         notes.append(e == nil ? "\(sel) ✓" : "\(sel) ✗ \(e!)")
                     }
+                    // نعلّم الإعداد إنه لاختبار واجهة (الخاصية BOOL، فنستخدم KVC بدل perform)
+                    if let fo = fresh as? NSObject {
+                        let ek = SawtTryCatch { fo.setValue(true, forKey: "initializeForUITesting") }
+                        notes.append(ek == nil ? "initializeForUITesting ✓" : "initializeForUITesting ✗ \(ek!)")
+                    }
                     let (_, e3) = call(cfgCls as AnyObject, "setActiveTestConfiguration:", fresh)
                     notes.append(e3 == nil ? "setActiveTestConfiguration ✓" : "setActiveTestConfiguration ✗ \(e3!)")
                     out.append(Step(name: "config", ok: e3 == nil, detail: notes.joined(separator: "؛ ")))
@@ -193,8 +203,70 @@ enum XCTestProbe {
         return Step(name: "snapshot", ok: count > 0, detail: "\(count) عنصر؛ " + labels.joined(separator: "، "))
     }
 
+    // MARK: - قائمة الشروط وتفويض الجلسة
+
+    /// بند في قائمة الشروط: ok = nil يعني ما انفحص للحين
+    struct Check: Identifiable, Sendable { let id: String; let title: String; var ok: Bool?; var note: String = "" }
+
+    static let checkOrder: [(String, String)] = [
+        ("pairing", "ملف الاقتران"),
+        ("loopback", "الاتصال المحلي (LocalDevVPN)"),
+        ("ddi", "صورة المطوّر مركّبة"),
+        ("devmode", "وضع المطوّر + خدمة testmanagerd"),
+        ("authorize", "تفويض جلسة اختبار الواجهة"),
+    ]
+
+    /// الفحوص المحلية السريعة (بدون اتصال)
+    static func localChecks() -> [Check] {
+        checkOrder.map { id, title in
+            switch id {
+            case "pairing": return Check(id: id, title: title, ok: PhoneControl.hasPairing)
+            case "ddi": return Check(id: id, title: title, ok: FileManager.default.fileExists(atPath: "/System/Developer/Library"))
+            default: return Check(id: id, title: title, ok: nil)
+            }
+        }
+    }
+
+    /// إعداد الاتصال بنفس طريقة الوكيل (المنفذ يُكتشف لو الملف RemotePairing)
+    @MainActor static func connectionConfig() async -> String {
+        var port: UInt16 = 0
+        if PhoneControl.storedInfo().contains("kind=RemotePairing") { port = await PhoneControl.discoverRPPort().port }
+        let h = UserDefaults.standard.string(forKey: "pcHost") ?? "10.7.0.1"
+        return PhoneControl.config(host: h, rpPort: port, rpHost: PhoneControl.lastRPHost)
+    }
+
+    /// يطلب من testmanagerd (عبر الـloopback) تفويض عملية صوت لاختبار الواجهة، ويحدّث القائمة
+    static func authorizeSelf(cfg: String, checks: inout [Check]) -> Step {
+        #if SAWTCTL
+        let pid = UInt32(getpid())
+        let raw = cfg.withCString { c_xct_authorize($0, pid) }
+        let out = raw.map { String(cString: $0) } ?? "{}"
+        c_xfree(raw)
+        slog("xct: authorize \(out.prefix(3000))")
+        let d = (try? JSONSerialization.jsonObject(with: Data(out.utf8))) as? [String: Any] ?? [:]
+        let ok = d["ok"] as? Bool == true
+        let steps = d["steps"] as? [[String: Any]] ?? []
+        func set(_ id: String, _ v: Bool?, _ note: String = "") {
+            if let i = checks.firstIndex(where: { $0.id == id }) { checks[i].ok = v; checks[i].note = note }
+        }
+        let err = d["error"] as? String ?? ""
+        // لو ما وصلنا RSD، الاتصال المحلي هو اللي فشل
+        let reachedRSD = steps.contains { $0["step"] as? String == "rsd" }
+        set("loopback", reachedRSD, reachedRSD ? "" : err)
+        if reachedRSD {
+            let tm = steps.first { $0["step"] as? String == "check" && $0["item"] as? String == "testmanagerd" }?["ok"] as? Bool
+            set("devmode", tm)
+        }
+        set("authorize", ok, ok ? "pid \(pid)" : err)
+        let detail = ok ? "pid \(pid) مفوّض" : String(err.prefix(500))
+        return Step(name: "authorize", ok: ok, detail: detail)
+        #else
+        return Step(name: "authorize", ok: false, detail: "هالنسخة مبنية بدون sawtctl")
+        #endif
+    }
+
     /// يشغّل التجربة كاملة ويكتب كل خطوة في السجل. onWaiting تنادى لو اللقطة طوّلت (غالبًا تنتظر الرمز)
-    static func run(onWaiting: @escaping @Sendable () -> Void) async -> [String] {
+    static func run(cfg: String, onChecks: @escaping @Sendable ([Check]) -> Void, onWaiting: @escaping @Sendable () -> Void) async -> [String] {
         await withCheckedContinuation { (cont: CheckedContinuation<[String], Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 var lines: [String] = []
@@ -214,6 +286,13 @@ enum XCTestProbe {
                     cont.resume(returning: lines)
                     return
                 }
+                // التفويض أول: XCTest يقرأ حالة الجلسة أول ما تنشأ
+                var checks = localChecks()
+                onChecks(checks)
+                t = Date()
+                let auth = authorizeSelf(cfg: cfg, checks: &checks)
+                add(auth, Int(Date().timeIntervalSince(t) * 1000))
+                onChecks(checks)
                 sessionSteps().forEach { add($0, 0) }
                 // لو اللقطة طوّلت أكثر من ٥ ثواني غالبًا iOS يطلب الرمز
                 let waiting = DispatchWorkItem { slog("xct: snapshot slow → probably waiting for passcode"); onWaiting() }

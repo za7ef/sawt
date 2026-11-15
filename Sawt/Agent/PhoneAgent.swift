@@ -1099,6 +1099,7 @@ struct PhoneAgentView: View {
     @State private var xctOut = ""
     @State private var xctRunning = false
     @State private var xctWaiting = false
+    @State private var xctChecks = XCTestProbe.localChecks()
     @State private var shareLive = false
     @AppStorage("agentModelPick") private var agentPick = ""
     @State private var keysVersion = 0
@@ -1223,7 +1224,10 @@ struct PhoneAgentView: View {
                     xctOut = ""
                     slog("xct: probe tapped")
                     Task { @MainActor in
-                        let lines = await XCTestProbe.run(onWaiting: { Task { @MainActor in xctWaiting = true } })
+                        let cfg = await XCTestProbe.connectionConfig()
+                        let lines = await XCTestProbe.run(cfg: cfg,
+                                                          onChecks: { c in Task { @MainActor in xctChecks = c } },
+                                                          onWaiting: { Task { @MainActor in xctWaiting = true } })
                         xctOut = lines.joined(separator: "\n")
                         xctWaiting = false
                         xctRunning = false
@@ -1235,10 +1239,21 @@ struct PhoneAgentView: View {
                     }
                 }
                 .disabled(xctRunning)
+                // قائمة الشروط: تتحدّث لحالها مع كل اختبار
+                ForEach(xctChecks) { c in
+                    HStack(alignment: .top) {
+                        Text(c.ok == nil ? "○" : (c.ok! ? "✓" : "✗"))
+                            .foregroundStyle(c.ok == nil ? Color.secondary : (c.ok! ? Color.green : Color.red))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(c.title)
+                            if !c.note.isEmpty { Text(c.note).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
+                        }
+                    }
+                }
                 if xctWaiting { Text("دورك: دخّل رمز الجوال لو طلبه iOS").foregroundStyle(.orange) }
                 if !xctOut.isEmpty { Text(xctOut).font(.footnote.monospaced()).textSelection(.enabled) }
             } footer: {
-                Text("يجرب طريقة التحكم الجديدة: يحمّل أدوات الاختبار من صورة المطوّر ويقرأ الشاشة الرئيسية. ممكن يطلب iOS رمز الجوال لتفعيل الأتمتة.")
+                Text("يجرب طريقة التحكم الجديدة: يطلب من testmanagerd عبر الاتصال المحلي يفوّض صوت لاختبار الواجهة، بعدين يحمّل أدوات الاختبار ويقرأ الشاشة الرئيسية. ممكن يطلب iOS رمز الجوال لتفعيل الأتمتة.")
             }
             if !agent.log.isEmpty {
                 Section("الخطوات") {
