@@ -236,7 +236,9 @@ final class ChatStore: ObservableObject {
         // أمر للوكيل: "/جوال افتح الملاحظات..." أو "جوال: ..."
         // «/جوال …» دايمًا مهمة. والمشغّل شغّال: نحدد النية أول (قواعد سريعة، وإذا مو واضح نسأل نموذج المحادثة نعم/لا)
         if let g = PhoneAgentTrigger.goal(t) { startPhoneTask(t, goal: g); return }
-        if !phoneChecked, attachments.isEmpty, UserDefaults.standard.bool(forKey: "xctAutomation") {
+        // تحديد النية التلقائي مقفّل حاليًا (محمد يبي «/جوال» إلزامي)؛ يتفعّل بالمفتاح phoneIntentAuto
+        if !phoneChecked, attachments.isEmpty, UserDefaults.standard.bool(forKey: "phoneIntentAuto"),
+           UserDefaults.standard.bool(forKey: "xctAutomation") {
             switch PhoneIntent.verdict(t) {
             case .yes:
                 slog("chat: phone intent rule → task")
