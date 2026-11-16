@@ -196,6 +196,13 @@ final class CallController: ObservableObject {
                 CallController.isActive = false
                 return
             }
+            // نغمة خفيفة إن المكالمة بدأت (تنطفي من إعدادات المكالمة)، عبر نفس مخرج الصوت عشان إلغاء الصدى يشيلها من المايك
+            if UserDefaults.standard.object(forKey: "callChime") as? Bool ?? true {
+                self.audio.enqueue(samples: CallChime.samples, sampleRate: CallChime.rate)
+                try? await Task.sleep(nanoseconds: UInt64((CallChime.duration + 0.12) * 1_000_000_000))
+                guard self.state == .starting else { return }   // سكّر المكالمة وقت النغمة
+                self.proc.sync { self.resetProc() }             // ما نعتبر النغمة كلام
+            }
             // بعد ما يشتغل الصوت فعلًا
             CallController.isActive = true
             self.state = .listening
@@ -926,3 +933,25 @@ final class CallController: ObservableObject {
     }
 }
 
+
+/// نغمة بداية المكالمة: نوتتين ناعمتين (مي ثم لا) تُولَّد بالكود، بدون ملفات صوت
+enum CallChime {
+    static let rate = 24_000.0
+    static let duration = 0.32
+    static let samples: [Float] = {
+        let notes: [(f: Double, start: Double, len: Double)] = [(659.25, 0, 0.16), (880.0, 0.13, 0.19)]
+        let n = Int(duration * rate)
+        var out = [Float](repeating: 0, count: n)
+        for note in notes {
+            let s0 = Int(note.start * rate), len = Int(note.len * rate)
+            for i in 0..<len where s0 + i < n {
+                let t = Double(i) / rate
+                // هجوم سريع ثم تلاشي أُسّي؛ مع توافقية خفيفة عشان تطلع أنعم من موجة جيبية صافية
+                let env = min(1, t / 0.008) * exp(-t * 14)
+                let v = sin(2 * .pi * note.f * t) + 0.18 * sin(4 * .pi * note.f * t)
+                out[s0 + i] += Float(0.22 * env * v)
+            }
+        }
+        return out
+    }()
+}

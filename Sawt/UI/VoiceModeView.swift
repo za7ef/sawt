@@ -241,6 +241,7 @@ struct CallSettingsSheet: View {
     @EnvironmentObject var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
     @AppStorage("showCallDebug") private var showDebug = false
+    @AppStorage("callChime") private var callChime = true
 
     var body: some View {
         NavigationStack {
@@ -265,6 +266,7 @@ struct CallSettingsSheet: View {
                               systemImage: call.cameraOn ? "video.slash" : "video")
                     }
                     .disabled(call.cameraBusy || call.state == .idle || call.state == .starting)
+                    Toggle("نغمة بداية المكالمة", isOn: $callChime)
                     Toggle("عرض التشخيص", isOn: $showDebug)
                 }
             }
