@@ -97,6 +97,16 @@ struct ComposerField: UIViewRepresentable {
             let wasFirst = tv.isFirstResponder
             let dictating = tv.textInputMode?.primaryLanguage == "dictation"
             let marked = tv.markedTextRange != nil
+            // كتابة عادية: نفضّي والكيبورد يبقى مفتوح (بدون إغلاق وفتح = بدون رمشة).
+            // الإملاء أو نص معلّم بس: ننهي جلسة الإدخال بإغلاق مؤقت عشان النظام ما يرجّع النص
+            if wasFirst && !dictating && !marked {
+                tv.text = ""
+                placeholder?.isHidden = false
+                parent.text = ""
+                guardUntil = Date().addingTimeInterval(1.0)
+                slog("composer: cleared after send (kept keyboard)")
+                return
+            }
             clearing = true
             if marked { tv.unmarkText() }
             // نهاية جلسة الإدخال (توقف إملاء النظام وتثبيت الاقتراحات) قبل التفضية

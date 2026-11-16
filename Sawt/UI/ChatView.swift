@@ -563,6 +563,9 @@ struct MessageRow: View, Equatable {
                 Spacer(minLength: 50)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
+                    if let m = message.model, !m.isEmpty {
+                        Text(m).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                     if message.memorySaved == true {
                         Button { showMemory = true } label: {
                             Text("تم حفظ الذاكرة").font(.caption2).foregroundStyle(.gray)

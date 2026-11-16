@@ -96,7 +96,9 @@ final class PhoneAgent: ObservableObject {
         ChatStore.shared.updateText(t.msg, in: t.conv, lines.joined(separator: "\n"), save: final)
         if final {
             let res = lastResult.replacingOccurrences(of: "✅ ", with: "")
-            ChatStore.shared.append(Message(role: .assistant, text: lastResult.hasPrefix("✅") ? "خلصت: \(res)" : "ما كملت المهمة: \(res)"), to: t.conv)
+            var m = Message(role: .assistant, text: lastResult.hasPrefix("✅") ? "خلصت: \(res)" : "ما كملت المهمة: \(res)")
+            if !agentModelName.isEmpty { m.model = "الوكيل · " + agentModelName }
+            ChatStore.shared.append(m, to: t.conv)
             chatTarget = nil
         }
     }
@@ -478,6 +480,9 @@ final class PhoneAgent: ObservableObject {
         return LLMService.onCPU ? GGUFSpec.active : nil
     }
 
+    /// اسم النموذج اللي اختار آخر خطوة (يظهر فوق نتيجة المهمة)
+    private var agentModelName = ""
+
     private func ask(_ user: String, image: URL? = nil) async -> String {
         let t0 = Date()
         var model = "gpu-mlx"
@@ -485,6 +490,7 @@ final class PhoneAgent: ObservableObject {
         // سحابي (اختياري، بمفتاح المستخدم): النص + الصورة يروحون لخوادم المزوّد
         if let c = Self.cloud {
             model = "cloud-\(c.rawValue):\(c.model)\(image == nil ? "" : "+img")"
+            agentModelName = LLMService.prettyModel(c.model)
             do { return try await CloudAgent.ask(c, system: Self.system, user: user, image: image) }
             catch {
                 slog("agent: cloud error \(c.rawValue)")   // بدون تفاصيل ممكن فيها بيانات
@@ -495,6 +501,7 @@ final class PhoneAgent: ObservableObject {
         // على المعالج: نموذج المعالج المختار من صفحة النماذج (llama.cpp) مع قيود الصيغة
         if let spec = Self.cpuSpecForStep() {
             model = "\(spec.id)-cpu+gbnf"
+            agentModelName = spec.name
             guard spec.isDownloaded else { say("⚠️ \(spec.name) مو منزّل — نزّله من صفحة النماذج ← المعالج"); return "" }
             do { return try await LlamaEngine.of(spec).complete(system: Self.system, user: user, maxTokens: 256, grammar: Self.grammar) }
             catch {
@@ -509,6 +516,7 @@ final class PhoneAgent: ObservableObject {
         do {
             let st = try await LLMService.shared.stream(system: Self.system, history: [], user: user, maxTokens: 256,
                                                         images: image.map { [$0] } ?? [])
+            agentModelName = LLMService.shared.lastModelName
             for try await c in st {
                 out += c
                 if out.contains("}"), !out.contains("\"actions\""), Self.parse(out) != nil { break }

@@ -23,6 +23,8 @@ struct Message: Identifiable, Codable, Equatable {
     var sources: [WebSource]?
     /// ملاحظة رمادية فوق الرد (مثلًا: البحث فشل). ما تدخل السجل.
     var notice: String?
+    /// النموذج اللي كتب الرد (رمادي صغير فوقه)
+    var model: String?
 }
 
 struct Conversation: Identifiable, Codable, Equatable {
@@ -313,6 +315,7 @@ final class ChatStore: ObservableObject {
         let live = self.live
         genTask = Task {
             var raw = ""
+            var replyModel = ""
             var thinking = ""
             var sources: [WebSource] = []
             var notice: String?
@@ -396,6 +399,7 @@ final class ChatStore: ObservableObject {
                     system: system, history: Array(history), user: prompt,
                     maxTokens: think ? 3000 : 1500, images: images, think: think,
                     onThink: { piece in thinkAcc.append(piece) })
+                replyModel = LLMService.shared.lastModelName
                 // تحديث الواجهة بحد أقصى ~30 مرة بالثانية بدل كل كلمة
                 var lastUI = Date.distantPast
                 var refused = false
@@ -455,6 +459,7 @@ final class ChatStore: ObservableObject {
             if !answer.isEmpty, genID == myGen {
                 // الرد يروح لنفس المحادثة حتى لو تنقّلت لغيرها، ومرة وحدة بس (حتى مع الإيقاف)
                 var reply = Message(role: .assistant, text: answer)
+                if !replyModel.isEmpty { reply.model = replyModel }
                 let th = thinking.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !th.isEmpty {
                     reply.thinking = th.count > 4000 ? String(th.prefix(4000)) + "…" : th
@@ -541,7 +546,12 @@ final class ChatStore: ObservableObject {
         genTask = nil
         if isGenerating {
             let partial = latestPartial.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !partial.isEmpty { append(Message(role: .assistant, text: partial), to: genConv) }
+            if !partial.isEmpty {
+                var m = Message(role: .assistant, text: partial)
+                let n = LLMService.shared.lastModelName
+                if !n.isEmpty { m.model = n }
+                append(m, to: genConv)
+            }
         }
         latestPartial = ""
         live.reset()

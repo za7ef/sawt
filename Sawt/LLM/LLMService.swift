@@ -14,6 +14,18 @@ actor LLMService {
 
     private var container: ModelContainer?
     private var loadedID: String?
+    /// اسم النموذج اللي ولّد آخر رد (يظهر فوق الرد)
+    nonisolated(unsafe) var lastModelName = ""
+
+    /// اسم مقروء لمعرّف نموذج سحابي: gemini-3.5-flash → Gemini 3.5 Flash
+    static func prettyModel(_ id: String) -> String {
+        let last = id.split(separator: "/").last.map(String.init) ?? id
+        let base = last.split(separator: ":").first.map(String.init) ?? last
+        return base.split(separator: "-").map { w -> String in
+            let s = String(w)
+            return s.first?.isLetter == true ? s.prefix(1).uppercased() + s.dropFirst() : s
+        }.joined(separator: " ")
+    }
     /// جلسة المكالمة: نحتفظ فيها بين الأدوار عشان ما نعيد معالجة التعليمات والمحادثة كل مرة (كاش KV).
     private var callSession: ChatSession?
 
@@ -183,6 +195,7 @@ actor LLMService {
                 onThink: (@Sendable (String) -> Void)? = nil) throws -> AsyncThrowingStream<String, Error> {
         // نموذج سحابي مفعّل من صفحة النماذج (اختياري)
         if let c = CloudLLM.forThisReply(forcedDevice: ComputeMode.forced) {
+            lastModelName = Self.prettyModel(c.model)
             slog("llm: cloud → \(c.rawValue):\(c.model) images=\(images.count)")
             callSession = nil; callTurns = 0
             return CloudLLM.stream(c, system: system, history: history, user: user, maxTokens: maxTokens, images: images)
@@ -190,6 +203,7 @@ actor LLMService {
         // المعالج = llama.cpp (MLX على المعالج ما يطلع شي في iOS)
         if ComputeMode.device(for: ComputeMode.forced ?? ComputeMode.current) == "cpu" {
             slog("llm: cpu → llama.cpp (mlx loaded=\(container != nil) avail=\(RAM.availableMB)MB)")
+            lastModelName = GGUFSpec.active.name
             callSession = nil; callTurns = 0
             // المعالج أبطأ بكثير: سقف أقل للرد
             let cap = ThermalWatch.isHot ? 200 : 320
@@ -197,6 +211,9 @@ actor LLMService {
                                              maxTokens: min(cap, maxTokens))
         }
         guard let container else { throw SawtError.notReady("النموذج اللغوي") }
+        let lid = loadedID ?? ""
+        lastModelName = (Catalog.builtInLLMs + Catalog.customLLMs).first { $0.id == lid }?.title
+            ?? (lid.split(separator: "/").last.map(String.init) ?? "")
         var params = GenerateParameters()
         params.maxTokens = ThermalWatch.isHot ? min(200, maxTokens) : maxTokens
         // كاش مضغوط 8 بت بعد أول 1024 رمز (يوفر تقريبًا نص ذاكرة الكاش). ما نستخدم maxKVSize لأن
