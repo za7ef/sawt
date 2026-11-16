@@ -1223,6 +1223,7 @@ struct PhoneAgentView: View {
     @State private var tapHits = 0
     @State private var targetFrame = CGRect.zero
     @AppStorage("xctAutomation") private var xctAuto = false
+    @AppStorage("phoneIntentAuto") private var intentAuto = true
     @State private var autoStatus = XCTBackend.sessionState
     @State private var autoBusy = false
     @State private var shareLive = false
@@ -1398,6 +1399,13 @@ struct PhoneAgentView: View {
                     while !Task.isCancelled {
                         if !autoBusy { autoStatus = XCTBackend.sessionState }
                         try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    }
+                }
+                Toggle(isOn: $intentAuto) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("يفهم المهام من المحادثة تلقائيًا")
+                        Text(intentAuto ? "والمشغّل شغّال: أوامر مثل «افتح الملاحظات» تصير مهمة، والسوالف والأسئلة تبقى محادثة" : "المهام بس بـ«/جوال …»")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 Toggle("صورة الشاشة كل خطوة (أبطأ)", isOn: Binding(
