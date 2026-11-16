@@ -152,7 +152,7 @@ struct DrawerView: View {
             NavigationStack { PhoneAgentView() }.environment(\.layoutDirection, .rightToLeft)
         }
         .fullScreenCover(isPresented: $showVoice) {
-            VoiceModeView(openDrawer: { setDrawer(true) }).environment(\.layoutDirection, .rightToLeft)
+            VoiceModeView().environment(\.layoutDirection, .rightToLeft)
         }
         .alert("إعادة تسمية", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("اسم المحادثة", text: $newTitle)
