@@ -700,10 +700,13 @@ final class ChatStore: ObservableObject {
     // MARK: - توليد الصور
 
     /// يرسم صورة بالمحرك المختار بس (بدون أي تبديل تلقائي لمحرك ثاني)
-    func generateImage(_ text: String) {
+    /// source: صورة من المستخدم للتعديل (وصف + صورة)
+    func generateImage(_ text: String, source: Attachment? = nil) {
         guard !isGenerating else { return }
         let request = ImageIntent.strip(text)
-        append(Message(role: .user, text: text))
+        var userMsg = Message(role: .user, text: text)
+        if let source { userMsg.attachments = [source] }
+        append(userMsg)
         var bubble = Message(role: .assistant, text: "أجهّز…")
         bubble.genPending = true
         append(bubble)
@@ -718,6 +721,13 @@ final class ChatStore: ObservableObject {
         if PhoneAgent.shared.running { fail("الوكيل شغّال على مهمة — وقّفه أول وبعدين أرسم."); return }
         if engine.isLocal, !SDModels.installed(engine) {
             fail("نموذج \(engine.title) مو منزّل. نزّله من الإعدادات ← الصور."); return
+        }
+        if source != nil, !engine.canEdit {
+            fail("«\(engine.title)» ما يعدّل الصور. لتعديل صورة اختر «دقيق» (أو «واقعي+» يعيد رسمها) من زر + ← محرك الصور."); return
+        }
+        if source != nil, engine == .zimage {
+            // ملاحظة رمادية فوق الرد: «واقعي+» يعيد الرسم بدل التعديل
+            editMessage(bid, in: conv) { $0.notice = "واقعي+ ما يعدّل الصور، يعيد رسم الصورة كاملة مع التعديل." }
         }
         if engine.isGemini {
             if !CloudProvider.geminiPaid.hasKey, !CloudProvider.gemini.hasKey { fail("ما فيه مفتاح Gemini. أضفه من النماذج ← السحابية."); return }
@@ -748,7 +758,15 @@ final class ChatStore: ObservableObject {
                 // ١) نموذج المحادثة يكتب وصف إنجليزي (المحركات المحلية ما تفهم عربي)
                 // بدون نموذج المحادثة (أسرع وذاكرة أقل) إلا لو الوصف عربي والمحرك ما يفهمه، أو «حسّن الوصف» شغّال
                 var spec: (String, String)?
-                if !ImageIntent.needsModel(request, engine: engine) {
+                if source != nil, engine == .klein {
+                    // «دقيق» يعدّل بتعليمة قصيرة (مو وصف مشهد كامل)، فنترجمها بس لو مو إنجليزي
+                    if ImageIntent.isEnglish(request) {
+                        spec = (request, "")
+                    } else {
+                        status("أكتب التعليمة…")
+                        spec = await Self.editPrompt(for: request).map { ($0, "") }
+                    }
+                } else if !ImageIntent.needsModel(request, engine: engine) {
                     spec = (request, ImageIntent.defaultNegative)
                     slog("image: prompt direct (english=\(ImageIntent.isEnglish(request)))")
                 } else {
@@ -776,7 +794,8 @@ final class ChatStore: ObservableObject {
                 slog("image: prompt=\(prompt.prefix(200)) negative=\(negative.prefix(120))")
                 // ٢) المحلي يحتاج ذاكرة: نفك النموذج اللغوي وقت الرسم ونرجعه بعدين
                 if engine.isLocal { reloadLLM = await ModelManager.shared.unloadForImage() }
-                let img = try await ImageGenerator.shared.generate(engine: engine, prompt: prompt, negative: negative, status: status)
+                let img = try await ImageGenerator.shared.generate(engine: engine, prompt: prompt, negative: negative,
+                                                                   source: source?.imageURL, status: status)
                 try Task.checkCancellation()
                 self.setGenImage(bid, in: conv, img)
             } catch is CancellationError {
@@ -837,6 +856,27 @@ final class ChatStore: ObservableObject {
         }
         let n = (j["negative"] as? String) ?? ((j["negative"] as? [String])?.joined(separator: ", ") ?? "")
         return (p, n.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// تعليمة تعديل صورة: ترجمة إنجليزية قصيرة بنفس المعنى (بدون إضافات) لـFLUX.2 klein
+    static func editPrompt(for request: String) async -> String? {
+        let sys = """
+        You translate image-editing requests for an image-editing model. The user gives an instruction (any language) about a photo they attached. \
+        Reply with JSON only: {"prompt": "<one short, clear English edit instruction, max 40 words>"}. \
+        Keep the user's intent exactly; describe only what to change and anything that must stay the same; do not add new ideas. No other text.
+        """
+        guard let s = try? await LLMService.shared.stream(system: sys, history: [], user: String(request.prefix(600)), maxTokens: 120) else { return nil }
+        var out = ""
+        do { for try await c in s { out += c } } catch { return nil }
+        let answer = splitThinking(out).answer
+        guard let a = answer.firstIndex(of: "{"), let b = answer.lastIndex(of: "}"), a < b,
+              let d = String(answer[a...b]).data(using: .utf8),
+              let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+              let p = (j["prompt"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty else {
+            slog("image: edit prompt json failed: \(out.prefix(300))")
+            return nil
+        }
+        return p
     }
 
     /// يعدّل رسالة موجودة في مكانها

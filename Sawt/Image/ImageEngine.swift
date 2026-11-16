@@ -39,6 +39,8 @@ enum ImageEngine: String, CaseIterable, Identifiable {
     /// محركات MLX اللي تستخدم مُرمّز Qwen3-4B المشترك
     var usesQwen: Bool { self == .klein || self == .zimage }
     var isGemini: Bool { self == .gemini || self == .geminiLite }
+    /// يقبل صورة مع الوصف: «دقيق» يعدّلها فعلًا (FLUX.2 klein)، و«واقعي+» يعيد رسمها كاملة (SDEdit)
+    var canEdit: Bool { self == .klein || self == .zimage }
 
     var geminiModel: String { self == .geminiLite ? "gemini-3.1-flash-lite-image" : "gemini-3.1-flash-image" }
 
@@ -329,8 +331,12 @@ actor ImageGenerator {
 
     static var outDir: URL { Attachments.dir }
 
-    func generate(engine: ImageEngine, prompt: String, negative: String,
+    /// source: صورة للتعديل («دقيق» يعدّلها، «واقعي+» يعيد رسمها). المحركات الثانية ما تقبلها.
+    func generate(engine: ImageEngine, prompt: String, negative: String, source: URL? = nil,
                   status: @escaping @Sendable (String) -> Void) async throws -> GeneratedImage {
+        if source != nil, !engine.canEdit {
+            throw SawtError.failed("«\(engine.title)» ما يعدّل الصور. اختر «دقيق» أو «واقعي+».")
+        }
         let img: CGImage
         var used = prompt
         switch engine {
@@ -341,7 +347,7 @@ actor ImageGenerator {
             if used != prompt { slog("image: prompt trimmed to 75 CLIP tokens") }
             img = try await runSD(engine, prompt: used, negative: neg, status: status)
         case .klein, .zimage:
-            img = try await runMLX(engine, prompt: prompt, status: status)
+            img = try await runMLX(engine, prompt: prompt, source: source, status: status)
         case .playground:
             img = try await runPlayground(prompt: prompt, status: status)
         case .gemini, .geminiLite:
@@ -443,7 +449,7 @@ actor ImageGenerator {
 
     // MARK: «دقيق» (Bonsai Image: FLUX.2 Klein 4B ثلاثي على MLX)
 
-    private func runMLX(_ e: ImageEngine, prompt: String, status: @escaping @Sendable (String) -> Void) async throws -> CGImage {
+    private func runMLX(_ e: ImageEngine, prompt: String, source: URL?, status: @escaping @Sendable (String) -> Void) async throws -> CGImage {
         guard SDModels.installed(e) else { throw SawtError.failed("نموذج «\(e.title)» مو منزّل. نزّله من الإعدادات ← الصور.") }
         guard ProcessInfo.processInfo.physicalMemory >= 7_000_000_000 else {
             throw SawtError.failed("«\(e.title)» يحتاج جوال بذاكرة 8GB أو أكثر.")
@@ -453,6 +459,7 @@ actor ImageGenerator {
         let seed = UInt64.random(in: 0 ... UInt64(UInt32.max))
         let onPhase: (String) -> Void = { phase in
             switch phase {
+            case "source": status("أقرأ صورتك…"); ImageProgress.post(.loading)
             case "encode": status("أقرأ الوصف…"); ImageProgress.post(.loading)
             case "load": status("أحمّل نموذج الصور…"); ImageProgress.post(.loading)
             default: status("أجهّز الصورة…"); ImageProgress.post(.decoding)
@@ -464,9 +471,9 @@ actor ImageGenerator {
         }
         let img: CGImage
         if e == .klein {
-            img = try await KleinPipeline.generate(dir: SDModels.dir(e), prompt: prompt, seed: seed, onPhase: onPhase, onStep: onStep)
+            img = try await KleinPipeline.generate(dir: SDModels.dir(e), prompt: prompt, seed: seed, source: source, onPhase: onPhase, onStep: onStep)
         } else {
-            img = try await ZImagePipeline.generate(dir: SDModels.dir(e), prompt: prompt, seed: seed, onPhase: onPhase, onStep: onStep)
+            img = try await ZImagePipeline.generate(dir: SDModels.dir(e), prompt: prompt, seed: seed, source: source, onPhase: onPhase, onStep: onStep)
         }
         if Task.isCancelled { throw CancellationError() }
         status("أحفظ الصورة…")

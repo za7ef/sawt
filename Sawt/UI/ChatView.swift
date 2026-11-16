@@ -417,6 +417,8 @@ struct ChatView: View {
             }
             Section {
                 Button { imageMode = true; focused = true } label: { Label("صورة", systemImage: "paintbrush") }
+                // تعديل صورة: نختار الصورة، والوصف يقول وش يتغيّر («دقيق» يعدّل، «واقعي+» يعيد الرسم)
+                Button { imageMode = true; showPhotos = true } label: { Label("عدّل صورة", systemImage: "wand.and.stars") }
                 Menu {
                     Picker("محرك الصور", selection: $imageEngineRaw) {
                         ForEach(ImageEngine.allCases) { e in
@@ -526,7 +528,7 @@ struct ChatView: View {
                 stateChips
                 HStack(alignment: .bottom, spacing: 4) {
                     attachMenu
-                    ComposerField(text: $draft, placeholder: dictation.isRecording ? "أسمعك…" : (imageMode ? "صِف الصورة" : "اسأل صوت"),
+                    ComposerField(text: $draft, placeholder: dictation.isRecording ? "أسمعك…" : (imageMode ? (pending.contains { $0.kind == .image } ? "وش تبي تغيّر في الصورة؟" : "صِف الصورة") : "اسأل صوت"),
                                   focused: $focused, clearToken: sendGen)
                     micButton
                     actionButton.padding(.trailing, 4)
@@ -594,7 +596,9 @@ struct ChatView: View {
     private func send() {
         // الصورة ما تحتاج نموذج المحادثة لو الوصف يروح مباشرة (إنجليزي، أو عربي لـGemini) والتحسين طافي
         let raw = (ComposerField.currentText().flatMap { $0.isEmpty ? nil : $0 } ?? draft).trimmingCharacters(in: .whitespacesAndNewlines)
-        let isImage = pending.isEmpty && (imageMode || ImageIntent.forced(raw) || ImageIntent.verdict(raw))
+        // تعديل صورة: وضع الصورة (أو «/صورة») مع صورة مرفقة وحدة بالضبط
+        let editSource = pending.count == 1 && pending[0].kind == .image && (imageMode || ImageIntent.forced(raw)) ? pending[0] : nil
+        let isImage = editSource != nil || (pending.isEmpty && (imageMode || ImageIntent.forced(raw) || ImageIntent.verdict(raw)))
         let needsLLM = !isImage || ImageIntent.needsModel(ImageIntent.strip(raw), engine: ImageEngine.selected)
         guard !needsLLM || models.llm.isReady || CloudLLM.active != nil
                 || (LLMService.onCPU && LlamaModelFile.isDownloaded) else {
@@ -610,6 +614,11 @@ struct ChatView: View {
         draft = ""
         pending = []
         // التفضية الفعلية (وإنهاء إملاء النظام) تصير داخل ComposerField لما يتغير sendGen
+        if let editSource, !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            imageMode = false
+            store.generateImage(t.trimmingCharacters(in: .whitespacesAndNewlines), source: editSource)
+            return
+        }
         if imageMode, atts.isEmpty, !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             imageMode = false
             store.generateImage(t.trimmingCharacters(in: .whitespacesAndNewlines))

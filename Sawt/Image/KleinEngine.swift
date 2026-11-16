@@ -200,11 +200,13 @@ final class KleinTransformer {
     }
 
     /// cos/sin لكل موضع: [S, 128]. المواضع: النص (0,0,0,l) ثم الصورة (0,y,x,0)
-    static func rope(textLen: Int, h: Int, w: Int) -> (cos: MLXArray, sin: MLXArray) {
+    /// ثم الصورة المرجعية للتعديل (10,y,x,0) — نفس Flux2KleinPipeline: الزمن T = 10 + 10·i للمرجع رقم i
+    static func rope(textLen: Int, h: Int, w: Int, ref: (h: Int, w: Int)? = nil) -> (cos: MLXArray, sin: MLXArray) {
         var ids: [Int32] = []
-        ids.reserveCapacity((textLen + h * w) * 4)
+        ids.reserveCapacity((textLen + h * w + (ref.map { $0.h * $0.w } ?? 0)) * 4)
         for l in 0 ..< textLen { ids += [0, 0, 0, Int32(l)] }
         for y in 0 ..< h { for x in 0 ..< w { ids += [0, Int32(y), Int32(x), 0] } }
+        if let ref { for y in 0 ..< ref.h { for x in 0 ..< ref.w { ids += [10, Int32(y), Int32(x), 0] } } }
         let pos = MLXArray(ids).reshaped([-1, 4]).asType(.float32)
         var cs: [MLXArray] = [], ss: [MLXArray] = []
         for a in 0 ..< 4 {
@@ -439,6 +441,22 @@ final class KleinVAE {
         bnVar = v
     }
 
+    /// صورة [1, H, W, 3] → كامن مرقّع ومطبّع [1, H/16, W/16, 128] (نفس _encode_vae_image في diffusers)
+    static func encode(_ px: MLXArray, dir: URL) throws -> MLXArray {
+        let file = dir.appendingPathComponent("diffusion_pytorch_model.safetensors")
+        let enc = try VAEEncoder(file: file, pytorchLayout: true)
+        let z = enc.encode(px)   // [1, H/8, W/8, 32]
+        let s = z.shape
+        // ترقيع 2×2: القناة = c·4 + p1·2 + p2 (عكس decode)
+        let p = z.reshaped([s[0], s[1] / 2, 2, s[2] / 2, 2, s[3]]).transposed(0, 1, 3, 5, 2, 4)
+            .reshaped([s[0], s[1] / 2, s[2] / 2, s[3] * 4])
+        let bn = try loadArrays(url: file)
+        guard let m = bn["bn.running_mean"], let v = bn["bn.running_var"] else { throw KleinError.missing("vae") }
+        let out = (p - m.asType(.float32)) / MLX.sqrt(v.asType(.float32) + 1e-4)
+        eval(out)
+        return out
+    }
+
     /// الكامن المرقّع [1, h, w, 128] → صورة [1, 16h, 16w, 3]
     func decode(_ patchified: MLXArray) -> MLXArray {
         let s = patchified.shape
@@ -476,11 +494,24 @@ enum KleinPipeline {
     }
 
     /// يرسم صورة. status للنص، step(k, n) للتقدم. يفك كل جزء من الذاكرة بعد ما يخلص.
-    static func generate(dir: URL, prompt: String, seed: UInt64,
+    /// source: صورة للتعديل (وصف + صورة): تدخل كصورة مرجعية بجنب الكامن، والناتج بنفس أبعادها (≤ 512²)
+    static func generate(dir: URL, prompt: String, seed: UInt64, source: URL? = nil,
                          onPhase: @escaping (String) -> Void,
                          onStep: @escaping (Int, Int) -> Void) async throws -> CGImage {
-        let size = Klein.size
-        let lh = size / 16, lw = size / 16
+        var lh = Klein.size / 16, lw = Klein.size / 16
+
+        // ٠) الصورة المرجعية للتعديل: نرمّزها أول، قبل ما نحمّل الأشياء الثقيلة
+        var refTokens: MLXArray?
+        if let source {
+            onPhase("source")
+            let img = try EditImage.load(source)
+            lh = img.h / 16; lw = img.w / 16
+            let z = try KleinVAE.encode(img.pixels, dir: dir.appendingPathComponent("vae"))
+            refTokens = z.reshaped([1, lh * lw, 128])
+            MLX.Memory.clearCache()
+            slog("klein: edit source \(img.w)x\(img.h) encoded footprint=\(RAM.footprintMB)MB")
+            try Task.checkCancellation()
+        }
 
         // ١) النص
         onPhase("encode")
@@ -498,18 +529,28 @@ enum KleinPipeline {
         var latents = MLXRandom.normal([1, lh * lw, 128], key: MLXRandom.key(seed))
         do {
             let tr = try KleinTransformer(dir: dir.appendingPathComponent("transformer-packed-mflux"))
-            let rope = KleinTransformer.rope(textLen: ctx.dim(1), h: lh, w: lw)
+            let rope = KleinTransformer.rope(textLen: ctx.dim(1), h: lh, w: lw, ref: refTokens == nil ? nil : (lh, lw))
+            // mu من طول تسلسل الناتج بس (بدون المرجع)، مثل diffusers
             let sig = sigmas(steps: Klein.steps, seqLen: lh * lw)
             onStep(0, Klein.steps)
             for i in 0 ..< Klein.steps {
                 try Task.checkCancellation()
-                let v = tr(latents, ctx: ctx, sigma: sig[i], rope: rope)
+                var v: MLXArray
+                if let refTokens {
+                    // [الكامن ‖ المرجع] بنفس الزمن، وناخذ مخرج الكامن بس
+                    let both = concatenated([latents, refTokens.asType(latents.dtype)], axis: 1)
+                    v = tr(both, ctx: ctx, sigma: sig[i], rope: rope)
+                    v = v[0..., 0 ..< (lh * lw), 0...]
+                } else {
+                    v = tr(latents, ctx: ctx, sigma: sig[i], rope: rope)
+                }
                 latents = latents + (sig[i + 1] - sig[i]) * v
                 eval(latents)
                 onStep(i + 1, Klein.steps)
             }
         }
         ctx = MLXArray(0)
+        refTokens = nil
         MLX.Memory.clearCache()
         slog("klein: denoised footprint=\(RAM.footprintMB)MB")
 

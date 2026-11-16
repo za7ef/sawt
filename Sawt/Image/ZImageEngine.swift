@@ -164,11 +164,29 @@ enum ZImagePipeline {
         return out
     }
 
-    static func generate(dir: URL, prompt: String, seed: UInt64,
+    /// قوة إعادة الرسم من صورة (SDEdit): نسبة الخطوات اللي تنعاد (0.7 = يغيّر كثير ويحافظ على التكوين والألوان)
+    static let editStrength: Float = 0.7
+
+    /// source: صورة يعيد رسمها مع الوصف (SDEdit). Z-Image Turbo ما فيه تعديل حقيقي، فيعيد رسم الصورة كلها.
+    static func generate(dir: URL, prompt: String, seed: UInt64, source: URL? = nil,
                          onPhase: @escaping (String) -> Void,
                          onStep: @escaping (Int, Int) -> Void) async throws -> CGImage {
-        let size = ZImage.size
-        let lh = size / 16, lw = size / 16   // رقع 2×2 على كامن بدقة 1/8
+        var lh = ZImage.size / 16, lw = ZImage.size / 16   // رقع 2×2 على كامن بدقة 1/8
+
+        // ٠) صورة المصدر: نرمّزها ونرقّعها بنفس ترتيب فك الرقع تحت
+        var start: MLXArray?
+        if let source {
+            onPhase("source")
+            let img = try EditImage.load(source)
+            lh = img.h / 16; lw = img.w / 16
+            let enc = try VAEEncoder(file: dir.appendingPathComponent("vae/0.safetensors"), pytorchLayout: false)
+            let z = (enc.encode(img.pixels) - ZImage.vaeShift) * ZImage.vaeScale   // [1, 2lh, 2lw, 16]
+            start = z.reshaped([1, lh, 2, lw, 2, 16]).transposed(0, 1, 3, 2, 4, 5).reshaped([1, lh * lw, 64])
+            eval(start!)
+            MLX.Memory.clearCache()
+            slog("zimage: sdedit source \(img.w)x\(img.h) encoded footprint=\(RAM.footprintMB)MB")
+            try Task.checkCancellation()
+        }
 
         // ١) النص (المُرمّز المشترك)
         onPhase("encode")
@@ -187,17 +205,25 @@ enum ZImagePipeline {
         do {
             let tr = try ZImageTransformer(dir: dir.appendingPathComponent("transformer"))
             let sig = sigmas(steps: ZImage.steps)
-            onStep(0, ZImage.steps)
-            for i in 0 ..< ZImage.steps {
+            // SDEdit مثل img2img في diffusers: نتخطى أول الخطوات ونبدأ من الصورة مخلوطة بالضجيج عند sigma البداية
+            var first = 0
+            if let start {
+                first = ZImage.steps - min(ZImage.steps, Int(Float(ZImage.steps) * editStrength))
+                latents = (1 - sig[first]) * start.asType(latents.dtype) + sig[first] * latents
+                eval(latents)
+            }
+            onStep(0, ZImage.steps - first)
+            for i in first ..< ZImage.steps {
                 try Task.checkCancellation()
                 let out = tr(latents, cap: cap, sigma: sig[i], h: lh, w: lw)
                 // السرعة = −مخرج النموذج
                 latents = latents - (sig[i + 1] - sig[i]) * out
                 eval(latents)
-                onStep(i + 1, ZImage.steps)
+                onStep(i + 1 - first, ZImage.steps - first)
             }
         }
         cap = MLXArray(0)
+        start = nil
         MLX.Memory.clearCache()
         slog("zimage: denoised footprint=\(RAM.footprintMB)MB")
 
