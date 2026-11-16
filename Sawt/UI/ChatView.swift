@@ -266,14 +266,12 @@ struct ChatView: View {
                 LazyVStack(spacing: 14) {
                     ForEach((store.current?.messages ?? []).filter { $0.id != store.pacingID }) { m in
                         MessageRow(message: m).equatable().id(m.id)
-                            .transition(m.role == .user
-                                ? .asymmetric(insertion: .offset(y: 18).combined(with: .opacity).combined(with: .scale(scale: 0.95, anchor: .bottomTrailing)),
-                                              removal: .identity)
-                                : .identity)
                     }
                     if store.isGenerating || store.pacingID != nil, !store.imageGenerating {
                         StreamingRow(live: store.live, onGrow: {
-                            if nearBottom { proxy.scrollTo("bottom", anchor: .bottom) } else if !hasNew { hasNew = true }
+                            // ما نمرّر بالكود هنا: مرساة التمرير السفلية (sizeChanges) تلحق النمو بنفسها،
+                            // والتمرير المزدوج كان يتعارك معها ويرجّف القائمة لما تمتلي الشاشة
+                            if !nearBottom && !hasNew { hasNew = true }
                         }, onCaughtUp: { store.endPacing() })
                             .id("stream")
                     }
@@ -283,6 +281,8 @@ struct ChatView: View {
                 .padding(.top, 8)
             }
             .scrollDismissesKeyboard(.interactively)
+            // لمسة على المحادثة تقفل الكيبورد (متزامنة، فأزرار الرسائل والروابط تشتغل عادي)
+            .simultaneousGesture(TapGesture().onEnded { if focused { focused = false } })
             // المحادثة القصيرة تبدأ من فوق؛ الطويلة تفتح على آخر رسالة، ولما تتغيّر المساحة (الكيبورد) تبقى ملزّقة تحت
             .defaultScrollAnchor(.top, for: .alignment)
             .defaultScrollAnchor(.bottom, for: .initialOffset)
@@ -331,9 +331,12 @@ struct ChatView: View {
             .onAppear { scrollToEnd(proxy, delayed: true) }
             .onChange(of: store.current?.messages.count) {
                 // رسالة جديدة: ننزل لو المستخدم تحت، أو لو آخر رسالة منه (أرسل للتو)
-                if !nearBottom && store.current?.messages.last?.role != .user { hasNew = true }
-                if nearBottom || store.current?.messages.last?.role == .user {
+                // لو أنت تحت، المرساة السفلية تلحق لحالها (تمرير ثاني فوقها = رجفة). ننزل بالكود بس لو كنت فوق وأرسلت
+                let mine = store.current?.messages.last?.role == .user
+                if !nearBottom && !mine { hasNew = true }
+                if !nearBottom && mine {
                     withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                    nearBottom = true
                 }
             }
             .onChange(of: store.currentID) { scrollToEnd(proxy, delayed: true) }
@@ -527,6 +530,7 @@ struct ChatView: View {
                                   focused: $focused, clearToken: sendGen)
                     micButton
                     actionButton.padding(.trailing, 4)
+                        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: actionKind)
                 }
                 // خانة 52: عناصر بارتفاع 44 + 4 فوق وتحت، والدائرة 36 تبعد 8 عن الحافة
                 .padding(.vertical, 4)
@@ -547,6 +551,10 @@ struct ChatView: View {
         } message: {
             Text("سؤالك بيروح لمحرك بحث (DuckDuckGo، أو ويكيبيديا كبديل) عشان يجيب صفحات، والباقي يظل على جوالك. لما تطفي البحث ينقطع التطبيق عن الإنترنت.")
         }
+    }
+
+    private var actionKind: Int {
+        store.isGenerating ? 2 : (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pending.isEmpty) ? 1 : 0
     }
 
     /// الزر الأزرق داخل الخانة: إيقاف وقت التوليد، إرسال لو فيه نص، وإلا مكالمة صوتية
@@ -647,6 +655,14 @@ struct MessageRow: View, Equatable {
     let message: Message
     var streaming = false
     @State private var showMemory = false
+    /// false لرسالة جديدة لسا ما دخلت: فقاعتك تنزلق، وفي الرد يظهر اسم النموذج وصف الأدوات بتلاشي
+    @State private var entered: Bool
+
+    init(message: Message, streaming: Bool = false) {
+        self.message = message
+        self.streaming = streaming
+        _entered = State(initialValue: !ChatStore.shared.freshIDs.contains(message.id))
+    }
 
     static func == (a: MessageRow, b: MessageRow) -> Bool { a.message == b.message && a.streaming == b.streaming }
 
@@ -666,6 +682,10 @@ struct MessageRow: View, Equatable {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 16).padding(.vertical, 11)
                         .background(Theme.userBubble, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        // حركة بصرية بس (ما تغيّر التخطيط، فما تتعارك مع التمرير)
+                        .scaleEffect(entered ? 1 : 0.95, anchor: .bottomTrailing)
+                        .offset(y: entered ? 0 : 16)
+                        .opacity(entered ? 1 : 0)
                     if message.viaVoice {
                         Image(systemName: "waveform").font(.caption2).foregroundStyle(.tertiary)
                     }
@@ -674,6 +694,7 @@ struct MessageRow: View, Equatable {
                 VStack(alignment: .leading, spacing: 6) {
                     if let m = message.model, !m.isEmpty {
                         Text(m).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            .opacity(entered ? 1 : 0)
                     }
                     if message.memorySaved == true {
                         Button { showMemory = true } label: {
@@ -748,11 +769,17 @@ struct MessageRow: View, Equatable {
                         .foregroundStyle(Color.gray.opacity(0.75))
                         .buttonStyle(.plain)
                         .padding(.top, 2)
+                        .opacity(entered ? 1 : 0)
                     }
                 }
             }
         }
-        .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity), removal: .opacity))
+        .onAppear {
+            guard !entered else { return }
+            ChatStore.shared.freshIDs.remove(message.id)
+            if UIAccessibility.isReduceMotionEnabled { entered = true; return }
+            withAnimation(message.role == .user ? .spring(response: 0.28, dampingFraction: 0.85) : .easeOut(duration: 0.25)) { entered = true }
+        }
         .sheet(isPresented: $showMemory) { NavigationStack { MemoryView() } }
     }
 }

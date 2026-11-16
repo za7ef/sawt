@@ -99,6 +99,8 @@ final class ChatStore: ObservableObject {
     @Published var isGenerating = false
     /// رسالة الرد اللي للحين تنعرض بالإيقاع (مخفية من القائمة لين يلحق العرض)
     @Published var pacingID: UUID?
+    /// رسائل جديدة لسا ما انعرضت: تدخل بحركة أول ما تظهر (مو لما ترجع للمحادثة)
+    var freshIDs = Set<UUID>()
     /// رسم صورة شغال (ما نعرض فقاعة الرد الجاري)
     @Published var imageGenerating = false
     @Published var error: String?
@@ -412,8 +414,9 @@ final class ChatStore: ObservableObject {
         var userMsg = Message(role: .user, text: t)
         if !attachments.isEmpty { userMsg.attachments = attachments }
         pacingID = nil
-        // فقاعتك تطلع من تحت بانزلاق خفيف وتلاشي
-        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) { append(userMsg) }
+        // فقاعتك تدخل بحركة خاصة فيها (مو withAnimation على القائمة كلها: كانت تحرّك التخطيط والتمرير مع بعض وتسبب رجفة)
+        freshIDs.insert(userMsg.id)
+        append(userMsg)
         let convID = currentID
         genConv = convID
         latestPartial = ""
@@ -669,7 +672,8 @@ final class ChatStore: ObservableObject {
 
     /// العرض لحق آخر الرد: نعرض الرسالة النهائية
     func endPacing() {
-        guard pacingID != nil else { return }
+        guard let id = pacingID else { return }
+        freshIDs.insert(id)
         pacingID = nil
         if !isGenerating { live.reset() }
     }
