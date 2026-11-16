@@ -10,12 +10,20 @@ struct ImageModelsSection: View {
     @State private var probeNote: String?
     @State private var probing = false
     @State private var confirmDelete: ImageEngine?
+    @AppStorage("imageEnhance") private var enhance = true
 
     var body: some View {
         Section {
             Picker("المحرك", selection: $engineRaw) {
                 Text("ما اخترت").tag("")
                 ForEach(ImageEngine.allCases) { e in Text("\(e.title) · \(e.tag)").tag(e.rawValue) }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("حسّن الوصف بالنموذج", isOn: $enhance)
+                Text(enhance
+                     ? "الوصف العربي يكتبه نموذج المحادثة بالإنجليزي قبل الرسم. الوصف الإنجليزي يروح مباشرة دايمًا (أسرع وبدون تحميل النموذج)."
+                     : "الوصف العربي يروح زي ما هو: Stable Diffusion وImage Playground ما يفهمون عربي، Gemini يفهمه. الإنجليزي يروح مباشرة.")
+                    .font(.caption).foregroundStyle(enhance ? Color.secondary : Color.orange)
             }
             ForEach([ImageEngine.sd21, .sdTurbo]) { sdRow($0) }
             playgroundRow

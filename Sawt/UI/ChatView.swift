@@ -569,7 +569,11 @@ struct ChatView: View {
     }
 
     private func send() {
-        guard models.llm.isReady || CloudLLM.active != nil
+        // الصورة ما تحتاج نموذج المحادثة لو الوصف إنجليزي أو التحسين طافي
+        let raw = (ComposerField.currentText().flatMap { $0.isEmpty ? nil : $0 } ?? draft).trimmingCharacters(in: .whitespacesAndNewlines)
+        let isImage = pending.isEmpty && (imageMode || ImageIntent.forced(raw) || ImageIntent.verdict(raw))
+        let needsLLM = !isImage || (ImageIntent.enhance && !ImageIntent.isEnglish(ImageIntent.strip(raw)))
+        guard !needsLLM || models.llm.isReady || CloudLLM.active != nil
                 || (LLMService.onCPU && LlamaModelFile.isDownloaded) else {
             store.error = models.llm.isBusy ? "النموذج للحين يتجهز، لحظات." : "اختر نموذج ونزّله من شاشة النماذج أول."
             if !models.llm.isBusy { showModels = true }

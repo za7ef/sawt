@@ -660,9 +660,16 @@ final class ChatStore: ObservableObject {
             var reloadLLM = false
             do {
                 // ١) نموذج المحادثة يكتب وصف إنجليزي (المحركات المحلية ما تفهم عربي)
-                status("أكتب وصف الصورة…")
-                var spec = await Self.imagePrompt(for: request)
-                if spec == nil, engine.isGemini { spec = (request, "") }   // Gemini يفهم العربي
+                // الوصف الإنجليزي يروح مباشرة (بدون نموذج المحادثة: أسرع وذاكرة أقل)
+                var spec: (String, String)?
+                if ImageIntent.isEnglish(request) || !ImageIntent.enhance {
+                    spec = (request, ImageIntent.defaultNegative)
+                    slog("image: prompt direct (english=\(ImageIntent.isEnglish(request)))")
+                } else {
+                    status("أكتب وصف الصورة…")
+                    spec = await Self.imagePrompt(for: request)
+                    if spec == nil, engine.isGemini { spec = (request, "") }   // Gemini يفهم العربي
+                }
                 guard let sp = spec else {
                     throw SawtError.failed("ما قدرت أكتب وصف إنجليزي للصورة (نموذج المحادثة مو جاهز؟). جرّب مرة ثانية.")
                 }
@@ -753,6 +760,21 @@ enum ImageIntent {
     static let imageWords = ["صورة", "صوره", "رسمة", "رسمه", "لوحة", "لوحه", "خلفية", "خلفيه", "شعار"]
     /// أشياء على الجوال نفسه (لقطة شاشة، الصور في الاستوديو) مو رسم
     static let phoneWords = ["لقطة", "سكرين", "الاستوديو", "الألبوم", "البوم", "الكاميرا", "صورة الشاشة", "صوري", "ارسل", "أرسل"]
+
+    /// «حسّن الوصف بالنموذج» (افتراضيًا شغّال): الوصف العربي يكتبه نموذج المحادثة بالإنجليزي
+    static var enhance: Bool { UserDefaults.standard.object(forKey: "imageEnhance") as? Bool ?? true }
+
+    /// أشياء نتجنبها افتراضيًا في Stable Diffusion لما الوصف يروح مباشرة
+    static let defaultNegative = "blurry, low quality, lowres, distorted, deformed, bad anatomy, extra fingers, watermark, text, signature, jpeg artifacts"
+
+    /// الوصف إنجليزي لو أغلب حروفه لاتينية (٨٠٪ أو أكثر)
+    static func isEnglish(_ t: String) -> Bool {
+        var latin = 0, other = 0
+        for u in t.unicodeScalars where CharacterSet.letters.contains(u) {
+            if u.isASCII { latin += 1 } else { other += 1 }
+        }
+        return latin > 0 && Double(latin) >= Double(latin + other) * 0.8
+    }
 
     static func forced(_ t: String) -> Bool {
         let l = t.lowercased()
