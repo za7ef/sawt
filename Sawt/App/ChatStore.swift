@@ -204,6 +204,23 @@ final class ChatStore: ObservableObject {
         save()
     }
 
+    /// يبدأ مهمة على الجوال من المحادثة (فقاعة حالة + الوكيل)
+    private func startPhoneTask(_ t: String, goal g: String) {
+        append(Message(role: .user, text: t))
+        let bubble = Message(role: .assistant, text: "تمام، جاري تنفيذ المهمة…")
+        append(bubble)
+        let conv = currentID
+        Task { @MainActor in
+            // لو الوكيل مشغول ما نسرق فقاعة المهمة الحالية
+            if PhoneAgent.shared.running {
+                self.updateText(bubble.id, in: conv, "🤖 ما بديت: الوكيل شغّال على مهمة ثانية — قل «وقف» أول", save: true)
+                return
+            }
+            PhoneAgent.shared.chatTarget = (conv, bubble.id)
+            PhoneAgent.shared.start(g)
+        }
+    }
+
     /// يفصل التفكير عن الجواب إذا النموذج كتب </think> بدون بداية (بعض قوالب Qwen تبدأ التفكير بنفسها).
     static func splitThinking(_ s: String) -> (thinking: String, answer: String) {
         guard let r = s.range(of: "</think>") else { return ("", s) }
@@ -212,27 +229,31 @@ final class ChatStore: ObservableObject {
     }
 
     func send(_ text: String, attachments: [Attachment] = [], web webAlways: Bool = false, webAuto: Bool = false,
-              onFail: @escaping (String) -> Void = { _ in }) {
+              phoneChecked: Bool = false, onFail: @escaping (String) -> Void = { _ in }) {
         var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty || !attachments.isEmpty, !isGenerating else { return }
         if t.isEmpty { t = attachments.contains { $0.kind == .image } ? "وش تشوف في الصورة؟" : "لخّص لي الملف باختصار." }
         // أمر للوكيل: "/جوال افتح الملاحظات..." أو "جوال: ..."
-        // المشغّل شغّال (مثل Poki): أي رسالة نصية بدون مرفقات تروح للوكيل كمهمة
-        if let g = PhoneAgentTrigger.goal(t) ?? (attachments.isEmpty && UserDefaults.standard.bool(forKey: "xctAutomation") ? t : nil) {
-            append(Message(role: .user, text: t))
-            let bubble = Message(role: .assistant, text: "تمام، جاري تنفيذ المهمة…")
-            append(bubble)
-            let conv = currentID
-            Task { @MainActor in
-                // لو الوكيل مشغول ما نسرق فقاعة المهمة الحالية
-                if PhoneAgent.shared.running {
-                    self.updateText(bubble.id, in: conv, "🤖 ما بديت: الوكيل شغّال على مهمة ثانية — قل «وقف» أول", save: true)
-                    return
+        // «/جوال …» دايمًا مهمة. والمشغّل شغّال: نحدد النية أول (قواعد سريعة، وإذا مو واضح نسأل نموذج المحادثة نعم/لا)
+        if let g = PhoneAgentTrigger.goal(t) { startPhoneTask(t, goal: g); return }
+        if !phoneChecked, attachments.isEmpty, UserDefaults.standard.bool(forKey: "xctAutomation") {
+            switch PhoneIntent.verdict(t) {
+            case .yes:
+                slog("chat: phone intent rule → task")
+                startPhoneTask(t, goal: t); return
+            case .no:
+                slog("chat: phone intent rule → chat")
+            case .unsure:
+                let msg = t
+                Task { @MainActor in
+                    let c0 = Date()
+                    let task = await LLMService.shared.classifyPhoneTask(msg)
+                    slog("chat: phone intent classifier → \(task ? "task" : "chat") in \(Int(Date().timeIntervalSince(c0) * 1000))ms")
+                    if task { self.startPhoneTask(msg, goal: msg) }
+                    else { self.send(msg, attachments: attachments, web: webAlways, webAuto: webAuto, phoneChecked: true, onFail: onFail) }
                 }
-                PhoneAgent.shared.chatTarget = (conv, bubble.id)
-                PhoneAgent.shared.start(g)
+                return
             }
-            return
         }
         let earlier = (current?.messages ?? []).flatMap { $0.attachments ?? [] }
         // تفكير عميق يطفي إذا الجوال حار (يطول ويسخّن أكثر)
@@ -541,5 +562,32 @@ final class ChatStore: ObservableObject {
         conversations[i].messages.append(m)
         conversations[i].updated = Date()
         save()
+    }
+}
+
+
+/// نية تنفيذ مهمة على الجوال (قواعد سريعة قبل المصنّف)
+enum PhoneIntent {
+    enum Verdict { case yes, no, unsure }
+    static let verbsAR = ["افتح", "افتحي", "روح", "رح ل", "ارسل", "أرسل", "اضغط", "شغل", "شغّل", "طفي", "طفّي", "سكر", "سكّر",
+                          "اتصل", "دق على", "ابحث في", "دور في", "اكتب في", "اكتب له", "اكتب لها", "فعّل", "فعل", "عطّل", "حمّل", "نزّل",
+                          "صوّر", "ارجع للرئيسية", "امسح", "احذف", "غيّر", "غير الإعداد", "خذ لقطة"]
+    static let verbsEN = ["open ", "go to ", "send ", "tap ", "call ", "turn on", "turn off", "launch ", "play ", "search in ", "text "]
+    static let chatHints = ["وش", "ايش", "إيش", "ليش", "كيف", "مين", "متى", "كم", "هل ", "اشرح", "عرّف", "عطني", "قول لي", "قل لي", "اكتب لي",
+                            "what", "why", "how", "who", "when", "explain", "write me", "tell me"]
+    static let greetings = ["هلا", "اهلا", "أهلا", "السلام", "سلام", "مرحبا", "صباح", "مساء", "شكرا", "يعطيك", "hi", "hello", "hey", "thanks", "ok", "تمام", "طيب"]
+
+    static func verdict(_ text: String) -> Verdict {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let l = t.lowercased()
+        let words = l.split(whereSeparator: { $0 == " " || $0 == "\n" })
+        if words.count <= 3, greetings.contains(where: { l.hasPrefix($0) }) { return .no }
+        let first = String(words.first ?? "")
+        // يبدأ بفعل أمر للجوال
+        if verbsAR.contains(where: { l.hasPrefix($0) }) || verbsEN.contains(where: { l.hasPrefix($0) }) { return .yes }
+        if verbsAR.contains(first) { return .yes }
+        if chatHints.contains(where: { l.hasPrefix($0) }) || l.hasSuffix("؟") || l.hasSuffix("?") { return .no }
+        if words.count <= 1 { return .no }
+        return .unsure
     }
 }

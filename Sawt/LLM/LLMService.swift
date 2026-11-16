@@ -51,6 +51,17 @@ actor LLMService {
         return out.uppercased().contains("THINK")
     }
 
+    /// مصنّف سريع: هل الرسالة تطلب تنفيذ شي على الجوال (فتح تطبيق، ضغط، إرسال، كتابة...)؟
+    func classifyPhoneTask(_ text: String) async -> Bool {
+        let sys = """
+        هل رسالة المستخدم تطلب منك تنفذ شي على جواله (تفتح تطبيق، تضغط، ترسل، تكتب في تطبيق، تغيّر إعداد، تشغّل شي)؟         إذا نعم اكتب TASK. إذا سؤال أو سوالف أو طلب معلومة أو كتابة نص في المحادثة اكتب CHAT. كلمة وحدة بس.
+        """
+        guard let s = try? stream(system: sys, history: [], user: String(text.prefix(400)), maxTokens: 3) else { return false }
+        var out = ""
+        do { for try await c in s { out += c } } catch { return false }
+        return out.uppercased().contains("TASK")
+    }
+
     /// مصنّف سريع: هل السؤال يحتاج بحث في الويب (معلومة حديثة أو متغيرة)؟
     func classifyNeedsSearch(_ text: String) async -> Bool {
         let sys = """
