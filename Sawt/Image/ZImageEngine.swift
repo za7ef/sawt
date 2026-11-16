@@ -168,25 +168,32 @@ enum ZImagePipeline {
     static let editStrength: Float = 0.7
 
     /// source: صورة يعيد رسمها مع الوصف (SDEdit). Z-Image Turbo ما فيه تعديل حقيقي، فيعيد رسم الصورة كلها.
-    static func generate(dir: URL, prompt: String, seed: UInt64, source: URL? = nil,
+    /// plan: أدوات العارض. مع قناع: داخل القناع يتولّد والباقي يرجع من الأصل كل خطوة. الإزالة وتغيير الحجم
+    /// تبدأ من ضجيج كامل داخل القناع (تكملة)، والتعليمة والعلامات SDEdit بقوة editStrength.
+    static func generate(dir: URL, prompt: String, seed: UInt64, source: URL? = nil, plan: EditPlan? = nil,
                          onPhase: @escaping (String) -> Void,
                          onStep: @escaping (Int, Int) -> Void) async throws -> CGImage {
         var lh = ZImage.size / 16, lw = ZImage.size / 16   // رقع 2×2 على كامن بدقة 1/8
 
         // ٠) صورة المصدر: نرمّزها ونرقّعها بنفس ترتيب فك الرقع تحت
         var start: MLXArray?
+        var tokMask: MLXArray?
+        var edit: EditInputs?
         if let source {
             onPhase("source")
-            let img = try EditImage.load(source)
-            lh = img.h / 16; lw = img.w / 16
+            let e = try EditInputs.prepare(source: source, plan: plan)
+            edit = e
+            lh = e.h / 16; lw = e.w / 16
             let enc = try VAEEncoder(file: dir.appendingPathComponent("vae/0.safetensors"), pytorchLayout: false)
-            let z = (enc.encode(img.pixels) - ZImage.vaeShift) * ZImage.vaeScale   // [1, 2lh, 2lw, 16]
+            let z = (enc.encode(e.canvas) - ZImage.vaeShift) * ZImage.vaeScale   // [1, 2lh, 2lw, 16]
             start = z.reshaped([1, lh, 2, lw, 2, 16]).transposed(0, 1, 3, 2, 4, 5).reshaped([1, lh * lw, 64])
+            tokMask = e.tokenMask(cell: 16)
             eval(start!)
             MLX.Memory.clearCache()
-            slog("zimage: sdedit source \(img.w)x\(img.h) encoded footprint=\(RAM.footprintMB)MB")
+            slog("zimage: sdedit \(plan?.kind.rawValue ?? "instruct") \(e.w)x\(e.h) mask=\(tokMask != nil) footprint=\(RAM.footprintMB)MB")
             try Task.checkCancellation()
         }
+        let fill = plan?.kind == .remove || plan?.kind == .resize
 
         // ١) النص (المُرمّز المشترك)
         onPhase("encode")
@@ -201,13 +208,14 @@ enum ZImagePipeline {
 
         // ٢) إزالة الضجيج
         onPhase("load")
-        var latents = MLXRandom.normal([1, lh * lw, 64], key: MLXRandom.key(seed))
+        let noise = MLXRandom.normal([1, lh * lw, 64], key: MLXRandom.key(seed))
+        var latents = noise
         do {
             let tr = try ZImageTransformer(dir: dir.appendingPathComponent("transformer"))
             let sig = sigmas(steps: ZImage.steps)
             // SDEdit مثل img2img في diffusers: نتخطى أول الخطوات ونبدأ من الصورة مخلوطة بالضجيج عند sigma البداية
             var first = 0
-            if let start {
+            if let start, !(fill && tokMask != nil) {
                 first = ZImage.steps - min(ZImage.steps, Int(Float(ZImage.steps) * editStrength))
                 latents = (1 - sig[first]) * start.asType(latents.dtype) + sig[first] * latents
                 eval(latents)
@@ -218,6 +226,11 @@ enum ZImagePipeline {
                 let out = tr(latents, cap: cap, sigma: sig[i], h: lh, w: lw)
                 // السرعة = −مخرج النموذج
                 latents = latents - (sig[i + 1] - sig[i]) * out
+                if let start, let tokMask {
+                    let s = sig[i + 1]
+                    let k = (1 - s) * start.asType(latents.dtype) + s * noise.asType(latents.dtype)
+                    latents = tokMask * latents + (1 - tokMask) * k
+                }
                 eval(latents)
                 onStep(i + 1 - first, ZImage.steps - first)
             }
@@ -236,7 +249,8 @@ enum ZImagePipeline {
             var z = latents.reshaped([1, lh, lw, 2, 2, 16]).transposed(0, 1, 3, 2, 4, 5)
                 .reshaped([1, lh * 2, lw * 2, 16])
             z = z / ZImage.vaeScale + ZImage.vaeShift
-            pixels = vae.decode(z)
+            let raw = vae.decode(z)
+            pixels = edit?.composite(raw) ?? raw
             eval(pixels)
         }
         defer { MLX.Memory.clearCache() }

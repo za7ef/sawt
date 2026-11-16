@@ -98,38 +98,68 @@ enum EditImage {
     /// أكبر مساحة للتعديل على الجوال: 512×512 (التسلسل يتضاعف مع الصورة المرجعية)
     static let maxArea = 512 * 512
 
-    /// أبعاد الناتج: نفس نسبة الصورة بمساحة ≤ 512² ومضاعفات 16 (أصغر ضلع 256)
-    static func size(for img: CGImage) -> (w: Int, h: Int) {
-        let w0 = Double(img.width), h0 = Double(img.height)
-        let s = min(1, (Double(maxArea) / (w0 * h0)).squareRoot())
+    /// أبعاد بنسبة معيّنة بمساحة ≤ 512² ومضاعفات 16 (أصغر ضلع 256)
+    static func size(aspectW w0: Double, h h0: Double) -> (w: Int, h: Int) {
+        let s = (Double(maxArea) / (w0 * h0)).squareRoot()
         func snap(_ v: Double) -> Int { max(256, Int(v * s / 16) * 16) }
         var w = snap(w0), h = snap(h0)
         while w * h > maxArea { if w >= h { w -= 16 } else { h -= 16 } }
         return (w, h)
     }
 
-    /// يقرأ الصورة (مع اتجاهها) ويقصّها من الوسط على الأبعاد → [1, H, W, 3] بين −1 و1
-    static func load(_ url: URL) throws -> (pixels: MLXArray, w: Int, h: Int) {
+    /// أبعاد الناتج لصورة: نفس نسبتها (ما نكبّر الصغيرة فوق حجمها إلا لحد 256)
+    static func size(for img: CGImage) -> (w: Int, h: Int) {
+        let w0 = Double(img.width), h0 = Double(img.height)
+        if w0 * h0 <= Double(maxArea) {
+            var w = max(256, Int(w0 / 16) * 16), h = max(256, Int(h0 / 16) * 16)
+            while w * h > maxArea { if w >= h { w -= 16 } else { h -= 16 } }
+            return (w, h)
+        }
+        return size(aspectW: w0, h: h0)
+    }
+
+    /// يقرأ صورة بالاتجاه الصحيح (صور الكاميرا مخزنة مدوّرة)
+    static func upright(_ url: URL) throws -> CGImage {
         guard let ui = UIImage(contentsOfFile: url.path) else { throw SawtError.failed("ما قدرت أقرأ الصورة") }
-        // نرسمها مرة بالاتجاه الصحيح (صور الكاميرا مخزنة مدوّرة)
         let fmt = UIGraphicsImageRendererFormat.default()
         fmt.scale = 1
-        let upright = UIGraphicsImageRenderer(size: ui.size, format: fmt).image { _ in ui.draw(at: .zero) }
-        guard let cg = upright.cgImage else { throw SawtError.failed("ما قدرت أقرأ الصورة") }
-        let (w, h) = size(for: cg)
+        let img = UIGraphicsImageRenderer(size: ui.size, format: fmt).image { _ in ui.draw(at: .zero) }
+        guard let cg = img.cgImage else { throw SawtError.failed("ما قدرت أقرأ الصورة") }
+        return cg
+    }
+
+    /// يرسم صورة على w×h بتعبئة وقص من الوسط (نفس resize_mode="crop" تقريبًا) → بايتات RGBA
+    static func rgba(_ cg: CGImage, w: Int, h: Int) throws -> [UInt8] {
         var bytes = [UInt8](repeating: 0, count: w * h * 4)
-        guard let ctx = CGContext(data: &bytes, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                                  space: CGColorSpaceCreateDeviceRGB(),
-                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
-            throw SawtError.failed("ما قدرت أجهّز الصورة")
+        let ok: Bool = bytes.withUnsafeMutableBytes { buf in
+            guard let ctx = CGContext(data: buf.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return false }
+            ctx.interpolationQuality = .high
+            ctx.draw(cg, in: fillRect(cg, w: w, h: h))
+            return true
         }
-        ctx.interpolationQuality = .high
-        // تعبئة مع قص من الوسط (نفس resize_mode="crop" تقريبًا)
+        guard ok else { throw SawtError.failed("ما قدرت أجهّز الصورة") }
+        return bytes
+    }
+
+    /// مستطيل الرسم للتعبئة مع القص من الوسط
+    static func fillRect(_ cg: CGImage, w: Int, h: Int) -> CGRect {
         let sc = max(Double(w) / Double(cg.width), Double(h) / Double(cg.height))
         let dw = Double(cg.width) * sc, dh = Double(cg.height) * sc
-        ctx.draw(cg, in: CGRect(x: (Double(w) - dw) / 2, y: (Double(h) - dh) / 2, width: dw, height: dh))
-        let rgba = MLXArray(bytes, [1, h, w, 4])
-        let px = rgba[.ellipsis, 0 ..< 3].asType(.float32) / 127.5 - 1
-        return (px, w, h)
+        return CGRect(x: (Double(w) - dw) / 2, y: (Double(h) - dh) / 2, width: dw, height: dh)
+    }
+
+    /// بايتات RGBA → [1, H, W, 3] بين −1 و1
+    static func pixels(_ bytes: [UInt8], w: Int, h: Int) -> MLXArray {
+        let a = MLXArray(bytes, [1, h, w, 4])
+        return a[.ellipsis, 0 ..< 3].asType(.float32) / 127.5 - 1
+    }
+
+    /// يقرأ الصورة ويقصّها من الوسط على أبعاد مناسبة → [1, H, W, 3] بين −1 و1
+    static func load(_ url: URL) throws -> (pixels: MLXArray, w: Int, h: Int) {
+        let cg = try upright(url)
+        let (w, h) = size(for: cg)
+        return (pixels(try rgba(cg, w: w, h: h), w: w, h: h), w, h)
     }
 }

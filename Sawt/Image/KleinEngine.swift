@@ -201,12 +201,15 @@ final class KleinTransformer {
 
     /// cos/sin لكل موضع: [S, 128]. المواضع: النص (0,0,0,l) ثم الصورة (0,y,x,0)
     /// ثم الصورة المرجعية للتعديل (10,y,x,0) — نفس Flux2KleinPipeline: الزمن T = 10 + 10·i للمرجع رقم i
-    static func rope(textLen: Int, h: Int, w: Int, ref: (h: Int, w: Int)? = nil) -> (cos: MLXArray, sin: MLXArray) {
+    static func rope(textLen: Int, h: Int, w: Int, refs: [(h: Int, w: Int)] = []) -> (cos: MLXArray, sin: MLXArray) {
         var ids: [Int32] = []
-        ids.reserveCapacity((textLen + h * w + (ref.map { $0.h * $0.w } ?? 0)) * 4)
+        ids.reserveCapacity((textLen + h * w + refs.reduce(0) { $0 + $1.h * $1.w }) * 4)
         for l in 0 ..< textLen { ids += [0, 0, 0, Int32(l)] }
         for y in 0 ..< h { for x in 0 ..< w { ids += [0, Int32(y), Int32(x), 0] } }
-        if let ref { for y in 0 ..< ref.h { for x in 0 ..< ref.w { ids += [10, Int32(y), Int32(x), 0] } } }
+        for (i, r) in refs.enumerated() {
+            let t = Int32(10 + 10 * i)
+            for y in 0 ..< r.h { for x in 0 ..< r.w { ids += [t, Int32(y), Int32(x), 0] } }
+        }
         let pos = MLXArray(ids).reshaped([-1, 4]).asType(.float32)
         var cs: [MLXArray] = [], ss: [MLXArray] = []
         for a in 0 ..< 4 {
@@ -495,21 +498,41 @@ enum KleinPipeline {
 
     /// يرسم صورة. status للنص، step(k, n) للتقدم. يفك كل جزء من الذاكرة بعد ما يخلص.
     /// source: صورة للتعديل (وصف + صورة): تدخل كصورة مرجعية بجنب الكامن، والناتج بنفس أبعادها (≤ 512²)
-    static func generate(dir: URL, prompt: String, seed: UInt64, source: URL? = nil,
+    /// plan: أدوات العارض — قناع (يتولّد داخله بس والباقي يرجع من الأصل كل خطوة)، تغيير حجم، وصورة العلامات كمرجع ثاني.
+    static func generate(dir: URL, prompt: String, seed: UInt64, source: URL? = nil, plan: EditPlan? = nil,
                          onPhase: @escaping (String) -> Void,
                          onStep: @escaping (Int, Int) -> Void) async throws -> CGImage {
         var lh = Klein.size / 16, lw = Klein.size / 16
 
-        // ٠) الصورة المرجعية للتعديل: نرمّزها أول، قبل ما نحمّل الأشياء الثقيلة
+        // ٠) الصور المرجعية للتعديل: نرمّزها أول، قبل ما نحمّل الأشياء الثقيلة
         var refTokens: MLXArray?
+        var refDims: [(h: Int, w: Int)] = []
+        var edit: EditInputs?
+        var known: MLXArray?      // كامن الأجزاء المعروفة (للقناع)
+        var tokMask: MLXArray?
         if let source {
             onPhase("source")
-            let img = try EditImage.load(source)
-            lh = img.h / 16; lw = img.w / 16
-            let z = try KleinVAE.encode(img.pixels, dir: dir.appendingPathComponent("vae"))
-            refTokens = z.reshaped([1, lh * lw, 128])
+            let e = try EditInputs.prepare(source: source, plan: plan)
+            edit = e
+            lh = e.h / 16; lw = e.w / 16
+            let vdir = dir.appendingPathComponent("vae")
+            var refs = [try KleinVAE.encode(e.ref, dir: vdir).reshaped([1, (e.refH / 16) * (e.refW / 16), 128])]
+            refDims = [(e.refH / 16, e.refW / 16)]
+            if let r2 = e.ref2 {
+                refs.append(try KleinVAE.encode(r2, dir: vdir).reshaped([1, (e.refH / 16) * (e.refW / 16), 128]))
+                refDims.append((e.refH / 16, e.refW / 16))
+            }
+            refTokens = concatenated(refs, axis: 1)
+            if let m = e.tokenMask(cell: 16) {
+                tokMask = m
+                // نفس الأبعاد = القماش هو المرجع نفسه، فما نرمّزه مرتين
+                known = e.w == e.refW && e.h == e.refH
+                    ? refs[0] : try KleinVAE.encode(e.canvas, dir: vdir).reshaped([1, lh * lw, 128])
+                eval(known!, m)
+            }
+            eval(refTokens!)
             MLX.Memory.clearCache()
-            slog("klein: edit source \(img.w)x\(img.h) encoded footprint=\(RAM.footprintMB)MB")
+            slog("klein: edit \(plan?.kind.rawValue ?? "instruct") \(e.w)x\(e.h) refs=\(refDims.count) mask=\(tokMask != nil) footprint=\(RAM.footprintMB)MB")
             try Task.checkCancellation()
         }
 
@@ -526,10 +549,11 @@ enum KleinPipeline {
 
         // ٢) إزالة الضجيج
         onPhase("load")
-        var latents = MLXRandom.normal([1, lh * lw, 128], key: MLXRandom.key(seed))
+        let noise = MLXRandom.normal([1, lh * lw, 128], key: MLXRandom.key(seed))
+        var latents = noise
         do {
             let tr = try KleinTransformer(dir: dir.appendingPathComponent("transformer-packed-mflux"))
-            let rope = KleinTransformer.rope(textLen: ctx.dim(1), h: lh, w: lw, ref: refTokens == nil ? nil : (lh, lw))
+            let rope = KleinTransformer.rope(textLen: ctx.dim(1), h: lh, w: lw, refs: refDims)
             // mu من طول تسلسل الناتج بس (بدون المرجع)، مثل diffusers
             let sig = sigmas(steps: Klein.steps, seqLen: lh * lw)
             onStep(0, Klein.steps)
@@ -545,12 +569,19 @@ enum KleinPipeline {
                     v = tr(latents, ctx: ctx, sigma: sig[i], rope: rope)
                 }
                 latents = latents + (sig[i + 1] - sig[i]) * v
+                if let known, let tokMask {
+                    // خارج القناع: نرجع الأصل مخلوط بنفس الضجيج عند sigma التالية (blended latent / RePaint)
+                    let s = sig[i + 1]
+                    let k = (1 - s) * known.asType(latents.dtype) + s * noise.asType(latents.dtype)
+                    latents = tokMask * latents + (1 - tokMask) * k
+                }
                 eval(latents)
                 onStep(i + 1, Klein.steps)
             }
         }
         ctx = MLXArray(0)
         refTokens = nil
+        known = nil
         MLX.Memory.clearCache()
         slog("klein: denoised footprint=\(RAM.footprintMB)MB")
 
@@ -559,7 +590,8 @@ enum KleinPipeline {
         let pixels: MLXArray
         do {
             let vae = try KleinVAE(dir: dir.appendingPathComponent("vae"))
-            pixels = vae.decode(latents.reshaped([1, lh, lw, 128]))
+            let raw = vae.decode(latents.reshaped([1, lh, lw, 128]))
+            pixels = edit?.composite(raw) ?? raw
             eval(pixels)
         }
         defer { MLX.Memory.clearCache() }

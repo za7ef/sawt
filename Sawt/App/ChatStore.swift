@@ -715,7 +715,8 @@ final class ChatStore: ObservableObject {
 
     /// يرسم صورة بالمحرك المختار بس (بدون أي تبديل تلقائي لمحرك ثاني)
     /// source: صورة من المستخدم للتعديل (وصف + صورة)
-    func generateImage(_ text: String, source: Attachment? = nil) {
+    /// plan: أداة من عارض الصور (ملاحظات/تغيير حجم/علامات/إزالة)
+    func generateImage(_ text: String, source: Attachment? = nil, plan: EditPlan? = nil) {
         guard !isGenerating else { return }
         let request = ImageIntent.strip(text)
         var userMsg = Message(role: .user, text: text)
@@ -772,13 +773,21 @@ final class ChatStore: ObservableObject {
                 // ١) نموذج المحادثة يكتب وصف إنجليزي (المحركات المحلية ما تفهم عربي)
                 // بدون نموذج المحادثة (أسرع وذاكرة أقل) إلا لو الوصف عربي والمحرك ما يفهمه، أو «حسّن الوصف» شغّال
                 var spec: (String, String)?
-                if source != nil, engine == .klein {
+                if source != nil, let plan, let fixed = Self.fixedEditPrompt(plan, engine: engine) {
+                    // الإزالة وتغيير الحجم ما يحتاجون نموذج المحادثة
+                    spec = (fixed, "")
+                } else if source != nil, engine == .klein {
                     // «دقيق» يعدّل بتعليمة قصيرة (مو وصف مشهد كامل)، فنترجمها بس لو مو إنجليزي
                     if ImageIntent.isEnglish(request) {
                         spec = (request, "")
                     } else {
                         status("أكتب التعليمة…")
                         spec = await Self.editPrompt(for: request).map { ($0, "") }
+                    }
+                    if plan?.kind == .markup, let s = spec {
+                        // الصورة الثانية = نفس الصورة مع علامات المستخدم
+                        spec = ("Image 2 is image 1 with hand-drawn marks showing where to edit. Edit image 1 only at the marked areas: "
+                                + s.0 + " Do not draw any marks, lines or scribbles.", "")
                     }
                 } else if !ImageIntent.needsModel(request, engine: engine) {
                     spec = (request, ImageIntent.defaultNegative)
@@ -809,7 +818,7 @@ final class ChatStore: ObservableObject {
                 // ٢) المحلي يحتاج ذاكرة: نفك النموذج اللغوي وقت الرسم ونرجعه بعدين
                 if engine.isLocal { reloadLLM = await ModelManager.shared.unloadForImage() }
                 let img = try await ImageGenerator.shared.generate(engine: engine, prompt: prompt, negative: negative,
-                                                                   source: source?.imageURL, status: status)
+                                                                   source: source?.imageURL, plan: plan, status: status)
                 try Task.checkCancellation()
                 self.setGenImage(bid, in: conv, img)
             } catch is CancellationError {
@@ -886,6 +895,23 @@ final class ChatStore: ObservableObject {
         var out = ""
         do { for try await c in s { out += c } } catch { return ImageIntent.editStrong(text) }
         return splitThinking(out).answer.uppercased().contains("EDIT")
+    }
+
+    /// أوامر ثابتة للأدوات اللي ما فيها نص من المستخدم
+    static func fixedEditPrompt(_ plan: EditPlan, engine: ImageEngine) -> String? {
+        switch (plan.kind, engine) {
+        case (.remove, .klein):
+            return "Remove the object in the marked area and fill it with matching background."
+        case (.remove, _):
+            return "empty clean background, seamless natural continuation of the surrounding scene, nothing in the area, photorealistic"
+        case (.resize, .klein):
+            return "Extend the scene naturally beyond the original borders to fill the new frame. Keep the same style, lighting, colors and content."
+        case (.resize, _):
+            return (plan.basePrompt?.isEmpty == false ? plan.basePrompt! + ", " : "")
+                + "wide seamless continuation of the scene, same style and lighting, highly detailed"
+        default:
+            return nil
+        }
     }
 
     /// تعليمة تعديل صورة: ترجمة إنجليزية قصيرة بنفس المعنى (بدون إضافات) لـFLUX.2 klein
