@@ -138,7 +138,7 @@ struct GenProgressView: View {
                 let st = live ? hub.stage(at: tl.date) : (label: "أجهّز", fraction: 0.0)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(st.label)
-                        .font(.footnote)
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                         .id(st.label)
                         .transition(.opacity)
@@ -175,52 +175,36 @@ struct GenProgressView: View {
     }
 
     private func card(t: Double, progress: Double, preview: CGImage?) -> some View {
-        // الكرة نفسها حقت المكالمة؛ طاقتها تزيد مع التقدم.
-        // آخر ~٣٥٪: المعاينة تبان داخل الكرة، وقرب النهاية تتوسع لين تعبّي البطاقة.
-        let reveal = max(0, min(1, (progress - 0.65) / 0.25))
-        let expand = max(0, min(1, (progress - 0.9) / 0.1))
-        let wobble = reduceMotion ? 0 : 0.06 * sin(t * 1.4)
-        let energy = Float(min(1, 0.12 + 0.5 * progress + wobble))
-        return GeometryReader { geo in
-            let w = geo.size.width
-            let orb = w * 0.62
-            // قطر الدائرة اللي تكشف المعاينة: من حجم الكرة لين قطر البطاقة
-            let hole = orb * 0.92 + (w * 1.45 - orb * 0.92) * expand
-            ZStack {
-                LinearGradient(colors: [Color(red: 0.04, green: 0.03, blue: 0.10), Color(red: 0.07, green: 0.05, blue: 0.18)],
-                               startPoint: .top, endPoint: .bottom)
-                RadialGradient(colors: [Theme.accent.opacity(0.10 + 0.25 * progress), .clear],
-                               center: .center, startRadius: orb * 0.2, endRadius: w * 0.75)
-                OrbView(mic: 0, out: energy, state: .thinking, animated: !reduceMotion)
-                    .frame(width: orb, height: orb)
-                    .opacity(1 - 0.35 * reveal - 0.65 * expand)
-                if let preview {
-                    Image(decorative: preview, scale: 1)
-                        .resizable()
-                        .interpolation(.high)
-                        .scaledToFill()
-                        .frame(width: w, height: w)
-                        .blur(radius: 10 * (1 - reveal) + 4 * (1 - expand))
-                        .opacity(reveal * (0.75 + 0.25 * expand))
-                        .mask(
-                            Circle()
-                                .fill(RadialGradient(colors: [.white, .white, .white.opacity(1 - expand)],
-                                                     center: .center, startRadius: 0, endRadius: hole / 2))
-                                .frame(width: hole, height: hole)
-                        )
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.6), value: expand)
-                }
-                VStack {
-                    Spacer()
-                    Text("\(Int((progress * 100).rounded()))%")
-                        .font(.caption.weight(.medium).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.72))
-                        .contentTransition(.numericText())
-                        .environment(\.layoutDirection, .leftToRight)
-                        .padding(.bottom, 12)
-                }
+        // المعاينة تظهر تحت النقاط في آخر ~٣٠٪
+        let reveal = max(0, min(1, (progress - 0.65) / 0.3))
+        return ZStack(alignment: .bottomTrailing) {
+            LinearGradient(colors: [Color(red: 0.05, green: 0.04, blue: 0.15), Color(red: 0.09, green: 0.07, blue: 0.24)],
+                           startPoint: .top, endPoint: .bottom)
+            if let preview {
+                Image(decorative: preview, scale: 1)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFill()
+                    .blur(radius: 14 - 8 * reveal)
+                    .opacity(0.85 * reveal)
             }
-            .frame(width: w, height: w)
+            // كرة المكالمة نفسها (نفس الشيدر)، طاقتها تزيد بهدوء مع التقدم
+            GeometryReader { g in
+                OrbView(mic: 0,
+                        out: Float(min(1, 0.12 + 0.5 * progress + (reduceMotion ? 0 : 0.05 * sin(t * 1.4)))),
+                        state: .thinking, animated: !reduceMotion)
+                    .frame(width: g.size.width * 0.62, height: g.size.width * 0.62)
+                    .position(x: g.size.width / 2, y: g.size.height / 2)
+            }
+            .opacity(1 - 0.45 * reveal)
+            Text("\(Int((progress * 100).rounded()))%")
+                .font(.system(size: 14, weight: .medium).monospacedDigit())
+                .foregroundStyle(.primary)
+                .contentTransition(.numericText())
+                .padding(.horizontal, 12).frame(height: 32)
+                .glassEffect(.regular, in: .capsule)
+                .padding(10)
+                .environment(\.layoutDirection, .leftToRight)
         }
         .frame(maxWidth: 300)
         .aspectRatio(1, contentMode: .fit)
