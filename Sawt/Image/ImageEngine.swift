@@ -410,7 +410,8 @@ actor ImageGenerator {
         let dir = SDModels.dir(e)
         if pipelineEngine != e {
             unloadSD()
-            status("أحمّل نموذج الصور…")
+            // أول تحميل يجهّز النموذج للمحرك العصبي (ممكن ياخذ دقيقة أو أكثر)، وبعدها النظام يحفظه
+            status("أحمّل نموذج الصور… (أول مرة ممكن ياخذ دقيقة)")
             let cfg = MLModelConfiguration()
             cfg.computeUnits = .cpuAndNeuralEngine
             let t0 = Date()
@@ -427,6 +428,8 @@ actor ImageGenerator {
         c.seed = UInt32.random(in: 0...UInt32.max)
         c.disableSafety = true
         if e == .sdTurbo {
+            // DPM-Solver بخطوتين = خطوات [999, 500] من الدرجة الأولى (مثل DDIM)، وهذا يناسب نماذج الخطوات القليلة.
+            // keijiro (ml-stable-diffusion لـSD-Turbo) يوصي بـ1–4 خطوات وتوجيه 1–2.
             // Turbo مدرّب بدون توجيه: 1.0 = نفس النتيجة بدون CFG (الـUnet مبني لدفعة 2 فنحتاج نمرّر الاثنين)
             c.stepCount = 2
             c.guidanceScale = Self.unetBatch(dir) == 2 ? 1.0 : 0.0
@@ -485,7 +488,9 @@ actor ImageGenerator {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let body: [String: Any] = [
             "contents": [["parts": [["text": prompt]]]],
-            "generationConfig": ["responseModalities": ["TEXT", "IMAGE"]],
+            // حسب مرجع generateContent: الصورة ترجع inlineData، وimageConfig يحدد النسبة والحجم (1K هو الافتراضي)
+            "generationConfig": ["responseModalities": ["TEXT", "IMAGE"],
+                                 "imageConfig": ["aspectRatio": "1:1", "imageSize": "1K"]],
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let t0 = Date()
@@ -497,8 +502,10 @@ actor ImageGenerator {
             slog("image: gemini \(code) \(msg)")
             throw SawtError.failed("Gemini رجّع \(code): \(msg.prefix(220))")
         }
-        let parts = (((json?["candidates"] as? [[String: Any]])?.first?["content"] as? [String: Any])?["parts"] as? [[String: Any]]) ?? []
-        for p in parts {
+        let cand = (json?["candidates"] as? [[String: Any]])?.first
+        let parts = ((cand?["content"] as? [String: Any])?["parts"] as? [[String: Any]]) ?? []
+        // نماذج Gemini 3 ممكن ترجع صور «تفكير» مؤقتة (thought: true) قبل النهائية: ناخذ آخر صورة مو تفكير
+        for p in parts.reversed() where (p["thought"] as? Bool) != true {
             if let inline = (p["inlineData"] ?? p["inline_data"]) as? [String: Any],
                let b64 = inline["data"] as? String, let d = Data(base64Encoded: b64),
                let img = UIImage(data: d)?.cgImage {
@@ -506,17 +513,19 @@ actor ImageGenerator {
                 return img
             }
         }
-        let text = parts.compactMap { $0["text"] as? String }.joined(separator: " ")
-        throw SawtError.failed("Gemini ما رجّع صورة\(text.isEmpty ? "" : ": \(text.prefix(200))")")
+        let text = parts.filter { ($0["thought"] as? Bool) != true }.compactMap { $0["text"] as? String }.joined(separator: " ")
+        let reason = (cand?["finishReason"] as? String) ?? ((json?["promptFeedback"] as? [String: Any])?["blockReason"] as? String) ?? ""
+        slog("image: gemini no image reason=\(reason) text=\(text.prefix(200))")
+        throw SawtError.failed("Gemini ما رجّع صورة\(reason.isEmpty ? "" : " (\(reason))")\(text.isEmpty ? "" : ": \(text.prefix(200))")")
     }
 }
 
 // MARK: - أنماط Image Playground
 
 enum PlaygroundStyles {
-    /// الأنماط اللي تشتغل على الجهاز. أي نمط ثاني (مثل أنماط ChatGPT) يروح للسحابة.
+    /// الأنماط على الجهاز؛ externalProvider (iOS 26: أنماط ChatGPT) هو اللي يروح للسحابة
     static func isLocal(_ s: ImagePlaygroundStyle) -> Bool {
-        [ImagePlaygroundStyle.animation, .illustration, .sketch].contains { $0.id == s.id }
+        s.id != ImagePlaygroundStyle.externalProvider.id
     }
 
     static func label(_ s: ImagePlaygroundStyle) -> String {
@@ -525,6 +534,8 @@ enum PlaygroundStyles {
         case ImagePlaygroundStyle.animation.id: base = "أنيميشن"
         case ImagePlaygroundStyle.illustration.id: base = "رسم توضيحي"
         case ImagePlaygroundStyle.sketch.id: base = "سكتش"
+        case ImagePlaygroundStyle.emoji.id: base = "إيموجي"
+        case ImagePlaygroundStyle.externalProvider.id: base = "ChatGPT"
         default: base = s.id
         }
         return isLocal(s) ? base : "\(base) (سحابي)"
