@@ -30,6 +30,8 @@ struct ChatView: View {
     @State private var nearBottom = true
     /// المستخدم يسحب القائمة بيده الحين (نحدّث «قريب من تحت» بس من حركته، مو من نمو الرد)
     @State private var userScrolling = false
+    /// وصل شي جديد والمستخدم فوق (نقطة على زر النزول)
+    @State private var hasNew = false
     @AppStorage("netWarned") private var netWarned = false
 
     var body: some View {
@@ -226,7 +228,9 @@ struct ChatView: View {
                         MessageRow(message: m).equatable().id(m.id)
                     }
                     if store.isGenerating {
-                        StreamingRow(live: store.live) { if nearBottom { proxy.scrollTo("bottom", anchor: .bottom) } }
+                        StreamingRow(live: store.live) {
+                            if nearBottom { proxy.scrollTo("bottom", anchor: .bottom) } else if !hasNew { hasNew = true }
+                        }
                             .id("stream")
                     }
                     Color.clear.frame(height: 8).id("bottom")
@@ -247,9 +251,34 @@ struct ChatView: View {
             .onScrollPhaseChange { _, phase in
                 userScrolling = phase == .interacting || phase == .decelerating
             }
+            .overlay(alignment: .bottom) {
+                if !nearBottom {
+                    Button {
+                        hasNew = false
+                        withAnimation(.easeOut(duration: 0.3)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                        nearBottom = true
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 38, height: 38)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .overlay(Circle().stroke(Color.white.opacity(0.12)))
+                            .overlay(alignment: .topTrailing) {
+                                if hasNew { Circle().fill(Color.accentColor).frame(width: 10, height: 10).offset(x: 1, y: -1) }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("انزل لآخر المحادثة")
+                    .padding(.bottom, 10)
+                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                }
+            }
+            .animation(.easeOut(duration: 0.2), value: nearBottom)
+            .onChange(of: nearBottom) { _, v in if v { hasNew = false } }
             .onAppear { scrollToEnd(proxy, delayed: true) }
             .onChange(of: store.current?.messages.count) {
                 // رسالة جديدة: ننزل لو المستخدم تحت، أو لو آخر رسالة منه (أرسل للتو)
+                if !nearBottom && store.current?.messages.last?.role != .user { hasNew = true }
                 if nearBottom || store.current?.messages.last?.role == .user {
                     withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
