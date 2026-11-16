@@ -2,6 +2,9 @@
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <notify.h>
+
+static id SawtWithin(double seconds, BOOL *timedOut, id (^work)(void));
 
 // كتابة مستقلة لصوت. الأسماء الخاصة (XCTRunnerDaemonSession، XCSynthesizedEventRecord، XCPointerEventPath،
 // _XCT_synthesizeEvent:) من أطر XCTest اللي تنحمّل وقت التشغيل من صورة المطوّر.
@@ -74,6 +77,26 @@ static id SawtSharedSession(NSString **why) {
     Class cls = NSClassFromString(@"XCTRunnerDaemonSession");
     if (!cls) { *why = @"XCTRunnerDaemonSession مو موجود"; return nil; }
     BOOL closed; @synchronized (cls) { closed = gSawtClosed; }
+    // أول جلسة: مثل Poki ننتظر وعد الجلسة المشتركة لين ٣ ثواني؛ لو ما اكتمل نفتح جلسة خاصة فينا
+    static BOOL promised = NO;
+    if (!closed && !promised) {
+        promised = YES;
+        SEL ps = NSSelectorFromString(@"sharedSessionPromiseAndImplicitlyInitiateSession:");
+        if ([cls respondsToSelector:ps]) {
+            id promise = ((id (*)(id, SEL, BOOL))objc_msgSend)(cls, ps, YES);
+            SEL ful = NSSelectorFromString(@"promiseFulfilled");
+            if (promise && [promise respondsToSelector:ful]) {
+                BOOL done = NO;
+                for (int i = 0; i < 300; i++) {
+                    done = ((BOOL (*)(id, SEL))objc_msgSend)(promise, ful);
+                    if (done) break;
+                    usleep(10000);
+                }
+                NSLog(@"Sawt: shared session promise %@", done ? @"fulfilled" : @"late → own session");
+                if (!done) closed = YES;
+            }
+        }
+    }
     if (closed) {
         NSString *e = SawtReopenSession(cls);
         if (e) { *why = [@"إعادة فتح الجلسة: " stringByAppendingString:e]; return nil; }
@@ -298,7 +321,8 @@ static id SawtKVC(id obj, NSString *key) {
 static NSArray *SawtActiveElements(id client) {
     SEL s = NSSelectorFromString(@"activeApplications");
     if (!client || ![client respondsToSelector:s]) return @[];
-    id list = ((id (*)(id, SEL))objc_msgSend)(client, s);
+    // بحد زمني مثل Poki (٤ ثواني): الطلب ممكن يعلق لو خادم الوصول ما رد
+    id list = SawtWithin(4, NULL, ^id { @try { return ((id (*)(id, SEL))objc_msgSend)(client, s); } @catch (__unused NSException *e) { return nil; } });
     return [list isKindOfClass:NSArray.class] ? list : @[];
 }
 
@@ -306,7 +330,9 @@ static NSArray *SawtActiveElements(id client) {
 static id SawtSystemApp(id client) {
     @try {
         SEL s = NSSelectorFromString(@"systemApplication");
-        if (client && [client respondsToSelector:s]) return ((id (*)(id, SEL))objc_msgSend)(client, s);
+        // بحد ثانية مثل Poki (poki-InProcess.m:1895)
+        if (client && [client respondsToSelector:s])
+            return SawtWithin(1, NULL, ^id { @try { return ((id (*)(id, SEL))objc_msgSend)(client, s); } @catch (__unused NSException *e) { return nil; } });
     } @catch (__unused NSException *e) {}
     return nil;
 }
@@ -410,7 +436,29 @@ NSString * _Nullable SawtXCTWarmSystem(double timeout) {
     int pid = SawtPid(SawtSystemApp(client));
     if (pid <= 0) return @"ما فيه systemApplication";
     NSString *why = nil;
-    return SawtXCTAXRead(pid, 1, 1, timeout, &why) ? nil : (why ?: @"فشل");
+    BOOL sysOK = SawtXCTAXRead(pid, 1, 1, timeout, &why) != nil;
+    // مثل proveReadable في Poki: نقرأ التطبيق اللي قدّام بعمق ٣ كمان؛ أي وحدة نجحت = الجلسة تقرأ
+    int me = getpid();
+    NSString *frontWhy = nil; BOOL frontOK = NO, tried = NO;
+    for (id e in SawtActiveElements(client)) {
+        int p = SawtPid(e);
+        if (p <= 0 || p == pid || p == me) continue;
+        tried = YES;
+        frontOK = SawtXCTAXRead(p, 3, 30, 3, &frontWhy) != nil;
+        break;
+    }
+    if (sysOK || frontOK) return nil;
+    return tried ? [NSString stringWithFormat:@"%@ / التطبيق: %@", why ?: @"فشل", frontWhy ?: @"فشل"] : (why ?: @"فشل");
+}
+
+BOOL SawtXCTPhoneLocked(void) {
+    static int token = -1;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ if (notify_register_check("com.apple.springboard.lockstate", &token) != NOTIFY_STATUS_OK) token = -1; });
+    if (token == -1) return NO;
+    uint64_t state = 0;
+    notify_get_state(token, &state);
+    return state != 0;
 }
 
 void SawtXCTClearHung(void) {

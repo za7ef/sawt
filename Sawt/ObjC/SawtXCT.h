@@ -41,6 +41,9 @@ FOUNDATION_EXPORT NSString * _Nullable SawtXCTPressHome(void);
 /// يفتح تطبيق بمعرّفه عبر testmanagerd. nil = نجح
 FOUNDATION_EXPORT NSString * _Nullable SawtXCTLaunch(NSString *bundle, double timeout);
 
+/// الجوال مقفل؟ (com.apple.springboard.lockstate مثل Poki)
+FOUNDATION_EXPORT BOOL SawtXCTPhoneLocked(void);
+
 /// يمسح قائمة العمليات المعلّقة (بداية كل مهمة)
 FOUNDATION_EXPORT void SawtXCTClearHung(void);
 

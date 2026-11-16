@@ -191,6 +191,10 @@ final class PhoneAgent: ObservableObject {
         defer { if Self.see == .xct { Task { @MainActor in if self.runID == myID && !self.running { await XCTBackend.endTask() } } } }
         // الطريقة المختارة بس، بدون رجوع لطريقة ثانية. XCTest: نشغّل وضع الأتمتة تلقائيًا وننتظره
         if Self.see == .xct {
+            if SawtXCTPhoneLocked() {
+                say("✗ الجوال مقفل")
+                finish("وقفت: الجوال مقفل — افتح القفل وأرسل المهمة مرة ثانية"); return
+            }
             if !XCTBackend.runnerReady || !Runner.isOn { say("الطريقة: XCTest — أشغّل المشغّل… (دخّل رمز الجوال لو طلبه)") }
             if let e = await Runner.set(true) {
                 say("✗ XCTest ما اشتغل: \(e.prefix(200))")
