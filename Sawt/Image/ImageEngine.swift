@@ -8,7 +8,7 @@ import StableDiffusion
 
 /// محركات توليد الصور. المستخدم يختار واحد، وما نبدّل لغيره تلقائيًا أبدًا.
 enum ImageEngine: String, CaseIterable, Identifiable {
-    case sdReal, sdArt, sdTurbo, playground, gemini, geminiLite
+    case sdReal, sdArt, playground, gemini, geminiLite
 
     var id: String { rawValue }
 
@@ -16,7 +16,6 @@ enum ImageEngine: String, CaseIterable, Identifiable {
         switch self {
         case .sdReal: "واقعي — CyberRealistic"
         case .sdArt: "فني — DreamShaper 8"
-        case .sdTurbo: "سريع (تجريبي) — SD-Turbo"
         case .playground: "Image Playground"
         case .gemini: "Gemini 3.1 Flash Image"
         case .geminiLite: "Gemini 3.1 Flash Lite Image"
@@ -26,15 +25,13 @@ enum ImageEngine: String, CaseIterable, Identifiable {
     /// وصف قصير يطلع في القائمة
     var tag: String {
         switch self {
-        case .sdReal, .sdArt, .sdTurbo: "محلي"
+        case .sdReal, .sdArt: "محلي"
         case .playground: "سحابة آبل الخاصة"
         case .gemini, .geminiLite: "سحابي · مدفوع"
         }
     }
 
-    var isLocalSD: Bool { self == .sdReal || self == .sdArt || self == .sdTurbo }
-    /// نماذج LCM (تحتاج مجدول LCM)
-    var isLCM: Bool { self == .sdReal || self == .sdArt }
+    var isLocalSD: Bool { self == .sdReal || self == .sdArt }
     var isGemini: Bool { self == .gemini || self == .geminiLite }
 
     var geminiModel: String { self == .geminiLite ? "gemini-3.1-flash-lite-image" : "gemini-3.1-flash-image" }
@@ -45,12 +42,28 @@ enum ImageEngine: String, CaseIterable, Identifiable {
         set { UserDefaults.standard.set(newValue?.rawValue ?? "", forKey: "imageEngine") }
     }
 
-    /// SD 2.1 انشال: لو كان مختار نخليه «ما اخترت» ونعلّم عشان نوضح السبب في الإعدادات
+    /// محركات انشالت (SD 2.1 وSD-Turbo): لو كان واحد منها مختار يصير «ما اخترت» مع تنبيه في الإعدادات،
+    /// وملفاتها القديمة تنحذف مرة وحدة عشان ما تبقى تاخذ مساحة بدون ما تبان
     static func migrate() {
         let d = UserDefaults.standard
-        if d.string(forKey: "imageEngine") == "sd21" {
+        if let cur = d.string(forKey: "imageEngine"), !cur.isEmpty, ImageEngine(rawValue: cur) == nil {
             d.set("", forKey: "imageEngine")
-            d.set(true, forKey: "sd21Retired")
+            d.set(true, forKey: "imageEngineRetired")
+        }
+        d.removeObject(forKey: "sd21Retired")
+        guard !d.bool(forKey: "retiredImageFilesCleaned") else { return }
+        Task.detached(priority: .utility) {
+            let fm = FileManager.default
+            let root = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("ImageModels", isDirectory: true)
+            for name in ["sd21", "sd21.partial", "sdTurbo", "sdTurbo.partial"] {
+                let u = root.appendingPathComponent(name, isDirectory: true)
+                if fm.fileExists(atPath: u.path) {
+                    try? fm.removeItem(at: u)
+                    slog("image: removed retired files \(name)")
+                }
+            }
+            UserDefaults.standard.set(true, forKey: "retiredImageFilesCleaned")
         }
     }
 }
@@ -96,25 +109,7 @@ final class SDModels: ObservableObject {
     }
 
     nonisolated static func approxGB(_ e: ImageEngine) -> Double {
-        switch e {
-        case .sdReal: 0.89
-        case .sdArt: 0.99
-        default: 1.02
-        }
-    }
-
-    /// ملفات SD 2.1 القديمة (انشال من القائمة): نعرض حذفها لو موجودة
-    nonisolated static var legacyDir: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ImageModels/sd21", isDirectory: true)
-    }
-    nonisolated static var legacyPresent: Bool { FileManager.default.fileExists(atPath: legacyDir.path) }
-    func deleteLegacy() {
-        try? FileManager.default.removeItem(at: Self.legacyDir)
-        try? FileManager.default.removeItem(at: Self.legacyDir.deletingLastPathComponent().appendingPathComponent("sd21.partial"))
-        UserDefaults.standard.removeObject(forKey: "sd21Retired")
-        objectWillChange.send()
-        slog("image: deleted legacy sd21")
+        e == .sdReal ? 0.89 : 0.99
     }
 
     func download(_ e: ImageEngine) {
@@ -133,11 +128,8 @@ final class SDModels: ObservableObject {
                 var u = d.deletingLastPathComponent(); var v = URLResourceValues(); v.isExcludedFromBackup = true
                 try? u.setResourceValues(v)
                 let report: @Sendable (Double) -> Void = { p in Task { @MainActor in SDModels.shared.state[e] = .downloading(p) } }
-                if let src = Self.source(e) {
-                    try await Self.fetchFiles(src, into: tmp, progress: report)
-                } else {
-                    try await Self.fetchFromZip(into: tmp, progress: report)
-                }
+                guard let src = Self.source(e) else { throw SawtError.failed("ما فيه مصدر لهالنموذج") }
+                try await Self.fetchFiles(src, into: tmp, progress: report)
                 try Task.checkCancellation()
                 try? FileManager.default.removeItem(at: d)
                 try FileManager.default.moveItem(at: tmp, to: d)
@@ -181,8 +173,6 @@ final class SDModels: ObservableObject {
         default: nil
         }
     }
-    // SD-Turbo (6-bit) موجود كملف zip بس: ناخذ الملفات اللي نحتاجها منه بطلبات Range بدون ما ننزّل الملف كامل
-    nonisolated private static let turboZip = "https://huggingface.co/mozksoft/sd-turbo-coreml-q6/resolve/main/sd-turbo-coreml-q6_split_einsum_v2_compiled.zip"
 
     nonisolated private static func fetchFiles(_ src: Source, into d: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
         // الأحجام التقريبية عشان شريط التقدم (الأوزان هي الثقيلة)
@@ -204,32 +194,6 @@ final class SDModels: ObservableObject {
             try FileManager.default.moveItem(at: tmp, to: dest)
             done += w
             progress(min(0.99, done / total))
-        }
-    }
-
-    nonisolated private static func fetchFromZip(into d: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
-        guard let url = URL(string: turboZip) else { throw SawtError.failed("رابط النموذج غلط") }
-        let entries = try await ZipRange.entries(of: url)
-        // أول جزء من المسار اسم المجلد داخل الملف: نشيله
-        func local(_ name: String) -> String {
-            guard let i = name.firstIndex(of: "/") else { return name }
-            return String(name[name.index(after: i)...])
-        }
-        let wanted = entries.filter { needed.contains(local($0.name)) }
-        guard Set(wanted.map { local($0.name) }) == Set(needed) else {
-            throw SawtError.failed("ملف النموذج ناقص (\(wanted.count)/\(needed.count))")
-        }
-        let total = Double(wanted.reduce(0) { $0 + $1.compressedSize })
-        var done = 0.0
-        for e in wanted {
-            try Task.checkCancellation()
-            let base = done
-            let dest = d.appendingPathComponent(local(e.name))
-            try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try await ZipRange.extract(e, from: url, to: dest) { got in
-                progress(min(0.99, (base + Double(got)) / max(total, 1)))
-            }
-            done += Double(e.compressedSize)
         }
     }
 }
@@ -296,109 +260,6 @@ final class DownloadDelegate: NSObject, URLSessionDownloadDelegate, @unchecked S
 
 // MARK: - قراءة ملفات من zip على الإنترنت بطلبات Range (بدون zip64)
 
-enum ZipRange {
-    struct Entry {
-        let name: String
-        let method: UInt16
-        let compressedSize: UInt64
-        let size: UInt64
-        let localOffset: UInt64
-    }
-
-    private static func u16(_ d: Data, _ o: Int) -> UInt16 { UInt16(d[d.startIndex + o]) | UInt16(d[d.startIndex + o + 1]) << 8 }
-    private static func u32(_ d: Data, _ o: Int) -> UInt32 {
-        UInt32(u16(d, o)) | UInt32(u16(d, o + 2)) << 16
-    }
-
-    private static func range(_ url: URL, _ from: UInt64, _ to: UInt64?) -> URLRequest {
-        var r = URLRequest(url: url)
-        r.setValue(to.map { "bytes=\(from)-\($0)" } ?? "bytes=-\(from)", forHTTPHeaderField: "Range")
-        return r
-    }
-
-    private static func get(_ r: URLRequest) async throws -> Data {
-        let (d, resp) = try await URLSession.shared.data(for: r)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        guard code == 206 else { throw SawtError.failed("الخادم ما يدعم التنزيل الجزئي (\(code))") }
-        return d
-    }
-
-    /// يقرأ الفهرس المركزي من آخر الملف
-    static func entries(of url: URL) async throws -> [Entry] {
-        let tail = try await get(range(url, 65_536, nil))
-        let sig: [UInt8] = [0x50, 0x4b, 0x05, 0x06]
-        guard let eocd = tail.lastRange(of: Data(sig))?.lowerBound else { throw SawtError.failed("ملف zip غير صالح") }
-        let e = eocd - tail.startIndex
-        let count = Int(u16(tail, e + 10))
-        let cdSize = UInt64(u32(tail, e + 12))
-        let cdOffset = UInt64(u32(tail, e + 16))
-        guard cdOffset != 0xFFFF_FFFF else { throw SawtError.failed("zip64 غير مدعوم") }
-        let cd = try await get(range(url, cdOffset, cdOffset + cdSize - 1))
-        var out: [Entry] = []
-        var o = 0
-        for _ in 0..<count {
-            guard o + 46 <= cd.count, u32(cd, o) == 0x0201_4b50 else { throw SawtError.failed("فهرس zip تالف") }
-            let method = u16(cd, o + 10)
-            let csize = UInt64(u32(cd, o + 20))
-            let size = UInt64(u32(cd, o + 24))
-            let nl = Int(u16(cd, o + 28)), el = Int(u16(cd, o + 30)), cl = Int(u16(cd, o + 32))
-            let off = UInt64(u32(cd, o + 42))
-            let nameData = cd.subdata(in: cd.startIndex + o + 46 ..< cd.startIndex + o + 46 + nl)
-            let name = String(decoding: nameData, as: UTF8.self)
-            if !name.hasSuffix("/") {
-                out.append(Entry(name: name, method: method, compressedSize: csize, size: size, localOffset: off))
-            }
-            o += 46 + nl + el + cl
-        }
-        return out
-    }
-
-    /// ينزّل بيانات ملف واحد ويفك ضغطه (deflate) لمكانه
-    static func extract(_ e: Entry, from url: URL, to dest: URL, progress: @escaping @Sendable (Int64) -> Void) async throws {
-        guard e.method == 0 || e.method == 8 else { throw SawtError.failed("طريقة ضغط غير مدعومة (\(e.method))") }
-        let head = try await get(range(url, e.localOffset, e.localOffset + 29))
-        guard u32(head, 0) == 0x0403_4b50 else { throw SawtError.failed("ترويسة zip تالفة") }
-        let start = e.localOffset + 30 + UInt64(u16(head, 26)) + UInt64(u16(head, 28))
-        let tmp: URL
-        if e.compressedSize == 0 {
-            tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-            FileManager.default.createFile(atPath: tmp.path, contents: nil)
-        } else {
-            tmp = try await ImageModelDownloader.fetch(range(url, start, start + e.compressedSize - 1)) { got, _ in progress(got) }
-        }
-        defer { try? FileManager.default.removeItem(at: tmp) }
-        try? FileManager.default.removeItem(at: dest)
-        if e.method == 0 {
-            try FileManager.default.moveItem(at: tmp, to: dest)
-        } else {
-            try inflate(tmp, to: dest)
-        }
-        let got = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? NSNumber)?.uint64Value ?? 0
-        guard got == e.size else { throw SawtError.failed("حجم \(dest.lastPathComponent) غلط (\(got)/\(e.size))") }
-    }
-
-    /// فك deflate خام على دفعات (بدون تحميل الملف كله بالذاكرة)
-    private static func inflate(_ src: URL, to dest: URL) throws {
-        FileManager.default.createFile(atPath: dest.path, contents: nil)
-        let input = try FileHandle(forReadingFrom: src)
-        let output = try FileHandle(forWritingTo: dest)
-        defer { try? input.close(); try? output.close() }
-        var failed: Error?
-        let filter = try OutputFilter(.decompress, using: .zlib) { (chunk: Data?) in
-            if let chunk, failed == nil {
-                do { try output.write(contentsOf: chunk) } catch { failed = error }
-            }
-        }
-        while true {
-            let block = try input.read(upToCount: 1 << 20) ?? Data()
-            if block.isEmpty { break }
-            try filter.write(block)
-            if let failed { throw failed }
-        }
-        try filter.finalize()
-        if let failed { throw failed }
-    }
-}
 
 // MARK: - التوليد
 
@@ -418,7 +279,7 @@ actor ImageGenerator {
         let img: CGImage
         var used = prompt
         switch engine {
-        case .sdReal, .sdArt, .sdTurbo:
+        case .sdReal, .sdArt:
             // نص CLIP يقص بعد 77 رمز (75 + البداية والنهاية): نقص نحن عند حد كلمة عشان الوصف المعروض = المستخدم فعلًا
             used = Self.clipTrim(prompt, dir: SDModels.dir(engine))
             let neg = Self.clipTrim(negative, dir: SDModels.dir(engine))
@@ -461,18 +322,6 @@ actor ImageGenerator {
         return kept.joined(separator: " ").trimmingCharacters(in: CharacterSet(charactersIn: ", "))
     }
 
-    /// حجم دفعة الـUnet من metadata.json (2 = مبني للتوجيه CFG)
-    private static func unetBatch(_ dir: URL) -> Int {
-        let u = dir.appendingPathComponent("Unet.mlmodelc/metadata.json")
-        guard let d = try? Data(contentsOf: u),
-              let arr = try? JSONSerialization.jsonObject(with: d) as? [[String: Any]],
-              let inputs = arr.first?["inputSchema"] as? [[String: Any]],
-              let hs = inputs.first(where: { ($0["name"] as? String) == "encoder_hidden_states" }),
-              let shape = hs["shape"] as? String else { return 2 }
-        let n = shape.trimmingCharacters(in: CharacterSet(charactersIn: "[] ")).split(separator: ",").first
-        return n.flatMap { Int($0.trimmingCharacters(in: .whitespaces)) } ?? 2
-    }
-
     private func runSD(_ e: ImageEngine, prompt: String, negative: String,
                        status: @escaping @Sendable (String) -> Void) async throws -> CGImage {
         guard SDModels.installed(e) else { throw SawtError.failed("نموذج \(e.title) مو منزّل. نزّله من الإعدادات ← الصور.") }
@@ -494,22 +343,15 @@ actor ImageGenerator {
         }
         guard let p = pipeline else { throw SawtError.failed("ما تحمّل نموذج الصور") }
         var c = StableDiffusionPipeline.Configuration(prompt: prompt)
-        c.schedulerType = e.isLCM ? .lcmScheduler : .dpmSolverMultistepScheduler
+        c.schedulerType = .lcmScheduler
         c.seed = UInt32.random(in: 0...UInt32.max)
         c.disableSafety = true
-        if e.isLCM {
+        do {
             // نماذج LCM: مجدول LCM إلزامي. الـUnet مبني لدفعة 2، فالتوجيه (CFG) ما يزيد الوقت.
             // CyberRealistic: الناشر جرّب ٤–١٠ واقترح CFG ‏1.5. DreamShaper 8 LCM: الناشر يقترح CFG ‏~2.
             c.stepCount = e == .sdReal ? 6 : 8
             c.guidanceScale = e == .sdReal ? 1.5 : 2.0
             c.negativePrompt = negative
-        } else if e == .sdTurbo {
-            // DPM-Solver بخطوتين = خطوات [999, 500] من الدرجة الأولى (مثل DDIM)، وهذا يناسب نماذج الخطوات القليلة.
-            // keijiro (ml-stable-diffusion لـSD-Turbo) يوصي بـ1–4 خطوات وتوجيه 1–2.
-            // Turbo مدرّب بدون توجيه: 1.0 = نفس النتيجة بدون CFG (الـUnet مبني لدفعة 2 فنحتاج نمرّر الاثنين)
-            c.stepCount = 2
-            c.guidanceScale = Self.unetBatch(dir) == 2 ? 1.0 : 0.0
-            c.negativePrompt = ""
         }
         // المعاينة الحية من تقدير الصورة النهائية في كل خطوة (مو الـlatent المزعج)
         c.useDenoisedIntermediates = true

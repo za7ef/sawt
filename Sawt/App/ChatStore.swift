@@ -767,7 +767,7 @@ final class ChatStore: ObservableObject {
                 }
                 try Task.checkCancellation()
                 // نعرض البرومبت أول، وبعدين يبدأ الرسم تحته
-                let shownNeg = engine.isLocalSD && engine != .sdTurbo ? negative : ""
+                let shownNeg = engine.isLocalSD ? negative : ""
                 self.editMessage(bid, in: conv) { m in
                     m.genPrompt = prompt
                     m.genNegative = shownNeg.isEmpty ? nil : shownNeg

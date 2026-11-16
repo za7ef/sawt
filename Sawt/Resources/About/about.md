@@ -43,7 +43,6 @@
 - **ml-stable-diffusion** (Apple): تشغيل Stable Diffusion على الجهاز، نسخة مضمّنة بدون أجزاء SD3. ترخيص MIT.
 - **واقعي — CyberRealistic Final** (المصمم Cyberdelia) مدموج مع **LCM-LoRA** لـSD 1.5 (Simian Luo وزملاؤه)، نسخة LocalMuseAI لـCore ML: ترخيص CreativeML OpenRAIL-M، وLCM-LoRA بترخيص OpenRAIL++. ينزل لما تطلبه.
 - **فني — DreamShaper 8 LCM** (المصمم Lykon)، نسخة LocalMuseAI لـCore ML: ترخيص CreativeML OpenRAIL-M. ينزل لما تطلبه.
-- **SD-Turbo** (Stability AI، نسخة mozksoft المضغوطة): ترخيص Stability AI المجتمعي للاستخدام غير التجاري. ينزل لما تطلبه.
 - هالنماذج تخضع لقيود الاستخدام في تراخيصها (ممنوع استخدامها في الأذى والتضليل وغيره).
 - **مجدول LCM:** مكتوب في صوت من معادلات ورقة Latent Consistency Models ‏(arXiv:2310.04378).
 
