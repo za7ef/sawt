@@ -133,12 +133,20 @@ struct ChatView: View {
     /// رأس بسيط: زر القائمة يمين، اسم النموذج صغير بالنص، وكبسولة (محادثة جديدة + «…») يسار
     private var topBar: some View {
         HStack(spacing: 10) {
+            // زر القائمة: دائرة زجاج 44 بخطين أبيض (السفلي أقصر)، بدون لون التطبيق الأزرق
             Button(action: openDrawer) {
-                Image(systemName: "line.3.horizontal").font(.title3.weight(.medium))
-                    .frame(width: 44, height: 44)
+                VStack(alignment: .trailing, spacing: 6) {
+                    Capsule().frame(width: 20, height: 2.2)
+                    Capsule().frame(width: 13, height: 2.2)
+                }
+                .environment(\.layoutDirection, .leftToRight)
+                .foregroundStyle(.primary)
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+                .glassEffect(.regular.interactive(), in: .circle)
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
+            .buttonStyle(.plain)
+            .accessibilityLabel("القائمة")
 
             Spacer(minLength: 4)
 
@@ -168,21 +176,24 @@ struct ChatView: View {
 
             Spacer(minLength: 4)
 
-            HStack(spacing: 0) {
+            // بالعربي أول عنصر يمين: الكتابة جوّا و«…» على الطرف الخارجي (يسار)
+            HStack(spacing: 2) {
+                Button { store.newConversation() } label: {
+                    Image(systemName: "square.and.pencil").font(.system(size: 20, weight: .medium)).frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("محادثة جديدة")
                 Menu {
                     Menu { modelMenuItems } label: { Label("النموذج: \(activeTitle)", systemImage: "cpu") }
                     Button { showModels = true } label: { Label("كل النماذج…", systemImage: "square.grid.2x2") }
                 } label: {
-                    Image(systemName: "ellipsis").font(.body.weight(.semibold)).frame(width: 44, height: 44)
+                    Image(systemName: "ellipsis").font(.system(size: 20, weight: .semibold)).frame(width: 44, height: 44)
                 }
                 .accessibilityLabel("المزيد")
-                Button { store.newConversation() } label: {
-                    Image(systemName: "square.and.pencil").font(.title3.weight(.medium)).frame(width: 44, height: 44)
-                }
-                .accessibilityLabel("محادثة جديدة")
             }
+            .foregroundStyle(.primary)
             .buttonStyle(.plain)
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 8)
+            .frame(height: 44)
             .glassEffect(.regular.interactive(), in: .capsule)
         }
         .padding(.horizontal, 14)
@@ -398,7 +409,7 @@ struct ChatView: View {
                 } label: { Label("التفكير: \(store.thinkMode.label)", systemImage: "brain") }
             }
         } label: {
-            Image(systemName: "plus").font(.title3.weight(.medium)).frame(width: 40, height: 44)
+            Image(systemName: "plus").font(.system(size: 22, weight: .regular)).frame(width: 40, height: 44)
         }
         .buttonStyle(.plain)
         .padding(.leading, 6)
@@ -462,10 +473,10 @@ struct ChatView: View {
             }
         } label: {
             Image(systemName: dictation.isRecording ? "stop.circle.fill" : (dictation.isBusy ? "ellipsis" : "mic"))
-                .font(.title3)
+                .font(.system(size: 20, weight: .regular))
                 .symbolEffect(.pulse, isActive: dictation.isRecording)
                 .foregroundStyle(dictation.isRecording ? .red : .primary)
-                .frame(width: 38, height: 44)
+                .frame(width: 40, height: 44)
         }
         .buttonStyle(.plain)
         .disabled(dictation.isBusy || !models.stt.isReady)
@@ -482,8 +493,10 @@ struct ChatView: View {
                     ComposerField(text: $draft, placeholder: dictation.isRecording ? "أسمعك…" : "اسأل صوت",
                                   focused: $focused, clearToken: sendGen)
                     micButton
-                    actionButton.padding(.bottom, 4).padding(.trailing, 4)
+                    actionButton.padding(.trailing, 4)
                 }
+                // خانة 52: عناصر بارتفاع 44 + 4 فوق وتحت، والدائرة 36 تبعد 8 عن الحافة
+                .padding(.vertical, 4)
             }
             .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
             .padding(.horizontal, 18)
@@ -505,30 +518,35 @@ struct ChatView: View {
     /// الزر الأزرق داخل الخانة: إيقاف وقت التوليد، إرسال لو فيه نص، وإلا مكالمة صوتية
     @ViewBuilder private var actionButton: some View {
         if store.isGenerating {
-            Button { store.stop() } label: {
-                Image(systemName: "stop.fill").font(.body.weight(.bold)).frame(width: 36, height: 36)
-            }
-            .buttonStyle(.glassProminent)
-            .buttonBorderShape(.circle)
-            .transition(.scale.combined(with: .opacity))
+            Button { store.stop() } label: { blueCircle("stop.fill", size: 13) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("إيقاف")
+                .transition(.scale.combined(with: .opacity))
         } else if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pending.isEmpty {
-            Button(action: send) {
-                Image(systemName: "arrow.up").font(.body.weight(.bold)).frame(width: 36, height: 36)
-            }
-            .buttonStyle(.glassProminent)
-            .buttonBorderShape(.circle)
-            .accessibilityLabel("إرسال")
-            .transition(.scale.combined(with: .opacity))
+            Button(action: send) { blueCircle("arrow.up", size: 16) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("إرسال")
+                .transition(.scale.combined(with: .opacity))
         } else {
             Button(action: startVoice) {
-                Image(systemName: "waveform").font(.body.weight(.semibold)).frame(width: 36, height: 36)
+                blueCircle("waveform", size: 15)
                     .symbolEffect(.variableColor.iterative, options: .repeating, isActive: true)
             }
-            .buttonStyle(.glassProminent)
-            .buttonBorderShape(.circle)
+            .buttonStyle(.plain)
             .accessibilityLabel("مكالمة صوتية")
             .transition(.scale.combined(with: .opacity))
         }
+    }
+
+    /// الزر الأزرق داخل الخانة: دائرة 36 في مساحة لمس 44
+    private func blueCircle(_ icon: String, size: CGFloat) -> some View {
+        Image(systemName: icon)
+            .font(.system(size: size, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 36, height: 36)
+            .background(Circle().fill(Color(red: 0.16, green: 0.42, blue: 1.0)))
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
     }
 
     private func send() {
