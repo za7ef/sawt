@@ -429,7 +429,7 @@ actor ImageGenerator {
 
     private func runSD(_ e: ImageEngine, prompt: String, negative: String,
                        status: @escaping @Sendable (String) -> Void) async throws -> CGImage {
-        guard SDModels.installed(e) else { throw SawtError.failed("نموذج \(e.title) مو منزّل. نزّله من النماذج ← الصور.") }
+        guard SDModels.installed(e) else { throw SawtError.failed("نموذج \(e.title) مو منزّل. نزّله من الإعدادات ← الصور.") }
         let dir = SDModels.dir(e)
         if pipelineEngine != e {
             unloadSD()

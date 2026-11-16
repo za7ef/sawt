@@ -4,6 +4,8 @@ struct ModelsView: View {
     @EnvironmentObject var models: ModelManager
     @EnvironmentObject var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
+    /// داخل الإعدادات (بدون NavigationStack وزر «تم»)
+    var embedded = false
     @State private var customRepo = ""
     @State private var refresh = 0
     @State private var confirmDelete: LLMOption?
@@ -16,10 +18,19 @@ struct ModelsView: View {
     private let ramGB = Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824
 
     var body: some View {
-        NavigationStack {
+        if embedded {
+            content
+        } else {
+            NavigationStack { content }
+        }
+    }
+
+    private var content: some View {
             List {
+                RunModeSection()
+
                 Section {
-                    Picker("نوع التشغيل", selection: $tab) {
+                    Picker("اعرض", selection: $tab) {
                         Text("كرت الشاشة").tag("gpu")
                         Text("المعالج").tag("cpu")
                         Text("النماذج السحابية").tag("cloud")
@@ -37,7 +48,7 @@ struct ModelsView: View {
                     } header: {
                         Text("نماذج المعالج")
                     } footer: {
-                        Text("المختار هنا يشتغل كل ما كان التشغيل على المعالج: إعداد «المعالج»، أو «تلقائي» والتطبيق بالخلفية — للدردشة والمكالمة والوكيل. أبطأ من كرت الشاشة لكنه يكمل بالخلفية.")
+                        Text("يشتغل على «المعالج» أو «تلقائي» بالخلفية: أبطأ لكنه يكمّل بالخلفية.")
                     }
                 } else {
                 Section {
@@ -45,7 +56,7 @@ struct ModelsView: View {
                 } header: {
                     Text("نماذج كرت الشاشة")
                 } footer: {
-                    Text("ذاكرة جهازك تقريبًا \(String(format: "%.0f", ramGB)) GB. النماذج تنزل من Hugging Face مرة وحدة، وبعدها تشتغل على الجهاز بدون إنترنت. المختار هنا يشتغل والتطبيق قدّام (كرت الشاشة).")
+                    Text("ذاكرة جهازك تقريبًا \(String(format: "%.0f", ramGB)) GB. تنزل مرة وحدة وتشتغل بدون نت.")
                 }
 
                 Section("نموذج مخصص") {
@@ -64,8 +75,6 @@ struct ModelsView: View {
                     }
                 }
                 }
-
-                ImageModelsSection()
 
                 Section {
                     ForEach(Catalog.stts) { s in
@@ -130,7 +139,7 @@ struct ModelsView: View {
                 } header: {
                     Text("الملفات على الجهاز")
                 } footer: {
-                    Text("كل مجلدات النماذج الموجودة فعليًا، حتى التنزيلات الناقصة والقديمة.")
+                    Text("كل مجلدات النماذج، حتى التنزيلات الناقصة.")
                 }
             }
             .task { reloadFiles() }
@@ -148,7 +157,9 @@ struct ModelsView: View {
             .navigationTitle("النماذج")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("تم") { dismiss() } }
+                if !embedded {
+                    ToolbarItem(placement: .confirmationAction) { Button("تم") { dismiss() } }
+                }
             }
             .confirmationDialog("حذف النموذج؟", isPresented: Binding(get: { confirmDelete != nil },
                                                                     set: { if !$0 { confirmDelete = nil } }),
@@ -161,7 +172,6 @@ struct ModelsView: View {
                     }
                 }
             }
-        }
     }
 
     @ViewBuilder private func row(_ m: LLMOption) -> some View {

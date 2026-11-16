@@ -668,11 +668,11 @@ final class ChatStore: ObservableObject {
             editMessage(bid, in: conv) { $0.genPending = nil; $0.text = "🎨 " + why }
         }
         guard let engine = ImageEngine.selected else {
-            fail("اختر محرك الصور أول: من زر + ← محرك الصور، أو من النماذج ← الصور."); return
+            fail("اختر محرك الصور أول: من زر + ← محرك الصور، أو من الإعدادات ← الصور."); return
         }
         if PhoneAgent.shared.running { fail("الوكيل شغّال على مهمة — وقّفه أول وبعدين أرسم."); return }
         if engine.isLocalSD, !SDModels.installed(engine) {
-            fail("نموذج \(engine.title) مو منزّل. نزّله من النماذج ← الصور."); return
+            fail("نموذج \(engine.title) مو منزّل. نزّله من الإعدادات ← الصور."); return
         }
         if engine.isGemini {
             if !CloudProvider.geminiPaid.hasKey, !CloudProvider.gemini.hasKey { fail("ما فيه مفتاح Gemini. أضفه من النماذج ← السحابية."); return }

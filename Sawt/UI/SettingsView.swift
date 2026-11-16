@@ -1,30 +1,102 @@
 import SwiftUI
 
+// MARK: - الإعدادات: قائمة قصيرة، وكل مجموعة لها صفحة
+
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var models: ModelManager
     @Environment(\.dismiss) private var dismiss
-    @State private var usage: Storage.Usage?
-    @State private var confirmAll = false
-    @State private var unused: [Storage.ModelFolder] = []
+    @ObservedObject private var memory = MemoryStore.shared
+    @AppStorage("llmDevice") private var llmDevice = "gpu"
+    @AppStorage("imageEngine") private var imageEngine = ""
+    @State private var used: String?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    SettingsRow(icon: "waveform", color: .purple, title: "الصوت والمكالمة", sub: voiceName) { VoiceSettingsPage() }
+                    SettingsRow(icon: "cpu", color: .blue, title: "النماذج", sub: modelSummary) { ModelsView(embedded: true) }
+                    SettingsRow(icon: "paintpalette.fill", color: .pink, title: "الصور", sub: ImageEngine(rawValue: imageEngine)?.title ?? "ما اخترت محرك") { ImageSettingsPage() }
+                    SettingsRow(icon: "iphone.gen3", color: .orange, title: "الوكيل والتحكم بالجوال", sub: "تجريبي") { PhoneControlView() }
+                }
+                Section {
+                    SettingsRow(icon: "person.fill", color: .teal, title: "عنك والشخصية", sub: "الذاكرة: \(memory.items.count)") { ProfileSettingsPage() }
+                    SettingsRow(icon: "lock.shield.fill", color: .green, title: "الخصوصية والسحابة", sub: CloudLLM.active.map { "سحابي: \($0.title)" } ?? "على الجهاز") { PrivacyCloudPage() }
+                    SettingsRow(icon: "internaldrive.fill", color: .gray, title: "التخزين والتشخيص", sub: used) { StorageDiagPage() }
+                }
+                Section {
+                    SettingsRow(icon: "info", color: .indigo, title: "حول صوت", sub: AppVersion.label) { AboutPage() }
+                }
+            }
+            .task {
+                let u = await Task.detached(priority: .utility) { Storage.usage() }.value
+                used = Storage.format(u.models + u.whisper + u.cache)
+            }
+            .navigationTitle("الإعدادات")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("تم") { dismiss() } } }
+        }
+    }
+
+    private var voiceName: String {
+        Catalog.allVoices.first { $0.id == settings.voiceID }?.title ?? "صوت آبل"
+    }
+
+    private var modelSummary: String {
+        if let c = CloudLLM.active { return "سحابي: \(c.title)" }
+        let dev = llmDevice == "cpu" ? "المعالج" : llmDevice == "auto" ? "تلقائي" : "كرت الشاشة"
+        let name = llmDevice == "cpu" ? GGUFSpec.active.name : (Catalog.llms.first { $0.id == settings.llmID }?.title ?? "")
+        return name.isEmpty ? dev : "\(name) • \(dev)"
+    }
+}
+
+/// صف في القائمة الرئيسية: أيقونة ملونة ٢٨ نقطة + عنوان + سطر رمادي
+struct SettingsRow<Dest: View>: View {
+    let icon: String
+    let color: Color
+    let title: String
+    var sub: String?
+    @ViewBuilder let dest: () -> Dest
+
+    var body: some View {
+        NavigationLink {
+            dest()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 28)
+                    .background(color.gradient, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.body)
+                    if let sub, !sub.isEmpty {
+                        Text(sub).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+}
+
+// MARK: - الصوت والمكالمة
+
+struct VoiceSettingsPage: View {
+    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var models: ModelManager
     @AppStorage("showCallDebug") private var showCallDebug = false
     @AppStorage("allowAppleServerSTT") private var allowAppleServer = false
-    @State private var shareURL: URL?
     @ObservedObject private var namaa = NamaaVoice.shared
     /// خطوات توليد نماء: أقل = أسرع وجودة أقل. "جرّب" يستخدم نفس الاختيار عشان تقارن بأذنك
     @AppStorage("namaaSteps") private var namaaSteps = 7
-    @AppStorage("llmDevice") private var llmDevice = "gpu"
-    @ObservedObject private var llamaDL = LlamaDownloader.shared
-    @State private var cpuWarn = false
-    @State private var cpuTest: String?
-    @ObservedObject private var memory = MemoryStore.shared
     @ObservedObject private var voiceDL = VoiceDownloads.shared
     @State private var namaaWarn = false
     @State private var confirmNamaaDelete = false
 
     var body: some View {
-        NavigationStack {
-            Form {
+        Form {
                 Section {
                     ForEach(Catalog.voices) { v in
                         Button {
@@ -52,7 +124,7 @@ struct SettingsView: View {
                 } header: {
                     Text("الصوت")
                 } footer: {
-                    Text("نبرة فصحى مدمجة في التطبيق، والأصوات الثانية تنزل لجوالك. ننصح بنبرة سعودية للمكالمات. الجمل الإنجليزية تُقرأ بصوت آبل.")
+                    Text("ننصح بنبرة سعودية للمكالمات. الإنجليزي يُقرأ بصوت آبل.")
                 }
 
                 Section {
@@ -60,17 +132,9 @@ struct SettingsView: View {
                         downloadRow(item)
                     }
                 } header: {
-                    Text("أصوات تنزل لجوالك")
+                    Text("أصوات للتنزيل")
                 } footer: {
-                    Text("نبرة سعودية (Apache 2.0) هي المقترحة للمكالمات، وتنزل من إصدار الأصوات العام لصوت. رخصة ميرو (CC BY-NC-ND 4.0) ما تسمح بنشره داخل التطبيق، فينزل مباشرة من Hugging Face لجوالك.")
-                }
-
-                Section {
-                    namaaRow
-                } header: {
-                    Text("نماء سعودي (تجريبي)")
-                } footer: {
-                    Text("تجريبي وثقيل: ياخذ وقت قبل كل جملة ويسخّن الجوال، وثقيل على المكالمات.\nالخطوات: كل ما قلّت صار الصوت أسرع بس أقل وضوح، وكل ما زادت صار أوضح بس أبطأ. 7 توازن بين الاثنين، و16 للتجربة بس.")
+                    Text("تنزل مرة وحدة وتشتغل بدون نت. التراخيص في «حول صوت».")
                 }
 
                 Section("سرعة الكلام") {
@@ -84,65 +148,9 @@ struct SettingsView: View {
                         Text("الصبر")
                     } minimumValueLabel: { Text("سريع") } maximumValueLabel: { Text("صبور") }
                 } header: {
-                    Text("متى يرد عليك")
+                    Text("متى يرد")
                 } footer: {
-                    Text("سريع: يرد أول ما توقف. صبور: يعطيك وقت تفكر بين الكلام. يتطبق من المكالمة الجاية.")
-                }
-
-                Section {
-                    Picker("تشغيل النموذج", selection: $llmDevice) {
-                        Text("كرت الشاشة").tag("gpu")
-                        Text("المعالج").tag("cpu")
-                        Text("تلقائي").tag("auto")
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: llmDevice) { _, v in
-                        Task.detached(priority: .utility) { await LLMService.shared.warmUp(reason: "switch \(v)") }
-                        slog("settings: llmDevice=\(v)")
-                        if v == "cpu" { cpuWarn = true }
-                        if v != "gpu" {
-                            cpuTest = "يختبر المعالج…"
-                            Task {
-                                let r = await LLMService.shared.cpuSelfTest()
-                                cpuTest = r.ok ? "المعالج يشتغل (\(r.info))" : "المعالج ما اشتغل: \(r.info)"
-                                if !r.ok && r.info != "نموذج المعالج مو منزّل" { llmDevice = "gpu" }
-                            }
-                        }
-                    }
-                    if llmDevice != "gpu" {
-                        if llamaDL.downloaded {
-                            HStack {
-                                Text("\(LlamaModelFile.spec.name) جاهز (\(LlamaModelFile.sizeText)) — تغيّره من صفحة النماذج")
-                                Spacer()
-                                Button("احذف", role: .destructive) { llamaDL.delete() }.buttonStyle(.borderless)
-                            }
-                        } else if llamaDL.running {
-                            ProgressView(value: llamaDL.progress) { Text("ينزّل نموذج المعالج… \(Int(llamaDL.progress * 100))٪") }
-                            Button("إلغاء", role: .destructive) { llamaDL.cancel() }
-                        } else {
-                            Button("نزّل \(LlamaModelFile.spec.name) (\(LlamaModelFile.sizeText))") { llamaDL.start() }
-                            Text("المتوفر: \(ByteCountFormatter.string(fromByteCount: LlamaModelFile.freeBytes, countStyle: .file))").font(.footnote).foregroundStyle(.secondary)
-                        }
-                        if !llamaDL.message.isEmpty { Text(llamaDL.message).font(.footnote) }
-                        Button("اختبر المعالج") {
-                            cpuTest = "يختبر المعالج…"
-                            Task {
-                                let r = await LLMService.shared.cpuSelfTest()
-                                cpuTest = r.ok ? "المعالج يشتغل (\(r.info))" : "المعالج ما اشتغل: \(r.info)"
-                            }
-                        }.disabled(!llamaDL.downloaded)
-                        Button("اختبر سرعة الخيوط (٢/٤/٦)") {
-                            cpuTest = "يقيس السرعة… (دقيقة تقريبًا)"
-                            Task { cpuTest = await LLMService.shared.cpuThreadBench() }
-                        }.disabled(!llamaDL.downloaded)
-                    }
-                } header: {
-                    Text("تشغيل النموذج")
-                } footer: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("المعالج يستخدم نموذج خاص فيه (Gemma 4 E2B بصيغة GGUF، ينزل مرة وحدة). المعالج: يشتغل في الخلفية لكن أبطأ. كرت الشاشة: سريع وسلس لكن ما يشتغل في الخلفية. تلقائي: كرت الشاشة والتطبيق قدّامك، والمعالج لما تقفل الشاشة أو تطلع من التطبيق.")
-                        if let cpuTest { Text(cpuTest).foregroundStyle(cpuTest.contains("ما اشتغل") ? .red : .secondary) }
-                    }
+                    Text("سريع: يرد أول ما تسكت. صبور: يعطيك وقت تفكر.")
                 }
 
                 Section {
@@ -159,116 +167,33 @@ struct SettingsView: View {
                     Text("لغة السمع")
                 } footer: {
                     if settings.sttID == "apple" && !AppleSTT.supportsOnDevice {
-                        Text("جوالك ما يدعم التعرّف على العربي على الجهاز، فسمع آبل يحتاج يرسل صوتك لسيرفرات آبل. بدون هالخيار ما يشتغل؛ والبديل الخاص تمامًا: Whisper من شاشة النماذج.")
+                        Text("جوالك يحتاج نت عشان يسمع العربي بسمع آبل. البديل بدون نت: Whisper من النماذج.")
                     }
                 }
 
+                Section("المكالمة") {
+                    Toggle("معلومات التشخيص في المكالمة", isOn: $showCallDebug)
+                }
+
                 Section {
-                    TextEditor(text: $settings.persona).frame(minHeight: 160)
-                    Button("رجّع الافتراضي") { settings.persona = AppSettings.defaultPersona }
+                    namaaRow
                 } header: {
-                    Text("شخصية المساعد")
-                }
-
-                Section {
-                    TextField("اسمك", text: $settings.userName)
-                    Picker("خاطبني بصيغة", selection: $settings.addressForm) {
-                        Text("بدون تحديد").tag("")
-                        Text("مذكر").tag("m")
-                        Text("مؤنث").tag("f")
-                    }
-                } header: {
-                    Text("عنك (اختياري)")
+                    Text("متقدم: نماء (تجريبي)")
                 } footer: {
-                    Text("محفوظ على جوالك بس، ويُضاف للتعليمات إذا عبّيته.")
+                    Text("أبطأ ويسخّن الجوال. خطوات أقل = أسرع، أكثر = أوضح.")
                 }
 
-                Section {
-                    NavigationLink {
-                        MemoryView()
-                    } label: {
-                        LabeledContent("الذاكرة", value: "\(memory.items.count)")
-                    }
-                } footer: {
-                    Text("يحفظ معلومات مهمة عنك من المحادثات على جوالك بس. تقدر تعدلها أو تحذفها.")
-                }
-
-                Section {
-                    NavigationLink {
-                        PhoneControlView()
-                    } label: {
-                        Text("تحكم بالجوال (تجريبي)")
-                    }
-                }
-
-                Section {
-                    if let u = usage {
-                        LabeledContent("النماذج اللغوية", value: Storage.format(u.models))
-                        LabeledContent("نماذج السمع", value: Storage.format(u.whisper))
-                        LabeledContent("الكاش", value: Storage.format(u.cache))
-                    } else {
-                        HStack { ProgressView(); Text("يحسب…").foregroundStyle(.secondary) }
-                    }
-                    if !unused.isEmpty {
-                        Button(role: .destructive) {
-                            for f in unused { models.deleteFolder(f) }
-                            unused = []
-                            Task { await refreshUsage() }
-                        } label: {
-                            LabeledContent("حذف ملفات النماذج غير المستخدمة",
-                                           value: Storage.format(unused.reduce(0) { $0 + $1.bytes }))
-                        }
-                    }
-                    Button("حذف ملفات الكاش") {
-                        Task.detached { Storage.clearCache() ; await refreshUsage() }
-                    }
-                    Button("حذف كل النماذج", role: .destructive) { confirmAll = true }
-                } header: {
-                    Text("التخزين")
-                } footer: {
-                    Text("الكاش: ملفات مؤقتة وتنزيلات ناقصة. حذفه ما يمسح النماذج الكاملة. تقدر تحذف نموذج معيّن من شاشة النماذج.")
-                }
-
-                Section("التشخيص") {
-                    Toggle("إظهار معلومات التشخيص في المكالمة", isOn: $showCallDebug)
-                    Button {
-                        shareURL = Log.shared.export()
-                    } label: {
-                        Label("تصدير السجل", systemImage: "square.and.arrow.up")
-                    }
-                    LabeledContent("ذاكرة التطبيق", value: "\(RAM.footprintMB) MB")
-                    LabeledContent("حرارة الجوال", value: ThermalWatch.label)
-                }
-
-                AboutSection()
-            }
-            .task { await refreshUsage() }
-            .confirmationDialog("تحذف كل النماذج من الجوال؟", isPresented: $confirmAll, titleVisibility: .visible) {
-                Button("حذف الكل", role: .destructive) {
-                    models.deleteAllModels()
-                    Task { await refreshUsage() }
-                }
-            } message: { Text("بتحتاج تنزلها من جديد.") }
-            .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) {
-                if let u = shareURL { ActivityView(items: [u]) }
-            }
-            .alert("المعالج", isPresented: $cpuWarn) {
-                Button("تمام", role: .cancel) {}
-            } message: {
-                Text("المعالج: يشتغل في الخلفية لكن بطيء. كرت الشاشة: سريع وسلس لكن ما يشتغل في الخلفية.")
-            }
-            .alert("نماء ثقيل على المكالمات", isPresented: $namaaWarn) {
-                Button("تمام") {}
-            } message: {
-                Text("بيتأخر الرد في المكالمة لأنه يولّد كل جملة كاملة قبل ما يتكلم، ويسخّن الجوال. الجمل الإنجليزية تنقرأ بصوت آبل.")
-            }
-            .confirmationDialog("تحذف صوت نماء؟", isPresented: $confirmNamaaDelete, titleVisibility: .visible) {
-                Button("حذف", role: .destructive) { namaa.delete(); models.voiceChanged() }
-            }
-            .navigationTitle("الإعدادات")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("تم") { dismiss() } } }
         }
+        .alert("نماء ثقيل على المكالمات", isPresented: $namaaWarn) {
+            Button("تمام") {}
+        } message: {
+            Text("يتأخر الرد لأنه يولّد كل جملة كاملة قبل ما يتكلم، ويسخّن الجوال.")
+        }
+        .confirmationDialog("تحذف صوت نماء؟", isPresented: $confirmNamaaDelete, titleVisibility: .visible) {
+            Button("حذف", role: .destructive) { namaa.delete(); models.voiceChanged() }
+        }
+        .navigationTitle("الصوت والمكالمة")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     @ViewBuilder private func downloadRow(_ item: VoiceDownloads.Item) -> some View {
@@ -347,6 +272,219 @@ struct SettingsView: View {
         }
     }
 
+}
+
+// MARK: - طريقة التشغيل (أعلى صفحة النماذج)
+
+struct RunModeSection: View {
+    @AppStorage("llmDevice") private var llmDevice = "gpu"
+    @ObservedObject private var llamaDL = LlamaDownloader.shared
+    @State private var cpuWarn = false
+    @State private var cpuTest: String?
+
+    var body: some View {
+                Section {
+                    Picker("تشغيل النموذج", selection: $llmDevice) {
+                        Text("كرت الشاشة").tag("gpu")
+                        Text("المعالج").tag("cpu")
+                        Text("تلقائي").tag("auto")
+                    }
+                    .pickerStyle(.segmented)
+                    .alert("المعالج", isPresented: $cpuWarn) {
+                        Button("تمام", role: .cancel) {}
+                    } message: {
+                        Text("يشتغل بالخلفية لكن أبطأ من كرت الشاشة.")
+                    }
+                    .onChange(of: llmDevice) { _, v in
+                        Task.detached(priority: .utility) { await LLMService.shared.warmUp(reason: "switch \(v)") }
+                        slog("settings: llmDevice=\(v)")
+                        if v == "cpu" { cpuWarn = true }
+                        if v != "gpu" {
+                            cpuTest = "يختبر المعالج…"
+                            Task {
+                                let r = await LLMService.shared.cpuSelfTest()
+                                cpuTest = r.ok ? "المعالج يشتغل (\(r.info))" : "المعالج ما اشتغل: \(r.info)"
+                                if !r.ok && r.info != "نموذج المعالج مو منزّل" { llmDevice = "gpu" }
+                            }
+                        }
+                    }
+                    if llmDevice != "gpu" {
+                        if llamaDL.downloaded {
+                            HStack {
+                                Text("\(LlamaModelFile.spec.name) جاهز (\(LlamaModelFile.sizeText))")
+                                Spacer()
+                                Button("احذف", role: .destructive) { llamaDL.delete() }.buttonStyle(.borderless)
+                            }
+                        } else if llamaDL.running {
+                            ProgressView(value: llamaDL.progress) { Text("ينزّل نموذج المعالج… \(Int(llamaDL.progress * 100))٪") }
+                            Button("إلغاء", role: .destructive) { llamaDL.cancel() }
+                        } else {
+                            Button("نزّل \(LlamaModelFile.spec.name) (\(LlamaModelFile.sizeText))") { llamaDL.start() }
+                            Text("المتوفر: \(ByteCountFormatter.string(fromByteCount: LlamaModelFile.freeBytes, countStyle: .file))").font(.footnote).foregroundStyle(.secondary)
+                        }
+                        if !llamaDL.message.isEmpty { Text(llamaDL.message).font(.footnote) }
+                    }
+                } header: {
+                    Text("التشغيل")
+                } footer: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("كرت الشاشة أسرع، والمعالج يكمّل بالخلفية. تلقائي: كرت الشاشة قدّام والمعالج بالخلفية.")
+                        if let cpuTest { Text(cpuTest).foregroundStyle(cpuTest.contains("ما اشتغل") ? .red : .secondary) }
+                    }
+                }
+
+                if llmDevice != "gpu" {
+                    Section("متقدم") {
+                        Button("اختبر المعالج") {
+                        cpuTest = "يختبر المعالج…"
+                        Task {
+                            let r = await LLMService.shared.cpuSelfTest()
+                            cpuTest = r.ok ? "المعالج يشتغل (\(r.info))" : "المعالج ما اشتغل: \(r.info)"
+                        }
+                    }.disabled(!llamaDL.downloaded)
+                    Button("اختبر سرعة الخيوط (٢/٤/٦)") {
+                        cpuTest = "يقيس السرعة… (دقيقة تقريبًا)"
+                        Task { cpuTest = await LLMService.shared.cpuThreadBench() }
+                    }.disabled(!llamaDL.downloaded)
+                    }
+                }
+    }
+}
+
+// MARK: - الصور
+
+struct ImageSettingsPage: View {
+    var body: some View {
+        List { ImageModelsSection() }
+            .navigationTitle("الصور")
+            .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - عنك والشخصية
+
+struct ProfileSettingsPage: View {
+    @EnvironmentObject var settings: AppSettings
+    @ObservedObject private var memory = MemoryStore.shared
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("اسمك", text: $settings.userName)
+                Picker("خاطبني بصيغة", selection: $settings.addressForm) {
+                    Text("بدون تحديد").tag("")
+                    Text("مذكر").tag("m")
+                    Text("مؤنث").tag("f")
+                }
+            } header: {
+                Text("عنك")
+            } footer: {
+                Text("اختياري، وعلى جوالك بس.")
+            }
+
+            Section {
+                NavigationLink {
+                    MemoryView()
+                } label: {
+                    LabeledContent("الذاكرة", value: "\(memory.items.count)")
+                }
+            } footer: {
+                Text("محفوظة على جوالك بس، وتقدر تعدّلها.")
+            }
+
+            Section {
+                TextEditor(text: $settings.persona).frame(minHeight: 160)
+                Button("رجّع الافتراضي") { settings.persona = AppSettings.defaultPersona }
+            } header: {
+                Text("شخصية المساعد")
+            }
+        }
+        .navigationTitle("عنك والشخصية")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - الخصوصية والسحابة
+
+struct PrivacyCloudPage: View {
+    var body: some View {
+        Form {
+            CloudSections(showActivate: true)
+            Section {
+                NavigationLink("سياسة الخصوصية") { MarkdownPage(title: "سياسة الخصوصية", file: "privacy") }
+            }
+        }
+        .navigationTitle("الخصوصية والسحابة")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - التخزين والتشخيص
+
+struct StorageDiagPage: View {
+    @EnvironmentObject var models: ModelManager
+    @State private var usage: Storage.Usage?
+    @State private var confirmAll = false
+    @State private var unused: [Storage.ModelFolder] = []
+    @State private var shareURL: URL?
+
+    var body: some View {
+        Form {
+            Section {
+                if let u = usage {
+                    LabeledContent("النماذج اللغوية", value: Storage.format(u.models))
+                    LabeledContent("نماذج السمع", value: Storage.format(u.whisper))
+                    LabeledContent("الكاش", value: Storage.format(u.cache))
+                } else {
+                    HStack { ProgressView(); Text("يحسب…").foregroundStyle(.secondary) }
+                }
+                if !unused.isEmpty {
+                    Button(role: .destructive) {
+                        for f in unused { models.deleteFolder(f) }
+                        unused = []
+                        Task { await refreshUsage() }
+                    } label: {
+                        LabeledContent("حذف ملفات غير مستخدمة",
+                                       value: Storage.format(unused.reduce(0) { $0 + $1.bytes }))
+                    }
+                }
+                Button("حذف الكاش") {
+                    Task.detached { Storage.clearCache() ; await refreshUsage() }
+                }
+            } header: {
+                Text("التخزين")
+            } footer: {
+                Text("حذف الكاش ما يمسح النماذج.")
+            }
+
+            Section("التشخيص") {
+                Button {
+                    shareURL = Log.shared.export()
+                } label: {
+                    Label("تصدير السجل", systemImage: "square.and.arrow.up")
+                }
+                LabeledContent("ذاكرة التطبيق", value: "\(RAM.footprintMB) MB")
+                LabeledContent("حرارة الجوال", value: ThermalWatch.label)
+            }
+
+            Section {
+                Button("حذف كل النماذج", role: .destructive) { confirmAll = true }
+            }
+        }
+        .task { await refreshUsage() }
+        .confirmationDialog("تحذف كل النماذج من الجوال؟", isPresented: $confirmAll, titleVisibility: .visible) {
+            Button("حذف الكل", role: .destructive) {
+                models.deleteAllModels()
+                Task { await refreshUsage() }
+            }
+        } message: { Text("بتحتاج تنزلها من جديد.") }
+        .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) {
+            if let u = shareURL { ActivityView(items: [u]) }
+        }
+        .navigationTitle("التخزين والتشخيص")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
     private func refreshUsage() async {
         let u = await Task.detached(priority: .utility) { Storage.usage() }.value
         let d = models.downloaded, s = models.downloadedSTT, busy = models.downloadingID
@@ -357,5 +495,15 @@ struct SettingsView: View {
             }
         }.value
         await MainActor.run { usage = u; unused = list }
+    }
+}
+
+// MARK: - حول صوت
+
+struct AboutPage: View {
+    var body: some View {
+        Form { AboutSection() }
+            .navigationTitle("حول صوت")
+            .navigationBarTitleDisplayMode(.inline)
     }
 }
