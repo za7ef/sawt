@@ -299,6 +299,20 @@ final class CallController: ObservableObject {
         slog("call: camera on")
     }
 
+    /// كتابة أثناء المكالمة: تنرسل كدور منك (وتقاطع الرد لو شغّال)
+    @MainActor func sendTyped(_ raw: String) {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, state != .idle, state != .starting else { return }
+        if state == .speaking || state == .thinking { cancelReply(recordPartial: true) }
+        fragmentTimer?.cancel()
+        fragmentTimer = nil
+        carryUserText = ""
+        liveUser = ""
+        slog("call: typed turn (\(t.count) chars)")
+        turns.append(Turn(role: .user, text: t))
+        reply(to: t)
+    }
+
     func toggleMute() {
         muted.toggle()
         let m = muted

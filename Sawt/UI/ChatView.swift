@@ -48,7 +48,7 @@ struct ChatView: View {
         }
         .background(Color.black.ignoresSafeArea())
         .fullScreenCover(isPresented: $voiceMode) {
-            VoiceModeView()
+            VoiceModeView(openDrawer: openDrawer)
                 .environment(\.layoutDirection, .rightToLeft)
         }
         .sheet(isPresented: $showModels) { ModelsView() }

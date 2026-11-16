@@ -1,41 +1,56 @@
 import SwiftUI
 
-/// وضع المكالمة بملء الشاشة.
+/// وضع المكالمة بملء الشاشة: شاشة سودا، الكرة بالنص، وتحت: إنهاء + كتم + خانة كتابة.
 struct VoiceModeView: View {
+    /// يفتح القائمة الجانبية بعد ما تسكّر المكالمة (اختياري)
+    var openDrawer: (() -> Void)? = nil
     @EnvironmentObject var call: CallController
     @EnvironmentObject var store: ChatStore
     @EnvironmentObject var models: ModelManager
     @EnvironmentObject var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
-    @State private var showCaptions = true
     @AppStorage("showCallDebug") private var showDebug = false
     @AppStorage("callCameraWarned") private var cameraWarned = false
     @State private var cameraWarn = false
+    @State private var showSettings = false
+    @State private var typed = ""
+    @FocusState private var typing: Bool
     @ObservedObject private var camera = CallCamera.shared
 
     var body: some View {
         ZStack {
-            background
+            Color.black.ignoresSafeArea()
             VStack(spacing: 0) {
                 header
                 if showDebug { DebugOverlay(debug: call.debug).padding(.horizontal, 16).padding(.top, 8) }
                 if call.cameraOn && camera.running { cameraPreview.padding(.top, 10) }
                 Spacer()
                 OrbView(mic: call.micLevel, out: call.outLevel, state: call.state)
-                    .frame(width: 260, height: 260)
+                    .frame(width: 280, height: 280)
                     .contentShape(Circle())
                     .onTapGesture { call.interrupt() }
-                Text(statusText)
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                    .contentTransition(.opacity)
-                    .animation(.easeInOut(duration: 0.25), value: call.state)
-                    .padding(.top, 28)
+                    .accessibilityLabel("الكرة: اضغط عشان تقاطعه")
+                Group {
+                    if let st = statusText {
+                        Text(st)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .transition(.opacity)
+                    } else {
+                        Text(" ").font(.subheadline)
+                    }
+                }
+                .padding(.top, 24)
+                .padding(.horizontal, 32)
+                .animation(.easeInOut(duration: 0.25), value: statusText)
                 Spacer()
-                if showCaptions { captions.padding(.horizontal, 24).padding(.bottom, 18) }
-                controls.padding(.bottom, 24)
+                controls
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
             }
         }
+        .preferredColorScheme(.dark)
         .overlay(alignment: .top) {
             if let n = call.notice {
                 Text(n)
@@ -44,7 +59,7 @@ struct VoiceModeView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.top, 60).padding(.horizontal, 24)
+                    .padding(.top, 64).padding(.horizontal, 24)
                     .onTapGesture { call.notice = nil }
             }
         }
@@ -60,9 +75,6 @@ struct VoiceModeView: View {
             call.end()
             call.onTurnsChanged = nil
         }
-        .onChange(of: call.state) { _, s in
-            if s == .idle, call.error != nil { } // يبقى ظاهر للتنبيه
-        }
         .alert("تنبيه", isPresented: Binding(get: { call.error != nil }, set: { if !$0 { call.error = nil } })) {
             Button("تمام", role: .cancel) { if call.state == .idle { dismiss() } }
         } message: { Text(call.error ?? "") }
@@ -72,7 +84,19 @@ struct VoiceModeView: View {
         } message: {
             Text("مع كل كلام تقوله ينأخذ إطار واحد من الكاميرا ويشوفه النموذج على جوالك. هذا يبدّل النموذج لوضع النظر (ياخذ ثواني)، والرد يتأخر شوي، والجوال يسخن أكثر.")
         }
+        .sheet(isPresented: $showSettings) {
+            CallSettingsSheet(onCamera: {
+                showSettings = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { toggleCamera() }
+            })
+            .environment(\.layoutDirection, .rightToLeft)
+            .presentationDetents([.medium, .large])
+        }
         .statusBarHidden(false)
+    }
+
+    private func toggleCamera() {
+        if call.cameraOn || cameraWarned { Task { await call.toggleCamera() } } else { cameraWarn = true }
     }
 
     private var cameraPreview: some View {
@@ -91,107 +115,208 @@ struct VoiceModeView: View {
             }
     }
 
-    private var background: some View {
-        ZStack {
-            Theme.bg
-            RadialGradient(colors: [Theme.accent.opacity(0.18 + 0.25 * Double(call.outLevel)), .clear],
-                           center: .center, startRadius: 20, endRadius: 420)
-                .animation(.easeOut(duration: 0.2), value: call.outLevel)
-        }
-        .ignoresSafeArea()
-    }
-
+    /// فوق: القائمة (يمين بالعربي) والإعدادات (يسار)، دواير زجاج ٤٤
     private var header: some View {
         HStack {
-            Button { showCaptions.toggle() } label: {
-                Image(systemName: showCaptions ? "captions.bubble.fill" : "captions.bubble")
+            Menu {
+                Button { dismiss() } label: { Label("أنهِ المكالمة وارجع للمحادثة", systemImage: "bubble.left") }
+                if let openDrawer {
+                    Button {
+                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { openDrawer() }
+                    } label: { Label("أنهِ المكالمة وافتح القائمة", systemImage: "sidebar.right") }
+                }
+            } label: {
+                VStack(alignment: .trailing, spacing: 6) {
+                    Capsule().frame(width: 20, height: 2.2)
+                    Capsule().frame(width: 13, height: 2.2)
+                }
+                .environment(\.layoutDirection, .leftToRight)
+                .foregroundStyle(.primary)
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+                .glassEffect(.regular.interactive(), in: .circle)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("القائمة")
+
+            Spacer()
+
+            Button { showSettings = true } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.primary)
                     .frame(width: 44, height: 44)
+                    .contentShape(Circle())
+                    .glassEffect(.regular.interactive(), in: .circle)
             }
-            .buttonStyle(.glass).buttonBorderShape(.circle)
-            Spacer()
-            VStack(spacing: 2) {
-                Text("صوت").font(.headline)
-                Text(settings.llm.title + " • " + settings.voice.title)
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button { showDebug.toggle() } label: {
-                Image(systemName: showDebug ? "ladybug.fill" : "ladybug").frame(width: 44, height: 44)
-            }
-            .buttonStyle(.glass).buttonBorderShape(.circle)
+            .buttonStyle(.plain)
+            .accessibilityLabel("إعدادات المكالمة")
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
     }
 
-    private var statusText: String {
+    /// نص صغير تحت الكرة بس وقت الحاجة
+    private var statusText: String? {
         switch call.state {
-        case .idle: return models.callMissing == nil ? "جاهز" : (models.stt.isBusy || models.llm.isBusy ? "يجهّز النماذج…" : "فيه شي ناقص")
+        case .idle:
+            if let m = models.callMissing { return models.stt.isBusy || models.llm.isBusy ? "يجهّز…" : m }
+            return nil
         case .starting: return "يتصل…"
-        case .listening: return call.muted ? "المايك مكتوم" : "أسمعك…"
-        case .hearing: return "تكلّم، أنا أسمع"
-        case .thinking: return "يفكر…"
-        case .speaking: return "اضغط الكرة أو تكلّم عشان تقاطعه"
+        case .listening: return call.muted ? "المايك مكتوم" : nil
+        case .hearing, .thinking, .speaking: return nil
         }
     }
 
-    private var captions: some View {
-        let lastUser = call.turns.last(where: { $0.role == .user })?.text ?? ""
-        let user = call.liveUser.isEmpty ? (call.state == .hearing ? "" : lastUser) : call.liveUser
-        let ai = call.liveAI.isEmpty ? (call.turns.last?.role == .assistant ? call.turns.last!.text : "") : call.liveAI
-        return VStack(alignment: .leading, spacing: 10) {
-            if !user.isEmpty {
-                Text(user).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
-            }
-            if !ai.isEmpty {
-                Text(ai).font(.body).lineLimit(4)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .opacity(user.isEmpty && ai.isEmpty ? 0 : 1)
-        .animation(.easeInOut(duration: 0.2), value: ai)
+    private func sendTyped() {
+        let t = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        call.sendTyped(t)
+        typed = ""
     }
 
+    /// تحت: خانة الكتابة + كتم + إنهاء (بالعربي الإنهاء على الطرف اليسار)
     private var controls: some View {
-        GlassEffectContainer(spacing: 24) {
-            HStack(spacing: 18) {
+        GlassEffectContainer(spacing: 12) {
+            HStack(spacing: 12) {
+                HStack(spacing: 8) {
+                    Button { showSettings = true } label: {
+                        Image(systemName: "plus").font(.system(size: 20, weight: .regular))
+                            .frame(width: 36, height: 36)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("المزيد")
+                    TextField("اكتب…", text: $typed)
+                        .focused($typing)
+                        .submitLabel(.send)
+                        .onSubmit(sendTyped)
+                    if !typed.trimmingCharacters(in: .whitespaces).isEmpty {
+                        Button(action: sendTyped) {
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(.black)
+                                .frame(width: 32, height: 32)
+                                .background(Color.white, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("أرسل")
+                    }
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 56)
+                .glassEffect(.regular.interactive(), in: .capsule)
+                .disabled(call.state == .idle || call.state == .starting)
+
                 Button { call.toggleMute() } label: {
                     Image(systemName: call.muted ? "mic.slash.fill" : "mic.fill")
-                        .font(.title2).frame(width: 68, height: 68)
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(call.muted ? Color.red : Color.primary)
+                        .frame(width: 56, height: 56)
+                        .contentShape(Circle())
                         .contentTransition(.symbolEffect(.replace))
+                        .glassEffect(.regular.interactive(), in: .circle)
                 }
-                .buttonStyle(.glass).buttonBorderShape(.circle)
-                .tint(call.muted ? .red : nil)
-
-                Button {
-                    if call.cameraOn || cameraWarned { Task { await call.toggleCamera() } } else { cameraWarn = true }
-                } label: {
-                    Group {
-                        if call.cameraBusy { ProgressView() }
-                        else { Image(systemName: call.cameraOn ? "video.fill" : "video.slash") }
-                    }
-                    .font(.title2).frame(width: 68, height: 68)
-                }
-                .buttonStyle(.glass).buttonBorderShape(.circle)
-                .tint(call.cameraOn ? Theme.accent : nil)
-                .disabled(call.cameraBusy || call.state == .idle || call.state == .starting)
-                .accessibilityLabel(call.cameraOn ? "اطفِ الكاميرا" : "شغّل الكاميرا")
-
-                Button { call.interrupt() } label: {
-                    Image(systemName: "hand.raised.fill").font(.title2).frame(width: 68, height: 68)
-                }
-                .buttonStyle(.glass).buttonBorderShape(.circle)
-                .disabled(!(call.state == .speaking || call.state == .thinking))
+                .buttonStyle(.plain)
+                .accessibilityLabel(call.muted ? "شغّل المايك" : "اكتم المايك")
 
                 Button { dismiss() } label: {
-                    Image(systemName: "xmark").font(.title2.weight(.bold)).frame(width: 68, height: 68)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.black)
+                        .frame(width: 56, height: 56)
+                        .background(Color.white, in: Circle())
                 }
-                .buttonStyle(.glassProminent).buttonBorderShape(.circle)
-                .tint(.red)
+                .buttonStyle(.plain)
+                .accessibilityLabel("أنهِ المكالمة")
             }
         }
+    }
+}
+
+/// إعدادات المكالمة: الصوت واللغة والتشخيص والكاميرا — تتطبق على الكلام الجاي بدون إعادة المكالمة
+struct CallSettingsSheet: View {
+    var onCamera: () -> Void
+    @EnvironmentObject var call: CallController
+    @EnvironmentObject var settings: AppSettings
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("showCallDebug") private var showDebug = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    NavigationLink {
+                        CallVoiceList()
+                    } label: {
+                        LabeledContent("الصوت", value: settings.voice.title)
+                    }
+                    Picker("اللغة", selection: $settings.language) {
+                        Text("تلقائي").tag("auto")
+                        Text("عربي").tag("ar")
+                        Text("English").tag("en")
+                    }
+                } footer: {
+                    Text("يتطبق من الكلام الجاي.")
+                }
+                Section {
+                    Button(action: onCamera) {
+                        Label(call.cameraOn ? "اطفِ الكاميرا" : "شغّل الكاميرا",
+                              systemImage: call.cameraOn ? "video.slash" : "video")
+                    }
+                    .disabled(call.cameraBusy || call.state == .idle || call.state == .starting)
+                    Toggle("عرض التشخيص", isOn: $showDebug)
+                }
+            }
+            .navigationTitle("الإعدادات")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("تم") { dismiss() } } }
+        }
+    }
+}
+
+/// اختيار الصوت أثناء المكالمة (نفس الأصوات النازلة، ونماء لو نازل)
+struct CallVoiceList: View {
+    @EnvironmentObject var call: CallController
+    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var models: ModelManager
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(Catalog.voices) { v in
+                    Button {
+                        guard settings.voiceID != v.id else { return }
+                        // نوقف الرد الحالي قبل ما نفك الصوت القديم، والرد الجاي يطلع بالصوت الجديد
+                        if call.state == .speaking || call.state == .thinking { call.interrupt() }
+                        settings.voiceID = v.id
+                        models.voiceChanged()
+                        slog("call: voice → \(v.id)")
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(v.title).foregroundStyle(.primary)
+                                Text(v.subtitle).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if settings.voiceID == v.id {
+                                Image(systemName: "checkmark").foregroundStyle(Theme.accent)
+                            }
+                        }
+                    }
+                }
+            } footer: {
+                Text(isNamaa
+                     ? "نماء أبطأ: يتأخر الرد شوي لأنه يولّد كل جملة كاملة."
+                     : "الرد الجاي يطلع بالصوت الجديد. أصوات ثانية تنزلها من الإعدادات ← الصوت.")
+            }
+        }
+        .navigationTitle("الصوت")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+    private var isNamaa: Bool {
+        if case .namaa = settings.voice.kind { return true }
+        return false
     }
 }
 
