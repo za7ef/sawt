@@ -773,19 +773,25 @@ struct TypingDots: View {
     }
 }
 
-/// نقطة وحدة تتنفّس لين يوصل أول كلام من الرد
+/// موجة صوت صغيرة (هوية صوت) لين يوصل أول كلام من الرد: أعمدة تتحرك مثل المعادل
 struct ThinkingDot: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private static let bars = 4
     var body: some View {
         TimelineView(.animation(paused: reduceMotion)) { ctx in
-            // دورة ~0.65 ثانية: حجم 1→1.25 وشفافية 0.6→1
-            let p = reduceMotion ? 1.0 : (1 - cos(ctx.date.timeIntervalSinceReferenceDate * 2 * .pi / 0.65)) / 2
-            Circle().fill(Theme.accent)
-                .frame(width: 9, height: 9)
-                .scaleEffect(1 + 0.25 * p)
-                .opacity(0.6 + 0.4 * p)
-                .frame(width: 14, height: 14)
-                .padding(.vertical, 6)
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 3) {
+                ForEach(0..<Self.bars, id: \.self) { i in
+                    // كل عمود بسرعة وطور مختلف عشان ما تتحرك مع بعض
+                    let speed = [5.2, 6.7, 4.6, 6.0][i]
+                    let p = reduceMotion ? [0.45, 0.8, 0.6, 0.35][i]
+                        : 0.5 + 0.5 * sin(t * speed + Double(i) * 1.3)
+                    Capsule().fill(Theme.accent)
+                        .frame(width: 3, height: 5 + 11 * p)
+                }
+            }
+            .frame(height: 16)
+            .padding(.vertical, 6)
         }
         .accessibilityLabel("يكتب الرد")
     }
