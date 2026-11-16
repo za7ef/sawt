@@ -91,6 +91,9 @@ final class SDModels: ObservableObject {
 
     enum State: Equatable { case idle, downloading(Double), failed(String) }
     @Published var state: [ImageEngine: State] = [:]
+    /// تقدم تنزيل أداة الإزالة (LaMa) لوحدها، لما «دقيق» منزّل من قبل بدونها. nil = ما فيه تنزيل
+    @Published var lamaProgress: Double?
+    private var lamaTask: Task<Void, Never>?
     private var tasks: [ImageEngine: Task<Void, Never>] = [:]
 
     /// الملفات اللي يحتاجها توليد صورة من نص (بدون VAEEncoder وSafetyChecker)
@@ -129,7 +132,7 @@ final class SDModels: ObservableObject {
     nonisolated static func approxGB(_ e: ImageEngine) -> Double {
         switch e {
         case .sdReal: 0.89
-        case .klein: 1.6 + (QwenShared.installed ? 0 : QwenShared.approxGB)
+        case .klein: 1.82 + (QwenShared.installed ? 0 : QwenShared.approxGB)   // مع أداة الإزالة LaMa
         case .zimage: 3.63 + (QwenShared.installed ? 0 : QwenShared.approxGB)
         default: 0.99
         }
@@ -176,7 +179,16 @@ final class SDModels: ObservableObject {
                     }
                     own = { p in report(frac + p * (1 - frac)) }
                 }
-                try await Self.fetchFiles(src, files: Self.files(e), into: tmp, progress: own)
+                if e == .klein {
+                    // أداة الإزالة (LaMa) تنزل مع «دقيق» في مجلده عشان تنحذف معه
+                    let lamaMB = LaMa.files.reduce(0) { $0 + $1.mb }
+                    let kf = src.weights.values.reduce(0, +) / (src.weights.values.reduce(0, +) + lamaMB)
+                    let outer = own
+                    try await Self.fetchFiles(src, files: Self.files(e), into: tmp) { p in outer(p * kf) }
+                    try await Self.fetchLaMa(into: tmp.appendingPathComponent("lama", isDirectory: true)) { p in outer(kf + p * (1 - kf)) }
+                } else {
+                    try await Self.fetchFiles(src, files: Self.files(e), into: tmp, progress: own)
+                }
                 try Task.checkCancellation()
                 try? FileManager.default.removeItem(at: d)
                 try FileManager.default.moveItem(at: tmp, to: d)
@@ -191,12 +203,51 @@ final class SDModels: ObservableObject {
         }
     }
 
+    nonisolated static func fetchLaMa(into d: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
+        let src = Source(base: LaMa.base, weights: Dictionary(uniqueKeysWithValues: LaMa.files.map { ($0.path, $0.mb) }))
+        try await fetchFiles(src, files: LaMa.files.map(\.path), into: d, progress: progress)
+        // نتأكد من الأحجام (الرابط مثبت على نسخة، فأي اختلاف = تنزيل ناقص)
+        for f in LaMa.files {
+            let size = (try? FileManager.default.attributesOfItem(atPath: d.appendingPathComponent(f.path).path)[.size] as? NSNumber)?.int64Value
+            guard size == f.bytes else { throw SawtError.failed("ملف أداة الإزالة ناقص") }
+        }
+    }
+
+    /// ينزّل أداة الإزالة لوحدها (لـ«دقيق» المنزّل قبل ما تنضاف)
+    func downloadLaMa() {
+        guard lamaTask == nil, Self.installed(.klein), !LaMa.installed else { return }
+        lamaProgress = 0
+        lamaTask = Task {
+            defer { lamaTask = nil; lamaProgress = nil }
+            if let why = Storage.spaceProblem(forGB: 0.5) { slog("lama: \(why)"); return }
+            guard await NetworkGate.shared.permit("تنزيل أداة الإزالة") else { return }
+            let d = LaMa.dir
+            let tmp = d.deletingLastPathComponent().appendingPathComponent("lama.partial", isDirectory: true)
+            do {
+                try? FileManager.default.removeItem(at: tmp)
+                try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+                try await Self.fetchLaMa(into: tmp) { p in Task { @MainActor in SDModels.shared.lamaProgress = p } }
+                try Task.checkCancellation()
+                try? FileManager.default.removeItem(at: d)
+                try FileManager.default.moveItem(at: tmp, to: d)
+                slog("lama: downloaded")
+                objectWillChange.send()
+            } catch {
+                try? FileManager.default.removeItem(at: tmp)
+                slog("lama: download failed \(error)")
+            }
+        }
+    }
+
+    func cancelLaMa() { lamaTask?.cancel() }
+
     func cancel(_ e: ImageEngine) {
         tasks[e]?.cancel()
     }
 
     func delete(_ e: ImageEngine) {
         tasks[e]?.cancel()
+        if e == .klein { lamaTask?.cancel(); LaMa.unload() }   // أداة الإزالة في مجلد «دقيق» وتنحذف معه
         try? FileManager.default.removeItem(at: Self.dir(e))
         // المُرمّز المشترك ينحذف بس لو المحرك الثاني اللي يستخدمه مو منزّل
         if e.usesQwen, !ImageEngine.allCases.contains(where: { $0 != e && $0.usesQwen && Self.installed($0) }) {
@@ -332,10 +383,23 @@ actor ImageGenerator {
     static var outDir: URL { Attachments.dir }
 
     /// source: صورة للتعديل («دقيق» يعدّلها، «واقعي+» يعيد رسمها). المحركات الثانية ما تقبلها.
-    func generate(engine: ImageEngine, prompt: String, negative: String, source: URL? = nil,
+    func generate(engine: ImageEngine, prompt: String, negative: String, source: URL? = nil, plan: EditPlan? = nil,
                   status: @escaping @Sendable (String) -> Void) async throws -> GeneratedImage {
         if source != nil, !engine.canEdit {
             throw SawtError.failed("«\(engine.title)» ما يعدّل الصور. اختر «دقيق» أو «واقعي+».")
+        }
+        // الإزالة في «دقيق»: LaMa (Core ML) بدل الانتشار
+        if engine == .klein, let source, let plan, plan.kind == .remove, let m = plan.mask {
+            guard LaMa.installed else { throw SawtError.failed("أداة الإزالة مو منزّلة. نزّلها من شاشة «إزالة».") }
+            status("أمسح المنطقة…")
+            let t0 = Date()
+            let img = try await LaMa.inpaint(source: source, mask: m)
+            LaMa.unload()
+            slog("lama: removed in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
+            let name = "\(UUID().uuidString)-gen.png"
+            guard let png = UIImage(cgImage: img).pngData() else { throw SawtError.failed("ما قدرت أحفظ الصورة") }
+            try png.write(to: Self.outDir.appendingPathComponent(name), options: .atomic)
+            return GeneratedImage(file: name, prompt: prompt, engine: engine)
         }
         let img: CGImage
         var used = prompt
@@ -347,7 +411,7 @@ actor ImageGenerator {
             if used != prompt { slog("image: prompt trimmed to 75 CLIP tokens") }
             img = try await runSD(engine, prompt: used, negative: neg, status: status)
         case .klein, .zimage:
-            img = try await runMLX(engine, prompt: prompt, source: source, status: status)
+            img = try await runMLX(engine, prompt: prompt, source: source, plan: plan, status: status)
         case .playground:
             img = try await runPlayground(prompt: prompt, status: status)
         case .gemini, .geminiLite:
@@ -449,7 +513,7 @@ actor ImageGenerator {
 
     // MARK: «دقيق» (Bonsai Image: FLUX.2 Klein 4B ثلاثي على MLX)
 
-    private func runMLX(_ e: ImageEngine, prompt: String, source: URL?, status: @escaping @Sendable (String) -> Void) async throws -> CGImage {
+    private func runMLX(_ e: ImageEngine, prompt: String, source: URL?, plan: EditPlan?, status: @escaping @Sendable (String) -> Void) async throws -> CGImage {
         guard SDModels.installed(e) else { throw SawtError.failed("نموذج «\(e.title)» مو منزّل. نزّله من الإعدادات ← الصور.") }
         guard ProcessInfo.processInfo.physicalMemory >= 7_000_000_000 else {
             throw SawtError.failed("«\(e.title)» يحتاج جوال بذاكرة 8GB أو أكثر.")
@@ -471,9 +535,9 @@ actor ImageGenerator {
         }
         let img: CGImage
         if e == .klein {
-            img = try await KleinPipeline.generate(dir: SDModels.dir(e), prompt: prompt, seed: seed, source: source, onPhase: onPhase, onStep: onStep)
+            img = try await KleinPipeline.generate(dir: SDModels.dir(e), prompt: prompt, seed: seed, source: source, plan: plan, onPhase: onPhase, onStep: onStep)
         } else {
-            img = try await ZImagePipeline.generate(dir: SDModels.dir(e), prompt: prompt, seed: seed, source: source, onPhase: onPhase, onStep: onStep)
+            img = try await ZImagePipeline.generate(dir: SDModels.dir(e), prompt: prompt, seed: seed, source: source, plan: plan, onPhase: onPhase, onStep: onStep)
         }
         if Task.isCancelled { throw CancellationError() }
         status("أحفظ الصورة…")

@@ -78,7 +78,7 @@ struct ImageModelsSection: View {
     private static func detail(_ e: ImageEngine) -> String {
         switch e {
         case .sdReal: "صور واقعية (ناس وأماكن). 512×512، ٦ خطوات، ~0.9 GB"
-        case .klein: "مبني على Bonsai من PrismML · ~3.9 GB · 512×512 بأربع خطوات. يفهم الوصف الطويل ويطلع تفاصيل أدق (يحتاج جوال بذاكرة 8GB)."
+        case .klein: "مبني على Bonsai من PrismML · ~4.1 GB (مع أداة الإزالة LaMa) · 512×512 بأربع خطوات. يفهم الوصف الطويل ويطلع تفاصيل أدق، ويعدّل الصور (يحتاج جوال بذاكرة 8GB)."
         case .zimage: "مبني على Z-Image Turbo من Tongyi-MAI · ~5.9 GB (أو ~3.6 GB لو «دقيق» منزّل، لأنهم يتشاركون مُرمّز النص) · 512×512 بثماني خطوات. أبطأ وأقوى في الواقعية (يحتاج جوال بذاكرة 8GB)."
         default: "رسم وفن وخيال. 512×512، ٨ خطوات، ~1 GB"
         }

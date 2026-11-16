@@ -12,3 +12,7 @@
 ## NeuCodec (Neuphonic)
 
 يُستخدم جزء المفكك من NeuCodec (https://huggingface.co/neuphonic/neucodec) بعد تحويله إلى float16 وإلى تخطيط MLX، وهو مرخّص بموجب رخصة Apache 2.0، ويُنشر الملف المحوَّل مع نص الرخصة وملف إشعار يبيّن التعديلات.
+
+## LaMa (advimman/lama)
+
+تُستخدم أداة LaMa لإزالة العناصر من الصور (Resolution-robust Large Mask Inpainting with Fourier Convolutions، https://github.com/advimman/lama)، وهي مرخّصة بموجب رخصة Apache 2.0. وتُنزَّل نسخة Core ML المحوّلة عند الطلب من المستودع https://huggingface.co/mlboydaisuke/LaMa-CoreML (النسخة 5ed76e3799ab4cad31381750d29880c267477e18، مرخّصة كذلك بموجب Apache 2.0) دون تعديل. ويُرفق نص الرخصة في التطبيق (LaMa-Apache-2.0.txt).

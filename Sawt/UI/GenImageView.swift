@@ -57,17 +57,7 @@ struct GenImageView: View {
                 }
             }
             .fullScreenCover(isPresented: $full) {
-                ZStack(alignment: .topTrailing) {
-                    Color.black.ignoresSafeArea()
-                    Image(uiImage: ui).resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: .infinity)
-                    Button { full = false } label: {
-                        Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
-                            .frame(width: 44, height: 44)
-                            .glassEffect(.regular, in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .padding()
-                }
+                ImageViewer(ui: ui, prompt: prompt)
             }
         } else {
             Label("الصورة انحذفت", systemImage: "photo").font(.caption).foregroundStyle(.secondary)
