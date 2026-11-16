@@ -231,9 +231,17 @@ final class PhoneAgent: ObservableObject {
             if isSelf {
                 // ما نلمس واجهة صوت نفسها أبدًا: نطلع للرئيسية ونعيد القراءة
                 say("صوت قدّام — أطلع للشاشة الرئيسية")
-                _ = await Self.exec(.keys("home"))
-                try? await Task.sleep(nanoseconds: 600_000_000)
-                guard let s2 = await readScreen(), !isSelf else { finish("ما قدرت أطلع من صوت"); return }
+                let hr = await Self.exec(.keys("home"))
+                // الانتقال ياخذ وقت: نعيد القراءة لين ثانيتين ونص بدل ما نحكم من أول قراءة
+                var s2: (String, [Element])?
+                for i in 0..<5 {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    if Task.isCancelled { return }
+                    if let r = await readScreen(), !isSelf { s2 = r; slog("agent: left sawt after \((i + 1) * 500)ms"); break }
+                }
+                guard let s2 else {
+                    finish("ما قدرت أطلع من صوت (الهوم: \(hr.prefix(80))؛ القراءة: \(lastReadError.isEmpty ? "صوت لسا قدّام" : lastReadError))"); return
+                }
                 (app, els) = s2
             }
             let axMs = Int(Date().timeIntervalSince(tAX) * 1000)
@@ -567,6 +575,7 @@ final class PhoneAgent: ObservableObject {
 
     // ───── الشاشة ─────
     private func readScreen() async -> (String, [Element])? {
+        lastReadError = ""
         if Self.see == .xct {
             let b = UIScreen.main.bounds
             if let s = await XCTBackend.readFront(screen: b.size) {
