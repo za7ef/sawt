@@ -1496,6 +1496,9 @@ struct PhoneAgentView: View {
                 Toggle("صورة الشاشة كل خطوة (أبطأ)", isOn: Binding(
                     get: { UserDefaults.standard.bool(forKey: "agentAlwaysShot") },
                     set: { UserDefaults.standard.set($0, forKey: "agentAlwaysShot") }))
+                Toggle("قراءة الشاشة بلقطة XCUIApplication (المجرّبة)", isOn: Binding(
+                    get: { (UserDefaults.standard.string(forKey: "xctReader") ?? "app") != "ax" },
+                    set: { UserDefaults.standard.set($0 ? "app" : "ax", forKey: "xctReader") }))
                 // اختبار الضغط: XCTest يلمس الهدف هذا، ولو العدّاد زاد يعني اللمس وصل فعلًا
                 Button("🎯 هدف الضغط: \(tapHits)") { tapHits += 1 }
                     .buttonStyle(.bordered)

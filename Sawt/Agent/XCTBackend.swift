@@ -246,6 +246,8 @@ enum XCTBackend {
             DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTLoadAccessibility(4)) }
         }
         slog("runner: step accessibility after enable: \(ax ?? "ok") \(Int(Date().timeIntervalSince(t) * 1000))ms")
+        // قارئ XCUIApplication: ما نسخّن عميل الوصول (طلبه المباشر هو اللي ما يرد)، ولا نعيد الجلسة بسببه
+        if useAppReader { slog("runner: reader=app (XCUIApplication snapshot)"); return nil }
         // تسخين مثل proveReadable في Poki: أول طلب يدفع كلفة أول لقطة بدل ما تنضرب قراءة المهمة الأولى
         let warm: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
             DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTWarmSystem(8)) }
@@ -572,6 +574,7 @@ enum XCTBackend {
         if pid == myPid || bundle == me {
             return Screen(name: "صوت", bundle: me, isSelf: true, nodes: [], raw: 0, ms: Int(Date().timeIntervalSince(t) * 1000))
         }
+        if useAppReader { return await readViaApp(pid: pid, bundle: bundle, screen: screen, timeout: max(timeout, 10), t: t) }
         func attempt(_ depth: Int, _ kids: Int, _ secs: Double) async -> (NSObject?, String) {
             readInFlight = true
             defer { readInFlight = false }
@@ -616,6 +619,44 @@ enum XCTBackend {
         return nil
     }
 
+    // MARK: - قارئ XCUIApplication (الطريقة اللي نجحت في «اختبار XCTest»)
+
+    /// القارئ: "app" (افتراضي) = لقطة XCUIApplication على الخيط الرئيسي مثل الاختبار بالضبط؛ "ax" = طلب عميل الوصول المباشر (ما رد أبدًا لين 181)
+    static var useAppReader: Bool { (UserDefaults.standard.string(forKey: "xctReader") ?? "app") != "ax" }
+    nonisolated(unsafe) private static var appSnapBusy = false
+
+    /// لقطة XCUIApplication: نفس مسار snapshotSpringboard في الاختبار (initWithBundleIdentifier + snapshotWithError على الخيط الرئيسي)
+    private static func readViaApp(pid: Int32, bundle: String, screen: CGSize, timeout: Double, t: Date) async -> Screen? {
+        if appSnapBusy { lastAXError = "\(bundle): لقطة سابقة ما خلصت بعد"; return nil }
+        appSnapBusy = true
+        readInFlight = true
+        let t0 = Date()
+        // نطلق العلم لما تخلص اللقطة فعلًا (حتى لو انتهت مهلتنا قبلها)
+        let r: (NSObject?, String)? = await onMainTimed(timeout) { () -> (NSObject?, String) in
+            defer { appSnapBusy = false }
+            let a: NSObject? = !bundle.isEmpty ? app(bundle: bundle) : app(pid: pid)?.0
+            guard let a else { return (nil, "ما قدر يسوي XCUIApplication") }
+            let (snap, err) = snapshot(a)
+            return (snap, err ?? "")
+        }
+        readInFlight = false
+        let ms0 = Int(Date().timeIntervalSince(t0) * 1000)
+        guard let r else {
+            lastAXError = "\(bundle): لقطة XCUIApplication ما ردت خلال \(Int(timeout)) ثانية"
+            slog("xct: app read \(bundle) timeout \(ms0)ms"); return nil
+        }
+        guard let snap = r.0 else {
+            lastAXError = "\(bundle): \(r.1)"
+            slog("xct: app read \(bundle) failed: \(r.1) \(ms0)ms"); return nil
+        }
+        lastReadOK = Date()
+        let (name, nodes, raw) = flatten(snap, screen: screen)
+        let ms = Int(Date().timeIntervalSince(t) * 1000)
+        slog("xct: app read \(bundle) raw=\(raw) els=\(nodes.count) snap=\(ms0)ms total=\(ms)ms")
+        let shown = bundle == "com.apple.springboard" ? "الشاشة الرئيسية" : (name.isEmpty ? bundle : name)
+        return Screen(name: shown, bundle: bundle, isSelf: false, nodes: nodes, raw: raw, ms: ms)
+    }
+
     nonisolated(unsafe) static var readInFlight = false
     /// انسكّرت جلسة في هذا التشغيل أو ما ترد القراءة حتى بعد جلسة جديدة
     nonisolated(unsafe) static var sessionDead = false
@@ -624,6 +665,7 @@ enum XCTBackend {
     /// فحص صحة سريع للجلسة (قراءة بعمق ١). لو رجع 41 نعلّمها منتهية.
     /// ما نفحص وقت قراءة شغّالة أو بعد قراءة ناجحة قريبة (الفحص المتزامن كان يعلّق الشاشة الرئيسية ويخليها «معلّقة»)
     static func checkHealth() {
+        guard !useAppReader else { return }   // فحص عميل الوصول يعلّق؛ مع قارئ التطبيق الفشل يبان في القراءة نفسها
         guard prepared, !preparing, !readInFlight, !beginning, Date().timeIntervalSince(lastReadOK) > 10 else { return }
         // مثل Poki: الفحص على الشاشة الرئيسية بعمق ١ (مو أول تطبيق بالقائمة اللي ممكن يكون صوت أو تطبيق مشغول)
         let why = SawtXCTWarmSystem(3)
