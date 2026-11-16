@@ -26,6 +26,8 @@ struct ChatView: View {
     @State private var attaching = false
     @ObservedObject private var net = NetworkGate.shared
     @State private var webAsk = false
+    /// المستخدم قريب من آخر المحادثة؟ (لو طلع لفوق ما نسحبه لتحت مع كل رمز)
+    @State private var nearBottom = true
     @AppStorage("netWarned") private var netWarned = false
 
     var body: some View {
@@ -222,7 +224,7 @@ struct ChatView: View {
                         MessageRow(message: m).equatable().id(m.id)
                     }
                     if store.isGenerating {
-                        StreamingRow(live: store.live) { proxy.scrollTo("bottom", anchor: .bottom) }
+                        StreamingRow(live: store.live) { if nearBottom { proxy.scrollTo("bottom", anchor: .bottom) } }
                             .id("stream")
                     }
                     Color.clear.frame(height: 8).id("bottom")
@@ -231,11 +233,32 @@ struct ChatView: View {
                 .padding(.top, 8)
             }
             .scrollDismissesKeyboard(.interactively)
+            // يفتح على آخر رسالة، ولما تتغيّر المساحة (الكيبورد) يبقى ملزّق تحت
+            .defaultScrollAnchor(.bottom)
+            .defaultScrollAnchor(.bottom, for: .sizeChanges)
+            .onScrollGeometryChange(for: Bool.self) { g in
+                g.contentSize.height - (g.contentOffset.y + g.containerSize.height) < 120
+            } action: { _, v in nearBottom = v }
+            .onAppear { scrollToEnd(proxy, delayed: true) }
             .onChange(of: store.current?.messages.count) {
-                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                // رسالة جديدة: ننزل لو المستخدم تحت، أو لو آخر رسالة منه (أرسل للتو)
+                if nearBottom || store.current?.messages.last?.role == .user {
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
             }
-            .onChange(of: store.currentID) { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: store.currentID) { scrollToEnd(proxy, delayed: true) }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                if nearBottom { scrollToEnd(proxy, delayed: true) }
+            }
         }
+    }
+
+    /// ينزل لآخر المحادثة (مرة الحين ومرة بعد ما يخلص التخطيط/حركة الكيبورد، لأن LazyVStack يقيس متأخر)
+    private func scrollToEnd(_ proxy: ScrollViewProxy, delayed: Bool) {
+        proxy.scrollTo("bottom", anchor: .bottom)
+        nearBottom = true
+        guard delayed else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { proxy.scrollTo("bottom", anchor: .bottom) }
     }
 
     // MARK: خانة الكتابة
