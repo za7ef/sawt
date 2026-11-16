@@ -138,7 +138,7 @@ struct GenProgressView: View {
                 let st = live ? hub.stage(at: tl.date) : (label: "أجهّز", fraction: 0.0)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(st.label)
-                        .font(.callout)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                         .id(st.label)
                         .transition(.opacity)
@@ -175,29 +175,52 @@ struct GenProgressView: View {
     }
 
     private func card(t: Double, progress: Double, preview: CGImage?) -> some View {
-        // المعاينة تظهر تحت النقاط في آخر ~٣٠٪
-        let reveal = max(0, min(1, (progress - 0.65) / 0.3))
-        return ZStack(alignment: .bottomTrailing) {
-            LinearGradient(colors: [Color(red: 0.05, green: 0.04, blue: 0.15), Color(red: 0.09, green: 0.07, blue: 0.24)],
-                           startPoint: .top, endPoint: .bottom)
-            if let preview {
-                Image(decorative: preview, scale: 1)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFill()
-                    .blur(radius: 14 - 8 * reveal)
-                    .opacity(0.85 * reveal)
+        // الكرة نفسها حقت المكالمة؛ طاقتها تزيد مع التقدم.
+        // آخر ~٣٥٪: المعاينة تبان داخل الكرة، وقرب النهاية تتوسع لين تعبّي البطاقة.
+        let reveal = max(0, min(1, (progress - 0.65) / 0.25))
+        let expand = max(0, min(1, (progress - 0.9) / 0.1))
+        let wobble = reduceMotion ? 0 : 0.06 * sin(t * 1.4)
+        let energy = Float(min(1, 0.12 + 0.5 * progress + wobble))
+        return GeometryReader { geo in
+            let w = geo.size.width
+            let orb = w * 0.62
+            // قطر الدائرة اللي تكشف المعاينة: من حجم الكرة لين قطر البطاقة
+            let hole = orb * 0.92 + (w * 1.45 - orb * 0.92) * expand
+            ZStack {
+                LinearGradient(colors: [Color(red: 0.04, green: 0.03, blue: 0.10), Color(red: 0.07, green: 0.05, blue: 0.18)],
+                               startPoint: .top, endPoint: .bottom)
+                RadialGradient(colors: [Theme.accent.opacity(0.10 + 0.25 * progress), .clear],
+                               center: .center, startRadius: orb * 0.2, endRadius: w * 0.75)
+                OrbView(mic: 0, out: energy, state: .thinking, animated: !reduceMotion)
+                    .frame(width: orb, height: orb)
+                    .opacity(1 - 0.35 * reveal - 0.65 * expand)
+                if let preview {
+                    Image(decorative: preview, scale: 1)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFill()
+                        .frame(width: w, height: w)
+                        .blur(radius: 10 * (1 - reveal) + 4 * (1 - expand))
+                        .opacity(reveal * (0.75 + 0.25 * expand))
+                        .mask(
+                            Circle()
+                                .fill(RadialGradient(colors: [.white, .white, .white.opacity(1 - expand)],
+                                                     center: .center, startRadius: 0, endRadius: hole / 2))
+                                .frame(width: hole, height: hole)
+                        )
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.6), value: expand)
+                }
+                VStack {
+                    Spacer()
+                    Text("\(Int((progress * 100).rounded()))%")
+                        .font(.caption.weight(.medium).monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.72))
+                        .contentTransition(.numericText())
+                        .environment(\.layoutDirection, .leftToRight)
+                        .padding(.bottom, 12)
+                }
             }
-            DotField(t: t, progress: progress)
-                .opacity(1 - 0.45 * reveal)
-            Text("\(Int((progress * 100).rounded()))%")
-                .font(.system(size: 14, weight: .medium).monospacedDigit())
-                .foregroundStyle(.primary)
-                .contentTransition(.numericText())
-                .padding(.horizontal, 12).frame(height: 32)
-                .glassEffect(.regular, in: .capsule)
-                .padding(10)
-                .environment(\.layoutDirection, .leftToRight)
+            .frame(width: w, height: w)
         }
         .frame(maxWidth: 300)
         .aspectRatio(1, contentMode: .fit)
@@ -208,53 +231,3 @@ struct GenProgressView: View {
     }
 }
 
-/// شبكة نقاط: كتل ناعمة بنفسجية→لافندر تتحرك، وأعمدة تنبض مثل موجة الصوت في الأيقونة.
-/// التوهج يزيد مع التقدم.
-private struct DotField: View {
-    let t: Double
-    let progress: Double
-
-    var body: some View {
-        Canvas { ctx, size in
-            let gap: CGFloat = 11
-            let cols = max(1, Int(size.width / gap))
-            let rows = max(1, Int(size.height / gap))
-            let ox = (size.width - CGFloat(cols - 1) * gap) / 2
-            let oy = (size.height - CGFloat(rows - 1) * gap) / 2
-            let p = max(0, min(1, progress))
-            // ثلاث كتل تتحرك بمسارات مختلفة
-            var blobs: [(x: Double, y: Double, r: Double, ph: Double)] = []
-            for i in 0..<3 {
-                let fi = Double(i)
-                let x = 0.5 + 0.3 * sin(t * 0.45 * (1 + 0.3 * fi) + fi * 2.1)
-                let y = 0.5 + 0.3 * cos(t * 0.38 * (1 + 0.25 * fi) + fi * 1.3)
-                blobs.append((x, y, 0.03 + 0.012 * fi, fi * 1.7))
-            }
-            for c in 0..<cols {
-                let fc = Double(c)
-                // ارتفاع "عمود الموجة" لهذا العمود
-                let bar = 0.18 + 0.5 * abs(sin(t * 2.0 + fc * 0.55) * cos(t * 0.8 + fc * 0.23))
-                for r in 0..<rows {
-                    let x = ox + CGFloat(c) * gap
-                    let y = oy + CGFloat(r) * gap
-                    let u = Double(x / size.width), v = Double(y / size.height)
-                    var f = 0.0
-                    for b in blobs {
-                        let dx = u - b.x, dy = v - b.y
-                        // حواف عضوية: نصف القطر يتموّج مع الزاوية
-                        let wob = 1 + 0.35 * sin(atan2(dy, dx) * 3 + t * 0.9 + b.ph)
-                        f += exp(-(dx * dx + dy * dy) / (b.r * wob))
-                    }
-                    let edge = abs(v - 0.5) - bar / 2
-                    let inBar = edge < 0 ? 1.0 : max(0, 1 - edge / 0.04)
-                    let k = min(1, f * (0.35 + 0.65 * p) + inBar * 0.3 * (0.4 + 0.6 * p))
-                    // بنفسجي (#7B5CFF) → لافندر (#C9B8FF)
-                    let col = Color(red: 0.48 + 0.31 * k, green: 0.36 + 0.36 * k, blue: 1.0)
-                    let rad = 0.7 + 1.9 * k
-                    let rect = CGRect(x: x - rad, y: y - rad, width: rad * 2, height: rad * 2)
-                    ctx.fill(Path(ellipseIn: rect), with: .color(col.opacity(0.12 + 0.88 * k)))
-                }
-            }
-        }
-    }
-}
