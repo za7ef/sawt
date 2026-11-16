@@ -465,10 +465,13 @@ actor ImageGenerator {
         status("أرسم… 0/\(steps)")
         let t0 = Date()
         let images = try p.generateImages(configuration: c) { prog in
-            status("أرسم… \(prog.step + 1)/\(prog.stepCount)")
+            // بعد آخر خطوة يبدأ فك الصورة (VAE) فنقول كذا بدل ما نعلق على «٢٠/٢٠»
+            if prog.step + 1 >= prog.stepCount { status("أجهّز الصورة…") }
+            else { status("أرسم… \(prog.step + 1)/\(prog.stepCount)") }
             return !Task.isCancelled
         }
         if Task.isCancelled { throw CancellationError() }
+        status("أحفظ الصورة…")
         slog("image: sd \(e.rawValue) \(steps) steps in \(Int(Date().timeIntervalSince(t0) * 1000))ms footprint=\(RAM.footprintMB)MB")
         guard let img = images.compactMap({ $0 }).first else { throw SawtError.failed("النموذج ما رجّع صورة") }
         return img

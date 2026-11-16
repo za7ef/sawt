@@ -30,6 +30,9 @@ struct Message: Identifiable, Codable, Equatable {
     /// صورة مولّدة (اسم الملف في مجلد المرفقات) والوصف الإنجليزي اللي انرسمت منه
     var genImage: String?
     var genPrompt: String?
+    var genNegative: String?
+    /// الصورة للحين تنرسم (يظهر البرومبت والتقدم بدل صف الأدوات)
+    var genPending: Bool?
 }
 
 struct Conversation: Identifiable, Codable, Equatable {
@@ -81,6 +84,8 @@ final class ChatStore: ObservableObject {
     @Published var currentID: UUID?
     let live = StreamBuffer()
     @Published var isGenerating = false
+    /// رسم صورة شغال (ما نعرض فقاعة الرد الجاري)
+    @Published var imageGenerating = false
     @Published var error: String?
 
     private var genTask: Task<Void, Never>?
@@ -100,6 +105,13 @@ final class ChatStore: ObservableObject {
     init() {
         if let list = SafeFile.load([Conversation].self, from: fileURL) {
             conversations = list.sorted { $0.updated > $1.updated }
+            // رسم انقطع (التطبيق انقفل وقته): نوقف مؤشر التقدم
+            for ci in conversations.indices {
+                for mi in conversations[ci].messages.indices where conversations[ci].messages[mi].genPending == true {
+                    conversations[ci].messages[mi].genPending = nil
+                    conversations[ci].messages[mi].text = "🎨 انقطع الرسم. جرّب مرة ثانية."
+                }
+            }
         }
         currentID = conversations.first?.id
     }
@@ -629,11 +641,14 @@ final class ChatStore: ObservableObject {
         guard !isGenerating else { return }
         let request = ImageIntent.strip(text)
         append(Message(role: .user, text: text))
-        let bubble = Message(role: .assistant, text: "🎨 أجهّز الصورة…")
+        var bubble = Message(role: .assistant, text: "أجهّز…")
+        bubble.genPending = true
         append(bubble)
         let bid = bubble.id
         let conv = currentID
-        func fail(_ why: String) { updateText(bid, in: conv, "🎨 " + why, save: true) }
+        func fail(_ why: String) {
+            editMessage(bid, in: conv) { $0.genPending = nil; $0.text = "🎨 " + why }
+        }
         guard let engine = ImageEngine.selected else {
             fail("اختر محرك الصور أول: من زر + ← محرك الصور، أو من النماذج ← الصور."); return
         }
@@ -652,9 +667,15 @@ final class ChatStore: ObservableObject {
         genID += 1
         let myGen = genID
         ImageGenerator.busy = true
+        imageGenerating = true
         slog("image: start engine=\(engine.rawValue)")
+        // حالة التقدم: تتجاهل أي تحديث متأخر بعد ما تخلص الصورة أو تفشل
         let status: @Sendable (String) -> Void = { s in
-            Task { @MainActor in ChatStore.shared.updateText(bid, in: conv, "🎨 " + s) }
+            Task { @MainActor in
+                ChatStore.shared.editMessage(bid, in: conv, persist: false) { m in
+                    if m.genPending == true { m.text = s }
+                }
+            }
         }
         genTask = Task {
             var reloadLLM = false
@@ -666,15 +687,27 @@ final class ChatStore: ObservableObject {
                     spec = (request, ImageIntent.defaultNegative)
                     slog("image: prompt direct (english=\(ImageIntent.isEnglish(request)))")
                 } else {
-                    status("أكتب وصف الصورة…")
+                    status("أكتب البرومبت…")
                     spec = await Self.imagePrompt(for: request, short: engine.isLocalSD)
                     if spec == nil, engine.isGemini { spec = (request, "") }   // Gemini يفهم العربي
                 }
                 guard let sp = spec else {
                     throw SawtError.failed("ما قدرت أكتب وصف إنجليزي للصورة (نموذج المحادثة مو جاهز؟). جرّب مرة ثانية.")
                 }
-                let (prompt, negative) = sp
+                var (prompt, negative) = sp
+                if engine.isLocalSD {
+                    // نفس القص اللي يصير قبل الرسم، عشان المعروض = المستخدم فعلًا
+                    prompt = ImageGenerator.clipTrim(prompt, dir: SDModels.dir(engine))
+                    negative = ImageGenerator.clipTrim(negative, dir: SDModels.dir(engine))
+                }
                 try Task.checkCancellation()
+                // نعرض البرومبت أول، وبعدين يبدأ الرسم تحته
+                let shownNeg = engine.isLocalSD && engine != .sdTurbo ? negative : ""
+                self.editMessage(bid, in: conv) { m in
+                    m.genPrompt = prompt
+                    m.genNegative = shownNeg.isEmpty ? nil : shownNeg
+                    m.text = "أبدأ الرسم…"
+                }
                 slog("image: prompt=\(prompt.prefix(200)) negative=\(negative.prefix(120))")
                 // ٢) المحلي يحتاج ذاكرة: نفك النموذج اللغوي وقت الرسم ونرجعه بعدين
                 if engine.isLocalSD { reloadLLM = await ModelManager.shared.unloadForImage() }
@@ -692,6 +725,7 @@ final class ChatStore: ObservableObject {
                 if reloadLLM { ModelManager.shared.loadLLM() }
             }
             ImageGenerator.busy = false
+            imageGenerating = false
             if genID == myGen {
                 live.reset()
                 isGenerating = false
@@ -703,6 +737,7 @@ final class ChatStore: ObservableObject {
         guard let ci = conversations.firstIndex(where: { $0.id == (conv ?? currentID) }),
               let mi = conversations[ci].messages.firstIndex(where: { $0.id == id }) else { return }
         conversations[ci].messages[mi].text = "🎨 الصورة جاهزة"
+        conversations[ci].messages[mi].genPending = nil
         conversations[ci].messages[mi].genImage = g.file
         conversations[ci].messages[mi].genPrompt = g.prompt
         conversations[ci].messages[mi].model = g.engine.title
@@ -735,6 +770,14 @@ final class ChatStore: ObservableObject {
         return (p, n.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    /// يعدّل رسالة موجودة في مكانها
+    func editMessage(_ id: UUID, in conv: UUID?, persist: Bool = true, _ change: (inout Message) -> Void) {
+        guard let ci = conversations.firstIndex(where: { $0.id == (conv ?? currentID) }),
+              let mi = conversations[ci].messages.firstIndex(where: { $0.id == id }) else { return }
+        change(&conversations[ci].messages[mi])
+        if persist { save() }
+    }
+
     /// يحدّث نص رسالة موجودة (فقاعة حالة الوكيل)
     func updateText(_ id: UUID, in conv: UUID?, _ text: String, save persist: Bool = false) {
         guard let ci = conversations.firstIndex(where: { $0.id == (conv ?? currentID) }),
@@ -759,7 +802,7 @@ enum ImageIntent {
     static let triggers = ["/صورة", "/صوره", "/image", "/draw"]
     static let drawVerbs = ["ارسم", "ارسمي", "أرسم", "إرسم", "draw ", "generate an image", "generate image", "create an image", "make an image",
                             "make a picture", "create a picture", "image of ", "picture of "]
-    static let makeVerbs = ["سو", "سوي", "سوّ", "سوّي", "اعطني", "أعطني", "عطني", "ابي", "أبي", "ابغى", "أبغى", "ولد", "ولّد", "صمم", "صمّم",
+    static let makeVerbs = ["انشئ", "أنشئ", "انشي", "سو", "سوي", "سوّ", "سوّي", "اعطني", "أعطني", "عطني", "ابي", "أبي", "ابغى", "أبغى", "ولد", "ولّد", "صمم", "صمّم",
                             "اصنع", "اعمل", "تخيل", "تخيّل"]
     static let imageWords = ["صورة", "صوره", "رسمة", "رسمه", "لوحة", "لوحه", "خلفية", "خلفيه", "شعار"]
     /// أشياء على الجوال نفسه (لقطة شاشة، الصور في الاستوديو) مو رسم

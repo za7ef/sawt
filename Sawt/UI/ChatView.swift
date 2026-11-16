@@ -265,7 +265,7 @@ struct ChatView: View {
                     ForEach(store.current?.messages ?? []) { m in
                         MessageRow(message: m).equatable().id(m.id)
                     }
-                    if store.isGenerating {
+                    if store.isGenerating, !store.imageGenerating {
                         StreamingRow(live: store.live) {
                             if nearBottom { proxy.scrollTo("bottom", anchor: .bottom) } else if !hasNew { hasNew = true }
                         }
@@ -677,8 +677,10 @@ struct MessageRow: View, Equatable {
                     if let th = message.thinking, !th.isEmpty {
                         ThinkingSection(text: th, seconds: message.thinkSeconds, live: false, auto: message.autoThink == true)
                     }
-                    if let f = message.genImage {
-                        GenImageView(file: f, prompt: message.genPrompt)
+                    if message.genPending == true {
+                        GenProgressView(message: message)
+                    } else if let f = message.genImage {
+                        GenImageView(file: f, prompt: message.genPrompt, negative: message.genNegative)
                     } else if streaming && message.text.isEmpty {
                         TypingDots()
                     } else {
@@ -690,7 +692,7 @@ struct MessageRow: View, Equatable {
                     if let src = message.sources, !src.isEmpty {
                         SourcesList(sources: src)
                     }
-                    if !streaming, message.genImage == nil {
+                    if !streaming, message.genImage == nil, message.genPending != true {
                         // صف أدوات خفيف: نسخ، قراءة، مشاركة، والباقي تحت «…»
                         HStack(spacing: 20) {
                             Button { UIPasteboard.general.string = message.text } label: {
