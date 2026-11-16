@@ -118,6 +118,12 @@ final class PhoneAgent: ObservableObject {
             return why
         }
         runID &+= 1
+        // التطبيقات اللي تذكرها المهمة: مرشّحين لمعرفة التطبيق اللي قدّام بدون عميل الوصول
+        let gn = Self.normName(g)
+        XCTBackend.taskCandidates = Self.apps.filter { e in
+            e.names.contains { let n = Self.normName($0); return n.count >= 3 && gn.contains(n) } || (Self.normName(e.en).count >= 3 && gn.contains(Self.normName(e.en)))
+        }.map(\.bundle).filter { !$0.isEmpty }
+        XCTBackend.recentOpened = []
         self.goal = g; log = []; lastResult = ""; running = true; stepNo = 0; firstRead = true
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         // يبقى صاحي لما نطلع لتطبيقات ثانية (هنا مو داخل الحلقة عشان ما يسبق finish)

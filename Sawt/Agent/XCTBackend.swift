@@ -556,6 +556,13 @@ enum XCTBackend {
         let myPid = getpid()
         // صوت يبقى «نشط» عند عميل الوصول وهو بالخلفية (الصوت الصامت يخليه صاحي)، فما نحسبه إلا لو هو فعلًا قدّام
         let selfFront = await MainActor.run { UIApplication.shared.applicationState == .active }
+        if useAppReader {
+            if selfFront && !skipSelf {
+                return Screen(name: "صوت", bundle: me, isSelf: true, nodes: [], raw: 0, ms: Int(Date().timeIntervalSince(t) * 1000))
+            }
+            let bundle = await frontBundleNoAX(me: me)
+            return await readViaApp(pid: 0, bundle: bundle, screen: screen, timeout: max(timeout, 10), t: t)
+        }
         var list: [(Int32, String)] = []
         for d in SawtXCTActiveApps() {
             guard let n = d["pid"] as? NSNumber else { continue }
@@ -574,7 +581,6 @@ enum XCTBackend {
         if pid == myPid || bundle == me {
             return Screen(name: "صوت", bundle: me, isSelf: true, nodes: [], raw: 0, ms: Int(Date().timeIntervalSince(t) * 1000))
         }
-        if useAppReader { return await readViaApp(pid: pid, bundle: bundle, screen: screen, timeout: max(timeout, 10), t: t) }
         func attempt(_ depth: Int, _ kids: Int, _ secs: Double) async -> (NSObject?, String) {
             readInFlight = true
             defer { readInFlight = false }
@@ -624,6 +630,54 @@ enum XCTBackend {
     /// القارئ: "app" (افتراضي) = لقطة XCUIApplication على الخيط الرئيسي مثل الاختبار بالضبط؛ "ax" = طلب عميل الوصول المباشر (ما رد أبدًا لين 181)
     static var useAppReader: Bool { (UserDefaults.standard.string(forKey: "xctReader") ?? "app") != "ax" }
     nonisolated(unsafe) private static var appSnapBusy = false
+
+    /// آخر تطبيقات فتحناها بنفسنا (الأحدث أول)؛ الهوم يصفّرها
+    nonisolated(unsafe) static var recentOpened: [String] = []
+    static func noteOpened(_ b: String) { recentOpened.removeAll { $0 == b }; recentOpened.insert(b, at: 0); recentOpened = Array(recentOpened.prefix(5)) }
+    /// تطبيقات شائعة نفحصها لو ما عرفنا (والتطبيقات اللي تذكرها المهمة يضيفها الوكيل هنا)
+    nonisolated(unsafe) static var taskCandidates: [String] = []
+    private static let commonApps = ["com.apple.mobilesafari", "com.apple.Preferences", "com.apple.mobilenotes",
+                                     "net.whatsapp.WhatsApp", "com.apple.MobileSMS", "com.apple.mobilephone",
+                                     "com.google.chrome.ios", "com.apple.mobilecal", "com.apple.camera", "com.apple.Maps"]
+
+    /// حالة التطبيق من XCUIApplication.state (على الخيط الرئيسي مثل الاختبار): 4 = runningForeground
+    private static func appState(_ bundle: String) -> Int {
+        guard let a = app(bundle: bundle) else { return -1 }
+        var st = -1
+        _ = SawtTryCatch { st = (a.value(forKey: "state") as? NSNumber)?.intValue ?? -1 }
+        return st
+    }
+
+    /// التطبيق اللي قدّام بدون الاعتماد على عميل الوصول:
+    /// ١) activeApplications كتلميح بس لو رد خلال ثانية؛ ٢) آخر ما فتحناه + تطبيقات المهمة + الشائعة عبر .state؛ ٣) وإلا SpringBoard
+    static func frontBundleNoAX(me: String) async -> String {
+        let t = Date()
+        let overlays: Set<String> = ["com.apple.springboard", "com.apple.SleepLockScreen", me, ""]
+        let myPid = getpid()
+        let hint: [String] = await withCheckedContinuation { (c: CheckedContinuation<[String], Never>) in
+            let once = SawtOnce()
+            DispatchQueue.global(qos: .userInitiated).async {
+                let list = SawtXCTActiveApps().compactMap { d -> String? in
+                    guard (d["pid"] as? NSNumber)?.int32Value != myPid else { return nil }
+                    return d["bundle"] as? String
+                }
+                if once.take() { c.resume(returning: list) }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 1) { if once.take() { c.resume(returning: []) } }
+        }
+        if let h = hint.first(where: { !overlays.contains($0) }) {
+            slog("xct: front via active hint \(h) \(Int(Date().timeIntervalSince(t) * 1000))ms"); return h
+        }
+        var cands: [String] = []
+        for b in recentOpened + taskCandidates + commonApps where !overlays.contains(b) && !cands.contains(b) { cands.append(b) }
+        let found: String?? = await onMainTimed(4) { () -> String? in
+            for b in cands where appState(b) == 4 { return b }
+            return nil
+        }
+        let f = (found ?? nil) ?? "com.apple.springboard"
+        slog("xct: front via state \(f) (hint=\(hint.joined(separator: ",")), checked \(cands.count)) \(Int(Date().timeIntervalSince(t) * 1000))ms")
+        return f
+    }
 
     /// لقطة XCUIApplication: نفس مسار snapshotSpringboard في الاختبار (initWithBundleIdentifier + snapshotWithError على الخيط الرئيسي)
     private static func readViaApp(pid: Int32, bundle: String, screen: CGSize, timeout: Double, t: Date) async -> Screen? {
@@ -761,6 +815,7 @@ enum XCTBackend {
         let err: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
             DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTOpenURL(u)) }
         }
+        if err == nil, let sc = u.scheme?.lowercased(), sc == "http" || sc == "https" { noteOpened("com.apple.mobilesafari") }
         return result(err, "openURL", t)
     }
 
@@ -782,6 +837,7 @@ enum XCTBackend {
         let err: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
             DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTPressHome()) }
         }
+        if err == nil { recentOpened = [] }
         return result(err, "home", t)
     }
 
@@ -791,6 +847,7 @@ enum XCTBackend {
         let err: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
             DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTLaunch(bundle, 15)) }
         }
+        if err == nil { noteOpened(bundle) }
         return result(err, "open \(bundle)", t)
     }
 
