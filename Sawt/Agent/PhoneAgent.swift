@@ -114,19 +114,12 @@ final class PhoneAgent: ObservableObject {
         else if running { why = "الوكيل شغّال على مهمة ثانية — قل «وقف» أول" }
         else if ImageGenerator.busy { why = "صوت يرسم صورة الحين — انتظر يخلص أو وقّفها" }
         else if !(PhoneControl.available && PhoneControl.hasPairing) { why = "التحكم بالجوال مو جاهز (اقتران/الأداة)" }
+        else if Self.blockedByGPU { why = "الوكيل ما يشتغل على كرت الشاشة (iOS يمنعه بالخلفية) — حوّل التشغيل للمعالج من الإعدادات" }
         else if let s = Self.cpuSpecForStep(), !s.isDownloaded { why = "نموذج المعالج (\(Self.cpuSpecForStep()?.name ?? "")) مو منزّل — نزّله من صفحة النماذج ← المعالج" }
         if why == nil, Self.pick.hasPrefix("cloud:") {
             if Self.cloud == nil { why = "ما فيه مفتاح للخدمة السحابية المختارة — حطه في «مفاتيح الخدمات»" }
             else if !UserDefaults.standard.bool(forKey: "cloudConsent") { why = "لازم توافق على تنبيه الخصوصية للوكيل السحابي أول" }
             // زر الإنترنت في خانة الكتابة = البحث في الويب؛ الوكيل السحابي (مثل الدردشة السحابية) بوابته الموافقة + المفتاح
-        }
-        // نموذج كرت شاشة مختار للوكيل يختلف عن المحمّل: نحمّله (يصير هو نموذج كرت الشاشة)
-        if why == nil, Self.pick.hasPrefix("gpu:"), !LLMService.onCPU {
-            let repo = String(Self.pick.dropFirst(4))
-            if repo != AppSettings.shared.llmID, let m = Catalog.llms.first(where: { $0.id == repo }), ModelManager.shared.downloaded.contains(repo) {
-                slog("agent: switching GPU model to \(repo) for agent")
-                _ = ModelManager.shared.activate(m)
-            }
         }
         if let why {
             slog("agent: start refused: \(why)")
@@ -466,18 +459,19 @@ final class PhoneAgent: ObservableObject {
         guard p.hasPrefix("cloud:"), let c = CloudProvider(rawValue: String(p.dropFirst(6))), c.hasKey else { return nil }
         return c
     }
+    /// نموذج محلي على كرت الشاشة: أثناء المهمة صوت بالخلفية وiOS يمنع كرت الشاشة هناك، فما نبدأ (بدون تحويل تلقائي)
+    static var blockedByGPU: Bool {
+        let p = pick
+        if cloud != nil || p.hasPrefix("cloud:") { return false }
+        return ComputeMode.current == "gpu" || p.hasPrefix("gpu:")
+    }
+
     static func cpuSpecForStep() -> GGUFSpec? {
         let p = pick
         if cloud != nil { return nil }
         if p.hasPrefix("cloud:") { return LLMService.onCPU ? GGUFSpec.active : nil }
         if p.hasPrefix("cpu:"), let s = GGUFSpec.all.first(where: { "cpu:" + $0.id == p }), s.isDownloaded { return s }
-        if p.hasPrefix("gpu:") {
-            if LLMService.onCPU {
-                slog("agent: picked \(p) needs GPU but app is on CPU → fallback \(GGUFSpec.active.id)")
-                return GGUFSpec.active
-            }
-            return nil
-        }
+        if p.hasPrefix("gpu:") { return nil }   // ممنوع من البداية (blockedByGPU)، بدون تبديل صامت للمعالج
         return LLMService.onCPU ? GGUFSpec.active : nil
     }
 

@@ -267,7 +267,25 @@ final class ChatStore: ObservableObject {
     }
 
     /// يبدأ مهمة على الجوال من المحادثة (فقاعة حالة + الوكيل)
+    /// مهمة وقفت لأن التشغيل على كرت الشاشة (ننتظر قرار المستخدم)
+    struct AgentGPUGate: Identifiable { let id = UUID(); let text: String; let goal: String }
+    @Published var agentGPUGate: AgentGPUGate?
+
+    /// «حوّل للمعالج ونفّذ»: التشغيل للمعالج (ووكيل بنموذج كرت شاشة يرجع «تلقائي») وبعدين نبدأ المهمة
+    func switchToCPUAndRun(_ g: AgentGPUGate) {
+        UserDefaults.standard.set("cpu", forKey: "llmDevice")
+        if PhoneAgent.pick.hasPrefix("gpu:") { UserDefaults.standard.set("", forKey: "agentModelPick") }
+        slog("agent: user switched llmDevice=cpu to run task")
+        Task.detached(priority: .utility) { await LLMService.shared.warmUp(reason: "switch cpu (agent)") }
+        startPhoneTask(g.text, goal: g.goal)
+    }
+
     private func startPhoneTask(_ t: String, goal g: String) {
+        if PhoneAgent.blockedByGPU, !PhoneAgent.shared.running {
+            slog("agent: gpu mode → ask user")
+            agentGPUGate = AgentGPUGate(text: t, goal: g)
+            return
+        }
         append(Message(role: .user, text: t))
         let bubble = Message(role: .assistant, text: "تمام، جاري تنفيذ المهمة…")
         append(bubble)
