@@ -323,6 +323,15 @@ static NSMutableDictionary<NSNumber *, NSDate *> *SawtHung(void) {
     return d;
 }
 
+NSString * _Nullable SawtXCTWarmSystem(double timeout) {
+    id client = SawtAXClient();
+    if (!client) return gSawtAXSource;
+    int pid = SawtPid(SawtSystemApp(client));
+    if (pid <= 0) return @"ما فيه systemApplication";
+    NSString *why = nil;
+    return SawtXCTAXRead(pid, 1, 1, timeout, &why) ? nil : (why ?: @"فشل");
+}
+
 void SawtXCTClearHung(void) {
     @synchronized (SawtHung()) { [SawtHung() removeAllObjects]; }
 }
@@ -332,14 +341,18 @@ NSObject * _Nullable SawtXCTAXRead(int pid, NSInteger maxDepth, NSInteger maxChi
     NSObject *root = nil;
     @try {
         NSNumber *key = @(pid);
-        // الشاشة الرئيسية ما نتجاهلها أبدًا (بدونها ما فيه شي نقرأه)
-        BOOL isSystem = SawtPid(SawtSystemApp(SawtAXClient())) == pid;
-        @synchronized (SawtHung()) {
-            NSDate *since = SawtHung()[key];
-            if (!isSystem && since && -since.timeIntervalSinceNow < 15) {
-                if (why) *why = @"العملية معلّقة من قراءة سابقة (نتجاهلها شوي)";
+        // طلب سابق لنفس العملية ما رجع (الجهاز يخدم طلب وصول واحد بالمرة): ننتظره لين يرد بحد المهلة،
+        // لأن أي طلب جديد بيقف وراه. العلامة تنمسح لحالها أول ما يرد (مثل Poki)
+        NSDate *waitUntil = [NSDate dateWithTimeIntervalSinceNow:timeout];
+        while (YES) {
+            BOOL marked;
+            @synchronized (SawtHung()) { marked = SawtHung()[key] != nil; }
+            if (!marked) break;
+            if (waitUntil.timeIntervalSinceNow <= 0) {
+                if (why) *why = [NSString stringWithFormat:@"العملية معلّقة: طلب سابق ما رد بعد (انتظرنا %.0f ثانية)", timeout];
                 return nil;
             }
+            [NSThread sleepForTimeInterval:0.1];
         }
         id client = SawtAXClient();
         if (!client) { if (why) *why = gSawtAXSource; return nil; }
@@ -362,24 +375,36 @@ NSObject * _Nullable SawtXCTAXRead(int pid, NSInteger maxDepth, NSInteger maxChi
         NSDictionary *frozen = params.copy;
         NSArray *attrs = SawtSnapshotAttributes();
         __block NSString *err = nil;
-        BOOL late = NO;
-        id result = SawtWithin(timeout, &late, ^id {
+        __block id result = nil;
+        __block BOOL finished = NO, abandoned = NO;
+        dispatch_semaphore_t done = dispatch_semaphore_create(0);
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            id r = nil;
             @try {
                 NSError *e = nil;
-                id r = ((id (*)(id, SEL, id, id, id, NSError **))objc_msgSend)(client, req, element, attrs, frozen, &e);
+                r = ((id (*)(id, SEL, id, id, id, NSError **))objc_msgSend)(client, req, element, attrs, frozen, &e);
                 if (!r) err = e ? [NSString stringWithFormat:@"%@ %ld %@", e.domain, (long)e.code, e.localizedDescription] : @"رجع فاضي";
-                return r;
             } @catch (NSException *x) {
                 err = [NSString stringWithFormat:@"%@: %@", x.name, x.reason ?: @""];
+            }
+            @synchronized (SawtHung()) {
+                finished = YES;
+                // رد متأخر: نشيل العلامة عشان نسأله من جديد
+                if (abandoned) [SawtHung() removeObjectForKey:key];
+                else result = r;
+            }
+            dispatch_semaphore_signal(done);
+        });
+        if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeout * NSEC_PER_SEC))) != 0) {
+            BOOL late = NO;
+            @synchronized (SawtHung()) {
+                if (!finished) { abandoned = YES; late = YES; SawtHung()[key] = [NSDate date]; }
+            }
+            if (late) {
+                if (why) *why = [NSString stringWithFormat:@"ما رد خلال %.0f ثانية", timeout];
                 return nil;
             }
-        });
-        if (late) {
-            @synchronized (SawtHung()) { SawtHung()[key] = [NSDate date]; }
-            if (why) *why = [NSString stringWithFormat:@"ما رد خلال %.0f ثانية", timeout];
-            return nil;
         }
-        @synchronized (SawtHung()) { [SawtHung() removeObjectForKey:key]; }
         if (!result) { reason = err ?: @"رجع فاضي"; }
         else {
             // النتيجة أحيانًا غلاف فيه الجذر

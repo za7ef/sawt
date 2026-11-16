@@ -243,7 +243,11 @@ enum XCTBackend {
             DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTLoadAccessibility(4)) }
         }
         slog("runner: step accessibility after enable: \(ax ?? "ok") \(Int(Date().timeIntervalSince(t) * 1000))ms")
-        try? await Task.sleep(nanoseconds: 400_000_000)
+        // تسخين مثل proveReadable في Poki: أول طلب يدفع كلفة أول لقطة بدل ما تنضرب قراءة المهمة الأولى
+        let warm: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTWarmSystem(8)) }
+        }
+        slog("runner: step warm system read: \(warm ?? "ok") \(Int(Date().timeIntervalSince(t) * 1000))ms")
         return nil
     }
 
@@ -533,7 +537,9 @@ enum XCTBackend {
             list.append((pid, await bundleFor(pid, hint: d["bundle"] as? String)))
         }
         slog("xct: active \(list.map { "\($0.1)#\($0.0)" }.joined(separator: ",")) selfFront=\(selfFront)")
-        guard let front = list.first(where: { $0.1 != "com.apple.springboard" && !$0.1.isEmpty }) ?? list.first else {
+        // شاشة النوم تبقى ضمن النشطة والجوال مفتوح (Poki: PKLockScreenOnlyBundles)؛ ما نختارها إلا لو ما فيه غيرها
+        let overlays: Set<String> = ["com.apple.springboard", "com.apple.SleepLockScreen"]
+        guard let front = list.first(where: { !overlays.contains($0.1) && !$0.1.isEmpty }) ?? list.first(where: { $0.1 == "com.apple.springboard" }) ?? list.first else {
             lastAXError = "ما فيه تطبيقات نشطة"
             slog("xct: ax no active apps"); return nil
         }
@@ -591,10 +597,11 @@ enum XCTBackend {
     /// فحص صحة سريع للجلسة (قراءة بعمق ١). لو رجع 41 نعلّمها منتهية.
     /// ما نفحص وقت قراءة شغّالة أو بعد قراءة ناجحة قريبة (الفحص المتزامن كان يعلّق الشاشة الرئيسية ويخليها «معلّقة»)
     static func checkHealth() {
-        guard prepared, !preparing, !readInFlight, Date().timeIntervalSince(lastReadOK) > 10,
-              let pid = activePIDs().first else { return }
-        var why: NSString?
-        if SawtXCTAXRead(pid, 1, 1, 3, &why) == nil, isAuthLost(why as String?) { markAuthLost("فحص الصحة") }
+        guard prepared, !preparing, !readInFlight, Date().timeIntervalSince(lastReadOK) > 10 else { return }
+        // مثل Poki: الفحص على الشاشة الرئيسية بعمق ١ (مو أول تطبيق بالقائمة اللي ممكن يكون صوت أو تطبيق مشغول)
+        let why = SawtXCTWarmSystem(3)
+        if let why { slog("xct: health check: \(why)") }
+        if isAuthLost(why) { markAuthLost("فحص الصحة") }
     }
 
     // MARK: - الأفعال
