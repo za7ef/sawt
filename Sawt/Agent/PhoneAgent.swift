@@ -1784,8 +1784,27 @@ struct RunnerPill: View {
     @State private var busy = false
     @State private var text = Runner.stateText
     @State private var error: String?
+    @State private var showInfo = false
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            pill
+            HStack(spacing: 6) {
+                Text(on ? "جاهز ينفّذ مهام الجوال" : "شغّله عشان أقدر أتحكم بالجوال وأنفّذ المهام")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Spacer(minLength: 0)
+                Button { showInfo = true } label: {
+                    Image(systemName: "info.circle").font(.subheadline).foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("وش هو المشغّل؟")
+            }
+            .padding(.horizontal, 6)
+        }
+        .sheet(isPresented: $showInfo) { RunnerInfoSheet() }
+    }
+
+    private var pill: some View {
         Button {
             guard !busy else { return }
             busy = true
@@ -1821,6 +1840,46 @@ struct RunnerPill: View {
     }
 }
 
+
+/// شرح قصير للمشغّل
+struct RunnerInfoSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    item("power", "وش هو المشغّل؟",
+                         "هو اللي يخلي صوت يشوف الشاشة ويضغط ويكتب بدالك في أي تطبيق.")
+                    item("bolt.horizontal", "ليش لازم يكون شغّال؟",
+                         "التحكم يمشي عبر جلسة XCTest (أداة الاختبار حقت أبل). المشغّل يفتح هالجلسة ويخليها جاهزة، وبدونها ما أقدر ألمس الجوال.")
+                    item("network", "وش يحتاج؟",
+                         "LocalDevVPN يكون متصل، وصورة المطوّر (DDI) محمّلة عن طريق StikDebug. لو واحد منهم طافي المشغّل ما يشتغل.")
+                    item("hand.raised", "وقت المهمة",
+                         "خلّ الجوال عليّ ولا تلمس الشاشة لين أخلص، عشان لمستك ما تلخبط الخطوات.")
+                    item("stop.circle", "كيف أوقفه؟",
+                         "اضغط زر الإيقاف في الجزيرة أو الإشعار، أو اكتب «وقف» في المحادثة.")
+                }
+                .padding(20)
+            }
+            .navigationTitle("المشغّل")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("تمام") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
+        .environment(\.layoutDirection, .rightToLeft)
+    }
+
+    private func item(_ icon: String, _ title: String, _ body: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon).font(.title3).foregroundStyle(.tint).frame(width: 28)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline)
+                Text(body).font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
 
 /// النشاط المباشر حق المشغّل (الجزيرة الديناميكية): نايم / جاهز / يجهّز / يفكّر / الخطوة N / خلص
 @MainActor

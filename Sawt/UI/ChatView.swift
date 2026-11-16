@@ -46,6 +46,13 @@ struct ChatView: View {
                 .environment(\.layoutDirection, .rightToLeft)
         }
         .sheet(isPresented: $showModels) { ModelsView() }
+        .alert("المشغّل طافي — تبي أشغّله وأنفّذ المهمة؟",
+               isPresented: Binding(get: { store.runnerAsk != nil }, set: { if !$0, store.runnerAsk != nil { store.answerRunnerAsk(run: false) } })) {
+            Button("شغّل ونفّذ") { store.answerRunnerAsk(run: true) }
+            Button("لا، دردشة عادية", role: .cancel) { store.answerRunnerAsk(run: false) }
+        } message: {
+            Text("المشغّل هو اللي يخليني أشوف الشاشة وأضغط بدالك، وبدونه ما أقدر أنفّذ.")
+        }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { img in addImage(img) }.ignoresSafeArea()
         }

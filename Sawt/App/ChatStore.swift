@@ -1,6 +1,8 @@
 import Foundation
 import MLXLMCommon
 import SwiftUI
+import UserNotifications
+import UIKit
 
 struct Message: Identifiable, Codable, Equatable {
     enum Role: String, Codable { case user, assistant }
@@ -206,6 +208,31 @@ final class ChatStore: ObservableObject {
         save()
     }
 
+    /// مهمة جوال والمشغّل طافي: ننتظر قراره (شغّل ونفّذ / دردشة عادية)
+    struct RunnerAsk: Identifiable { let id = UUID(); let text: String; let goal: String; let attachments: [Attachment] }
+    @Published var runnerAsk: RunnerAsk?
+
+    /// بدل ما نعامل المهمة كدردشة بصمت: نسأله يشغّل المشغّل
+    private func askRunner(_ t: String, goal g: String, attachments: [Attachment]) {
+        slog("chat: phone task while runner off → ask")
+        runnerAsk = RunnerAsk(text: t, goal: g, attachments: attachments)
+        if UIApplication.shared.applicationState != .active {
+            let c = UNMutableNotificationContent()
+            c.title = "المشغّل طافي"
+            c.body = "افتح صوت عشان تشغّله وأنفّذ المهمة: \(t.prefix(80))"
+            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "sawt.runnerAsk", content: c, trigger: nil))
+        }
+    }
+
+    /// جواب السؤال: نشغّل المشغّل (المهمة نفسها تشغّله وتنتظره يجهز) أو نكمل دردشة
+    func answerRunnerAsk(run: Bool) {
+        guard let a = runnerAsk else { return }
+        runnerAsk = nil
+        slog("chat: runner ask → \(run ? "run" : "chat")")
+        if run { startPhoneTask(a.text, goal: a.goal) }
+        else { send(a.text, attachments: a.attachments, phoneChecked: true) }
+    }
+
     /// يبدأ مهمة على الجوال من المحادثة (فقاعة حالة + الوكيل)
     private func startPhoneTask(_ t: String, goal g: String) {
         append(Message(role: .user, text: t))
@@ -237,14 +264,19 @@ final class ChatStore: ObservableObject {
         if t.isEmpty { t = attachments.contains { $0.kind == .image } ? "وش تشوف في الصورة؟" : "لخّص لي الملف باختصار." }
         // أمر للوكيل: "/جوال افتح الملاحظات..." أو "جوال: ..."
         // «/جوال …» دايمًا مهمة. والمشغّل شغّال: نحدد النية أول (قواعد سريعة، وإذا مو واضح نسأل نموذج المحادثة نعم/لا)
-        if let g = PhoneAgentTrigger.goal(t) { startPhoneTask(t, goal: g); return }
+        let runnerOn = UserDefaults.standard.bool(forKey: "xctAutomation")
+        if let g = PhoneAgentTrigger.goal(t) {
+            if runnerOn { startPhoneTask(t, goal: g) } else { askRunner(t, goal: g, attachments: attachments) }
+            return
+        }
         // تحديد النية التلقائي (افتراضيًا شغّال)؛ لو انطفى من صفحة الوكيل يصير «/جوال» بس
-        if !phoneChecked, attachments.isEmpty, (UserDefaults.standard.object(forKey: "phoneIntentAuto") as? Bool ?? true),
-           UserDefaults.standard.bool(forKey: "xctAutomation") {
+        // يشتغل حتى والمشغّل طافي: لو طلعت مهمة نسأله يشغّله بدل ما نعاملها كدردشة
+        if !phoneChecked, attachments.isEmpty, (UserDefaults.standard.object(forKey: "phoneIntentAuto") as? Bool ?? true) {
             switch PhoneIntent.verdict(t) {
             case .yes:
                 slog("chat: phone intent rule → task")
-                startPhoneTask(t, goal: t); return
+                if runnerOn { startPhoneTask(t, goal: t) } else { askRunner(t, goal: t, attachments: attachments) }
+                return
             case .no:
                 slog("chat: phone intent rule → chat")
             case .unsure:
@@ -253,7 +285,10 @@ final class ChatStore: ObservableObject {
                     let c0 = Date()
                     let task = await LLMService.shared.classifyPhoneTask(msg)
                     slog("chat: phone intent classifier → \(task ? "task" : "chat") in \(Int(Date().timeIntervalSince(c0) * 1000))ms")
-                    if task { self.startPhoneTask(msg, goal: msg) }
+                    if task {
+                        if UserDefaults.standard.bool(forKey: "xctAutomation") { self.startPhoneTask(msg, goal: msg) }
+                        else { self.askRunner(msg, goal: msg, attachments: attachments) }
+                    }
                     else { self.send(msg, attachments: attachments, web: webAlways, webAuto: webAuto, phoneChecked: true, onFail: onFail) }
                 }
                 return
