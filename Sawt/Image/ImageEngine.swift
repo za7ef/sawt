@@ -434,6 +434,7 @@ actor ImageGenerator {
             unloadSD()
             // أول تحميل يجهّز النموذج للمحرك العصبي (ممكن ياخذ دقيقة أو أكثر)، وبعدها النظام يحفظه
             status("أحمّل نموذج الصور… (أول مرة ممكن ياخذ دقيقة)")
+            ImageProgress.post(.loading)
             let cfg = MLModelConfiguration()
             cfg.computeUnits = .cpuAndNeuralEngine
             let t0 = Date()
@@ -461,13 +462,28 @@ actor ImageGenerator {
             c.guidanceScale = 7.5
             c.negativePrompt = negative
         }
+        // المعاينة الحية من تقدير الصورة النهائية في كل خطوة (مو الـlatent المزعج)
+        c.useDenoisedIntermediates = true
         let steps = c.stepCount
         status("أرسم… 0/\(steps)")
+        ImageProgress.post(.drawing(0, steps))
         let t0 = Date()
         let images = try p.generateImages(configuration: c) { prog in
             // بعد آخر خطوة يبدأ فك الصورة (VAE) فنقول كذا بدل ما نعلق على «٢٠/٢٠»
-            if prog.step + 1 >= prog.stepCount { status("أجهّز الصورة…") }
-            else { status("أرسم… \(prog.step + 1)/\(prog.stepCount)") }
+            let done = prog.step + 1
+            // معاينة مغبّشة في آخر ~٣٠٪ (تحويل خطي رخيص، بدون VAE لكل خطوة)
+            var box: PreviewBox?
+            if Double(done) >= 0.65 * Double(prog.stepCount),
+               let lat = prog.currentLatentSamples.first, let cg = ImageProgress.latentPreview(lat) {
+                box = PreviewBox(cg)
+            }
+            if done >= prog.stepCount {
+                status("أجهّز الصورة…")
+                ImageProgress.post(.decoding, preview: box)
+            } else {
+                status("أرسم… \(done)/\(prog.stepCount)")
+                ImageProgress.post(.drawing(done, prog.stepCount), preview: box)
+            }
             return !Task.isCancelled
         }
         if Task.isCancelled { throw CancellationError() }
@@ -481,6 +497,7 @@ actor ImageGenerator {
 
     private func runPlayground(prompt: String, status: @escaping @Sendable (String) -> Void) async throws -> CGImage {
         status("أرسم بـImage Playground…")
+        ImageProgress.post(.waiting)
         let style = await PlaygroundStyles.selectedStyle()
         do {
             let creator = try await ImageCreator()
@@ -506,6 +523,7 @@ actor ImageGenerator {
         guard let key = CloudProvider.geminiPaid.key ?? CloudProvider.gemini.key else { throw SawtError.failed("ما فيه مفتاح Gemini. أضفه من النماذج ← السحابية.") }
         guard await NetworkGate.shared.permit("توليد صورة بـGemini") else { throw SawtError.failed("الإنترنت مقفول") }
         status("أطلب الصورة من \(e.title)…")
+        ImageProgress.post(.waiting)
         var req = URLRequest(url: URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(e.geminiModel):generateContent")!)
         req.httpMethod = "POST"
         req.timeoutInterval = 120

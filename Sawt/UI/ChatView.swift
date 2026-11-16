@@ -679,8 +679,10 @@ struct MessageRow: View, Equatable {
                     }
                     if message.genPending == true {
                         GenProgressView(message: message)
+                            .transition(.opacity)
                     } else if let f = message.genImage {
                         GenImageView(file: f, prompt: message.genPrompt, negative: message.genNegative)
+                            .transition(.opacity.combined(with: .scale(scale: 0.97)))
                     } else if streaming && message.text.isEmpty {
                         TypingDots()
                     } else {

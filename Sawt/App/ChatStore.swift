@@ -668,6 +668,7 @@ final class ChatStore: ObservableObject {
         let myGen = genID
         ImageGenerator.busy = true
         imageGenerating = true
+        ImageProgress.shared.begin(bid)
         slog("image: start engine=\(engine.rawValue)")
         // حالة التقدم: تتجاهل أي تحديث متأخر بعد ما تخلص الصورة أو تفشل
         let status: @Sendable (String) -> Void = { s in
@@ -726,6 +727,7 @@ final class ChatStore: ObservableObject {
             }
             ImageGenerator.busy = false
             imageGenerating = false
+            ImageProgress.shared.end()
             if genID == myGen {
                 live.reset()
                 isGenerating = false
@@ -736,11 +738,14 @@ final class ChatStore: ObservableObject {
     private func setGenImage(_ id: UUID, in conv: UUID?, _ g: GeneratedImage) {
         guard let ci = conversations.firstIndex(where: { $0.id == (conv ?? currentID) }),
               let mi = conversations[ci].messages.firstIndex(where: { $0.id == id }) else { return }
-        conversations[ci].messages[mi].text = "🎨 الصورة جاهزة"
-        conversations[ci].messages[mi].genPending = nil
-        conversations[ci].messages[mi].genImage = g.file
-        conversations[ci].messages[mi].genPrompt = g.prompt
-        conversations[ci].messages[mi].model = g.engine.title
+        // انتقال ناعم من بطاقة الرسم للصورة
+        withAnimation(.easeInOut(duration: 0.5)) {
+            conversations[ci].messages[mi].text = "🎨 الصورة جاهزة"
+            conversations[ci].messages[mi].genPending = nil
+            conversations[ci].messages[mi].genImage = g.file
+            conversations[ci].messages[mi].genPrompt = g.prompt
+            conversations[ci].messages[mi].model = g.engine.title
+        }
         save()
     }
 

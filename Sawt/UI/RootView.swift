@@ -170,7 +170,7 @@ struct DrawerView: View {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                     TextField("دوّر في المحادثات", text: $search).focused($searchFocused)
                 }
-                .padding(.horizontal, 14).padding(.vertical, 11)
+                .padding(.horizontal, 14).frame(height: 44)
                 .glassEffect(.regular, in: .capsule)
                 Button("إلغاء") { search = ""; searching = false; searchFocused = false }
                     .foregroundStyle(.secondary)
@@ -181,10 +181,13 @@ struct DrawerView: View {
                     searching = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { searchFocused = true }
                 } label: {
-                    Image(systemName: "magnifyingglass").font(.title3.weight(.medium)).frame(width: 46, height: 46)
+                    Image(systemName: "magnifyingglass").font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
+                        .glassEffect(.regular.interactive(), in: .circle)
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
+                .buttonStyle(.plain)
                 .accessibilityLabel("بحث في المحادثات")
             }
         }
@@ -268,18 +271,21 @@ struct DrawerView: View {
                 store.newConversation(); close()
             } label: {
                 Label("محادثة جديدة", systemImage: "square.and.pencil")
-                    .font(.headline)
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 22).padding(.vertical, 14)
+                    .padding(.horizontal, 18).frame(height: 44)
                     .background(Color(red: 0.16, green: 0.42, blue: 1.0), in: Capsule())
             }
             .buttonStyle(.plain)
             Spacer()
             Button { showSettings = true } label: {
-                Image(systemName: "gearshape").font(.title3.weight(.medium)).frame(width: 50, height: 50)
+                Image(systemName: "gearshape").font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
+                    .glassEffect(.regular.interactive(), in: .circle)
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
+            .buttonStyle(.plain)
             .accessibilityLabel("الإعدادات")
         }
         .padding(.top, 8)
