@@ -122,7 +122,7 @@ final class PhoneAgent: ObservableObject {
         let gn = Self.normName(g)
         XCTBackend.taskCandidates = Self.apps.filter { e in
             e.names.contains { let n = Self.normName($0); return n.count >= 3 && gn.contains(n) } || (Self.normName(e.en).count >= 3 && gn.contains(Self.normName(e.en)))
-        }.map(\.bundle).filter { !$0.isEmpty }
+        }.map { $0.bundle }.filter { !$0.isEmpty }
         XCTBackend.recentOpened = []
         self.goal = g; log = []; lastResult = ""; running = true; stepNo = 0; firstRead = true
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }

@@ -670,8 +670,9 @@ enum XCTBackend {
         }
         var cands: [String] = []
         for b in recentOpened + taskCandidates + commonApps where !overlays.contains(b) && !cands.contains(b) { cands.append(b) }
+        let checkList = cands
         let found: String?? = await onMainTimed(4) { () -> String? in
-            for b in cands where appState(b) == 4 { return b }
+            for b in checkList where appState(b) == 4 { return b }
             return nil
         }
         let f = (found ?? nil) ?? "com.apple.springboard"
