@@ -221,13 +221,38 @@ static NSArray *SawtActiveElements(id client) {
     return [list isKindOfClass:NSArray.class] ? list : @[];
 }
 
+/// عنصر الشاشة الرئيسية (SpringBoard) من عميل الوصول: systemApplication (زي Poki)
+static id SawtSystemApp(id client) {
+    @try {
+        SEL s = NSSelectorFromString(@"systemApplication");
+        if (client && [client respondsToSelector:s]) return ((id (*)(id, SEL))objc_msgSend)(client, s);
+    } @catch (__unused NSException *e) {}
+    return nil;
+}
+
+/// النشطة + الشاشة الرئيسية لو مو فيها (لما نكون في الرئيسية activeApplications ممكن ترجع فاضية)
+static NSArray *SawtActiveWithSystem(id client) {
+    NSMutableArray *all = [NSMutableArray arrayWithArray:SawtActiveElements(client) ?: @[]];
+    id sys = SawtSystemApp(client);
+    int sp = SawtPid(sys);
+    if (sp > 0) {
+        BOOL has = NO;
+        for (id e in all) if (SawtPid(e) == sp) { has = YES; break; }
+        if (!has) [all addObject:sys];
+    }
+    return all;
+}
+
 NSArray<NSDictionary<NSString *, id> *> *SawtXCTActiveApps(void) {
     NSMutableArray *out = [NSMutableArray array];
     @try {
-        for (id e in SawtActiveElements(SawtAXClient())) {
+        id client = SawtAXClient();
+        int sp = SawtPid(SawtSystemApp(client));
+        for (id e in SawtActiveWithSystem(client)) {
             int p = SawtPid(e);
             if (p <= 0) continue;
             NSString *bundle = SawtKVC(e, @"bundleIdentifier") ?: SawtKVC(e, @"bundleID");
+            if (p == sp) bundle = @"com.apple.springboard";
             if (![bundle isKindOfClass:NSString.class] || !bundle.length) bundle = SawtXCTBundleForPID(p, 1.0);
             NSMutableDictionary *d = [NSMutableDictionary dictionaryWithObject:@(p) forKey:@"pid"];
             if ([bundle isKindOfClass:NSString.class] && bundle.length) d[@"bundle"] = bundle;
@@ -313,7 +338,7 @@ NSObject * _Nullable SawtXCTAXRead(int pid, NSInteger maxDepth, NSInteger maxChi
         id client = SawtAXClient();
         if (!client) { if (why) *why = gSawtAXSource; return nil; }
         id element = nil;
-        for (id e in SawtActiveElements(client)) {
+        for (id e in SawtActiveWithSystem(client)) {
             if (SawtPid(e) == pid) { element = e; break; }
         }
         if (!element) { if (why) *why = @"التطبيق مو ضمن النشطة"; return nil; }
@@ -444,5 +469,22 @@ NSString * _Nullable SawtXCTOpenURL(NSURL *url) {
         return err ? [NSString stringWithFormat:@"%@ %ld %@", err.domain, (long)err.code, err.localizedDescription] : @"رجع NO";
     } @catch (NSException *e) {
         return [NSString stringWithFormat:@"%@: %@", e.name, e.reason ?: @""];
+    }
+}
+
+
+NSString *SawtXCTCloseSession(void) {
+    @try {
+        NSString *why = nil;
+        id session = SawtSharedSession(&why);
+        if (!session) return [@"✗ " stringByAppendingString:why ?: @"ما فيه جلسة"];
+        SEL connSel = NSSelectorFromString(@"connection");
+        id link = [session respondsToSelector:connSel] ? ((id (*)(id, SEL))objc_msgSend)(session, connSel) : nil;
+        SEL inv = NSSelectorFromString(@"invalidate");
+        if (!link || ![link respondsToSelector:inv]) return @"✗ ما فيه اتصال نقدر نسكّره";
+        ((void (*)(id, SEL))objc_msgSend)(link, inv);
+        return [NSString stringWithFormat:@"تسكّر (%@ invalidate)", NSStringFromClass([link class])];
+    } @catch (NSException *e) {
+        return [NSString stringWithFormat:@"✗ %@: %@", e.name, e.reason ?: @""];
     }
 }

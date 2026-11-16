@@ -160,7 +160,7 @@ final class PhoneAgent: ObservableObject {
         unsurface()
         AgentNotify.done(r)
         HostPairing.shared.keepAlive(false)
-        if XCTBackend.automationWanted || XCTBackend.automationEnabled { Task { await XCTBackend.disableAutomation() } }
+        if Self.see == .xct || XCTBackend.automationWanted || XCTBackend.automationEnabled { Task { await XCTBackend.endTask() } }
         slog("agent: finish \(r)")
     }
 
@@ -175,6 +175,8 @@ final class PhoneAgent: ObservableObject {
         if Self.see == .share { ScreenShare.shared.start() }
         let bg = BGTask("agent")
         defer { bg.end() }
+        // أي خروج من الحلقة (فشل، إلغاء، رجوع مبكر بدون finish): نطفّي وضع الأتمتة
+        defer { if Self.see == .xct { Task { await XCTBackend.endTask() } } }
         // الطريقة المختارة بس، بدون رجوع لطريقة ثانية. XCTest: نشغّل وضع الأتمتة تلقائيًا وننتظره
         if Self.see == .xct {
             if !XCTBackend.runnerReady || !Runner.isOn { say("الطريقة: XCTest — أشغّل المشغّل… (دخّل رمز الجوال لو طلبه)") }

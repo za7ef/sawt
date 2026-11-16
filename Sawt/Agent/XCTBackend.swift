@@ -163,16 +163,30 @@ enum XCTBackend {
         return nil
     }
 
-    /// يطفّي وضع الأتمتة بعد المهمة ويخلي الجلسة جاهزة (الشاشة ترجع طبيعية)
-    static func disableAutomation() async {
+    /// يطفّي وضع الأتمتة بعد المهمة ويخلي الجلسة جاهزة (الشاشة ترجع طبيعية).
+    /// نحاول دايمًا (حتى لو حالتنا تقول مطفي، لأن الحالة ممكن تكون غلط)؛ ولو الإطفاء فشل نسكّر الجلسة زي Poki
+    static func disableAutomation(force: Bool = false) async {
         automationWanted = false
-        guard automationEnabled else { return }
+        guard force || automationEnabled || prepared else { return }
         let how: String = await withCheckedContinuation { (c: CheckedContinuation<String, Never>) in
             DispatchQueue.global(qos: .utility).async { c.resume(returning: SawtXCTDisableAutomation()) }
         }
         automationEnabled = false
-        automation = how.hasPrefix("✗") ? "إطفاء فشل: \(how)" : "مطفي (\(how))"
         slog("xct: automation disable: \(how)")
+        if !how.hasPrefix("✗") { automation = "مطفي (\(how))"; return }
+        let closed: String = await withCheckedContinuation { (c: CheckedContinuation<String, Never>) in
+            DispatchQueue.global(qos: .utility).async { c.resume(returning: SawtXCTCloseSession()) }
+        }
+        slog("xct: disable failed, close session: \(closed)")
+        prepared = false
+        generation += 1
+        automation = "الإطفاء فشل (\(how.prefix(60)))؛ الجلسة: \(closed)"
+        sessionState = lightReady ? "جاهز (مفوّض، الجلسة تنفتح مع المهمة)" : "مطفية"
+    }
+
+    /// نهاية أي مهمة (نجحت، فشلت، انوقفت، خطأ): نطفّي وضع الأتمتة دايمًا
+    static func endTask() async {
+        await disableAutomation(force: true)
     }
 
     // MARK: - وضع الأتمتة (جلسة دائمة)
@@ -502,21 +516,16 @@ enum XCTBackend {
         let t = Date()
         let me = Bundle.main.bundleIdentifier ?? "com.za7ef.sawt"
         let myPid = getpid()
+        // صوت يبقى «نشط» عند عميل الوصول وهو بالخلفية (الصوت الصامت يخليه صاحي)، فما نحسبه إلا لو هو فعلًا قدّام
+        let selfFront = await MainActor.run { UIApplication.shared.applicationState == .active }
         var list: [(Int32, String)] = []
         for d in SawtXCTActiveApps() {
             guard let n = d["pid"] as? NSNumber else { continue }
             let pid = n.int32Value
-            if skipSelf && pid == myPid { continue }
+            if pid == myPid && (skipSelf || !selfFront) { continue }
             list.append((pid, await bundleFor(pid, hint: d["bundle"] as? String)))
         }
-        if list.isEmpty && skipSelf {
-            // صوت وحده نشط: نقرأ الشاشة الرئيسية (رقم عمليتها من XCUIApplication)
-            let sb: Int32? = await onMainTimed(3) { () -> Int32 in
-                guard let a = app(bundle: "com.apple.springboard") else { return 0 }
-                return (kvc(a, "processID") as? NSNumber)?.int32Value ?? 0
-            }
-            if let sb, sb > 0 { list.append((sb, "com.apple.springboard")) }
-        }
+        slog("xct: active \(list.map { "\($0.1)#\($0.0)" }.joined(separator: ",")) selfFront=\(selfFront)")
         guard let front = list.first(where: { $0.1 != "com.apple.springboard" && !$0.1.isEmpty }) ?? list.first else {
             lastAXError = "ما فيه تطبيقات نشطة"
             slog("xct: ax no active apps"); return nil

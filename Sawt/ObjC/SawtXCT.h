@@ -23,6 +23,9 @@ FOUNDATION_EXPORT NSString * _Nullable SawtXCTTypeText(NSString *text, NSInteger
 /// يفتح رابط عبر XCUIDevice.sharedDevice.system openURL:error:. nil = نجح
 FOUNDATION_EXPORT NSString * _Nullable SawtXCTOpenURL(NSURL *url);
 
+/// يسكّر اتصال جلسة testmanagerd (زي Poki): الخدمة تطفّي وضع الأتمتة لما ينقطع. يرجع وش صار، ويبدأ بـ✗ لو فشل
+FOUNDATION_EXPORT NSString *SawtXCTCloseSession(void);
+
 /// وش مصدر عميل الوصول اللي انلقى (للسجل)
 FOUNDATION_EXPORT NSString *SawtXCTAXSource(void);
 
