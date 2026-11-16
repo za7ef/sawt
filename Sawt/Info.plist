@@ -6,6 +6,8 @@
 	<string>عشان تصوّر شي وترفقه في المحادثة. الصورة تبقى على جوالك.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>عشان يعرف مدينتك لما تسأل عن الطقس بدون ما تذكرها. ما يُحفظ إلا اسم المدينة.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>عشان تحفظ الصور اللي يرسمها صوت في الاستوديو.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>عشان تختار صورة وترفقها في المحادثة. الصورة تبقى على جوالك.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>

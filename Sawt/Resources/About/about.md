@@ -40,5 +40,7 @@
 - **NAMAA-Saudi-TTS-V2** (NAMAA Space) المبني على F5-TTS: ترخيص CC BY-NC-SA 4.0، يعني للاستخدام غير التجاري فقط، ومع نسبة العمل لأصحابه، وأي تعديل عليه يُنشر بنفس الترخيص. صوت المرجع من مشروع Habibi-TTS.
 - **Vocos:** تحويل الطيف لصوت. ترخيص MIT.
 - **swift-transformers و Hugging Face Hub:** تنزيل النماذج وقراءة المقطّعات. ترخيص Apache 2.0.
+- **ml-stable-diffusion** (Apple): تشغيل Stable Diffusion على الجهاز، نسخة مضمّنة بدون أجزاء SD3. ترخيص MIT.
+- **Stable Diffusion 2.1 base** (Stability AI، نسخة Apple لـCore ML): ترخيص CreativeML OpenRAIL++-M. و**SD-Turbo** (Stability AI، نسخة mozksoft المضغوطة): ترخيص Stability AI المجتمعي للاستخدام غير التجاري. الاثنين ينزلون لما تطلبهم.
 
 أسماء النماذج والشركات ملك أصحابها، وذكرها هنا للنسبة فقط.

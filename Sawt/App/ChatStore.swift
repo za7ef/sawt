@@ -27,6 +27,9 @@ struct Message: Identifiable, Codable, Equatable {
     var notice: String?
     /// النموذج اللي كتب الرد (رمادي صغير فوقه)
     var model: String?
+    /// صورة مولّدة (اسم الملف في مجلد المرفقات) والوصف الإنجليزي اللي انرسمت منه
+    var genImage: String?
+    var genPrompt: String?
 }
 
 struct Conversation: Identifiable, Codable, Equatable {
@@ -132,7 +135,11 @@ final class ChatStore: ObservableObject {
         if genConv == id, genTask != nil { latestPartial = ""; stop() }
         if let c = conversations.first(where: { $0.id == id }) {
             let atts = c.messages.flatMap { $0.attachments ?? [] }
-            Task.detached(priority: .utility) { atts.forEach { $0.deleteFiles() } }
+            let gens = c.messages.compactMap { $0.genImage }.map { ImageGenerator.outDir.appendingPathComponent($0) }
+            Task.detached(priority: .utility) {
+                atts.forEach { $0.deleteFiles() }
+                gens.forEach { try? FileManager.default.removeItem(at: $0) }
+            }
         }
         conversations.removeAll { $0.id == id }
         if currentID == id { currentID = conversations.first?.id }
@@ -283,6 +290,12 @@ final class ChatStore: ObservableObject {
             if runnerOn { startPhoneTask(t, goal: g) } else { askRunner(t, goal: g, attachments: attachments) }
             return
         }
+        // طلب صورة: «/صورة …» أو قواعد واضحة (ارسم، سوّ لي صورة…)
+        if attachments.isEmpty, ImageIntent.forced(t) || (!phoneChecked && ImageIntent.verdict(t)) {
+            slog("chat: image intent rule")
+            generateImage(t)
+            return
+        }
         // تحديد النية التلقائي (افتراضيًا شغّال)؛ لو انطفى من صفحة الوكيل يصير «/جوال» بس
         // يشتغل حتى والمشغّل طافي: لو طلعت مهمة نسأله يشغّله بدل ما نعاملها كدردشة
         if !phoneChecked, attachments.isEmpty, (UserDefaults.standard.object(forKey: "phoneIntentAuto") as? Bool ?? true) {
@@ -297,9 +310,10 @@ final class ChatStore: ObservableObject {
                 let msg = t
                 Task { @MainActor in
                     let c0 = Date()
-                    let task = await LLMService.shared.classifyPhoneTask(msg)
-                    slog("chat: phone intent classifier → \(task ? "task" : "chat") in \(Int(Date().timeIntervalSince(c0) * 1000))ms")
-                    if task {
+                    let intent = await LLMService.shared.classifyIntent(msg)
+                    slog("chat: intent classifier → \(intent) in \(Int(Date().timeIntervalSince(c0) * 1000))ms")
+                    if intent == .image { self.generateImage(msg) }
+                    else if intent == .task {
                         if UserDefaults.standard.bool(forKey: "xctAutomation") { self.startPhoneTask(msg, goal: msg) }
                         else { self.askRunner(msg, goal: msg, attachments: attachments) }
                     }
@@ -608,6 +622,108 @@ final class ChatStore: ObservableObject {
         isGenerating = false
     }
 
+    // MARK: - توليد الصور
+
+    /// يرسم صورة بالمحرك المختار بس (بدون أي تبديل تلقائي لمحرك ثاني)
+    func generateImage(_ text: String) {
+        guard !isGenerating else { return }
+        let request = ImageIntent.strip(text)
+        append(Message(role: .user, text: text))
+        let bubble = Message(role: .assistant, text: "🎨 أجهّز الصورة…")
+        append(bubble)
+        let bid = bubble.id
+        let conv = currentID
+        func fail(_ why: String) { updateText(bid, in: conv, "🎨 " + why, save: true) }
+        guard let engine = ImageEngine.selected else {
+            fail("اختر محرك الصور أول: من زر + ← محرك الصور، أو من النماذج ← الصور."); return
+        }
+        if PhoneAgent.shared.running { fail("الوكيل شغّال على مهمة — وقّفه أول وبعدين أرسم."); return }
+        if engine.isLocalSD, !SDModels.installed(engine) {
+            fail("نموذج \(engine.title) مو منزّل. نزّله من النماذج ← الصور."); return
+        }
+        if engine.isGemini {
+            if !CloudProvider.geminiPaid.hasKey, !CloudProvider.gemini.hasKey { fail("ما فيه مفتاح Gemini. أضفه من النماذج ← السحابية."); return }
+            if !CloudLLM.consent { fail("لازم توافق على تنبيه الخصوصية للنماذج السحابية أول (من النماذج ← السحابية)."); return }
+        }
+        genConv = conv
+        latestPartial = ""
+        isGenerating = true
+        live.reset()
+        genID += 1
+        let myGen = genID
+        ImageGenerator.busy = true
+        slog("image: start engine=\(engine.rawValue)")
+        let status: @Sendable (String) -> Void = { s in
+            Task { @MainActor in ChatStore.shared.updateText(bid, in: conv, "🎨 " + s) }
+        }
+        genTask = Task {
+            var reloadLLM = false
+            do {
+                // ١) نموذج المحادثة يكتب وصف إنجليزي (المحركات المحلية ما تفهم عربي)
+                status("أكتب وصف الصورة…")
+                var spec = await Self.imagePrompt(for: request)
+                if spec == nil, engine.isGemini { spec = (request, "") }   // Gemini يفهم العربي
+                guard let sp = spec else {
+                    throw SawtError.failed("ما قدرت أكتب وصف إنجليزي للصورة (نموذج المحادثة مو جاهز؟). جرّب مرة ثانية.")
+                }
+                let (prompt, negative) = sp
+                try Task.checkCancellation()
+                slog("image: prompt=\(prompt.prefix(200)) negative=\(negative.prefix(120))")
+                // ٢) المحلي يحتاج ذاكرة: نفك النموذج اللغوي وقت الرسم ونرجعه بعدين
+                if engine.isLocalSD { reloadLLM = await ModelManager.shared.unloadForImage() }
+                let img = try await ImageGenerator.shared.generate(engine: engine, prompt: prompt, negative: negative, status: status)
+                try Task.checkCancellation()
+                self.setGenImage(bid, in: conv, img)
+            } catch is CancellationError {
+                fail("انلغت الصورة.")
+            } catch {
+                slog("image: failed \(engine.rawValue) \(error)")
+                fail("ما قدرت أرسم بـ\(engine.title): \(SawtError.friendly(error).localizedDescription)")
+            }
+            if engine.isLocalSD {
+                await ImageGenerator.shared.unloadSD()
+                if reloadLLM { ModelManager.shared.loadLLM() }
+            }
+            ImageGenerator.busy = false
+            if genID == myGen {
+                live.reset()
+                isGenerating = false
+            }
+        }
+    }
+
+    private func setGenImage(_ id: UUID, in conv: UUID?, _ g: GeneratedImage) {
+        guard let ci = conversations.firstIndex(where: { $0.id == (conv ?? currentID) }),
+              let mi = conversations[ci].messages.firstIndex(where: { $0.id == id }) else { return }
+        conversations[ci].messages[mi].text = "🎨 الصورة جاهزة"
+        conversations[ci].messages[mi].genImage = g.file
+        conversations[ci].messages[mi].genPrompt = g.prompt
+        conversations[ci].messages[mi].model = g.engine.title
+        save()
+    }
+
+    /// يطلب من نموذج المحادثة JSON فيه وصف إنجليزي: {"prompt": "...", "negative": "..."}
+    static func imagePrompt(for request: String) async -> (String, String)? {
+        let sys = """
+        You write prompts for an image generator. Turn the user's request (any language) into JSON only: \
+        {"prompt": "<detailed English description: subject, setting, style, lighting, colors; max 60 words>", \
+        "negative": "<short English list of things to avoid>"}. No other text.
+        """
+        guard let s = try? await LLMService.shared.stream(system: sys, history: [], user: String(request.prefix(600)), maxTokens: 220) else { return nil }
+        var out = ""
+        do { for try await c in s { out += c } } catch { return nil }
+        let answer = splitThinking(out).answer
+        guard let a = answer.firstIndex(of: "{"), let b = answer.lastIndex(of: "}"), a < b,
+              let d = String(answer[a...b]).data(using: .utf8),
+              let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+              let p = (j["prompt"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty else {
+            slog("image: prompt json failed: \(out.prefix(300))")
+            return nil
+        }
+        let n = (j["negative"] as? String) ?? ((j["negative"] as? [String])?.joined(separator: ", ") ?? "")
+        return (p, n.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     /// يحدّث نص رسالة موجودة (فقاعة حالة الوكيل)
     func updateText(_ id: UUID, in conv: UUID?, _ text: String, save persist: Bool = false) {
         guard let ci = conversations.firstIndex(where: { $0.id == (conv ?? currentID) }),
@@ -626,6 +742,44 @@ final class ChatStore: ObservableObject {
     }
 }
 
+
+/// نية رسم صورة (قواعد سريعة؛ الحالات المو واضحة يقررها المصنّف)
+enum ImageIntent {
+    static let triggers = ["/صورة", "/صوره", "/image", "/draw"]
+    static let drawVerbs = ["ارسم", "ارسمي", "أرسم", "إرسم", "draw ", "generate an image", "generate image", "create an image", "make an image",
+                            "make a picture", "create a picture", "image of ", "picture of "]
+    static let makeVerbs = ["سو", "سوي", "سوّ", "سوّي", "اعطني", "أعطني", "عطني", "ابي", "أبي", "ابغى", "أبغى", "ولد", "ولّد", "صمم", "صمّم",
+                            "اصنع", "اعمل", "تخيل", "تخيّل"]
+    static let imageWords = ["صورة", "صوره", "رسمة", "رسمه", "لوحة", "لوحه", "خلفية", "خلفيه", "شعار"]
+    /// أشياء على الجوال نفسه (لقطة شاشة، الصور في الاستوديو) مو رسم
+    static let phoneWords = ["لقطة", "سكرين", "الاستوديو", "الألبوم", "البوم", "الكاميرا", "صورة الشاشة", "صوري", "ارسل", "أرسل"]
+
+    static func forced(_ t: String) -> Bool {
+        let l = t.lowercased()
+        return triggers.contains { l.hasPrefix($0) }
+    }
+
+    /// يشيل «/صورة» من البداية
+    static func strip(_ t: String) -> String {
+        let l = t.lowercased()
+        for tr in triggers where l.hasPrefix(tr) {
+            let rest = String(t.dropFirst(tr.count)).trimmingCharacters(in: CharacterSet(charactersIn: " :：").union(.whitespacesAndNewlines))
+            return rest.isEmpty ? t : rest
+        }
+        return t
+    }
+
+    static func verdict(_ text: String) -> Bool {
+        let l = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if phoneWords.contains(where: { l.contains($0) }) { return false }
+        if drawVerbs.contains(where: { l.hasPrefix($0) }) { return true }
+        let words = l.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
+        guard let first = words.first else { return false }
+        // «سوّ لي صورة…»، «ابي خلفية…» : فعل صنع + كلمة صورة في أول ٤ كلمات
+        let head = words.prefix(4)
+        return makeVerbs.contains(first) && head.contains { w in imageWords.contains { w.hasPrefix($0) || w.hasPrefix("ل" + $0) } }
+    }
+}
 
 /// نية تنفيذ مهمة على الجوال (قواعد سريعة قبل المصنّف)
 enum PhoneIntent {

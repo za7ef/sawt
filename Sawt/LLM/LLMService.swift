@@ -63,15 +63,20 @@ actor LLMService {
         return out.uppercased().contains("THINK")
     }
 
-    /// مصنّف سريع: هل الرسالة تطلب تنفيذ شي على الجوال (فتح تطبيق، ضغط، إرسال، كتابة...)؟
-    func classifyPhoneTask(_ text: String) async -> Bool {
+    /// مصنّف النية: TASK (تنفيذ على الجوال) أو IMAGE (رسم/توليد صورة) أو CHAT
+    enum Intent: Sendable { case task, image, chat }
+    func classifyIntent(_ text: String) async -> Intent {
         let sys = """
-        هل رسالة المستخدم تطلب منك تنفذ شي على جواله (تفتح تطبيق، تضغط، ترسل، تكتب في تطبيق، تغيّر إعداد، تشغّل شي)؟         إذا نعم اكتب TASK. إذا سؤال أو سوالف أو طلب معلومة أو كتابة نص في المحادثة اكتب CHAT. كلمة وحدة بس.
+        صنّف رسالة المستخدم بكلمة وحدة: TASK إذا يطلب تنفذ شي على جواله (تفتح تطبيق، تضغط، ترسل، تكتب في تطبيق، تغيّر إعداد، تشغّل شي). \
+        IMAGE إذا يطلب ترسم أو تولّد أو تصمم صورة جديدة. CHAT إذا سؤال أو سوالف أو طلب معلومة أو كتابة نص في المحادثة. كلمة وحدة بس.
         """
-        guard let s = try? stream(system: sys, history: [], user: String(text.prefix(400)), maxTokens: 3) else { return false }
+        guard let s = try? stream(system: sys, history: [], user: String(text.prefix(400)), maxTokens: 3) else { return .chat }
         var out = ""
-        do { for try await c in s { out += c } } catch { return false }
-        return out.uppercased().contains("TASK")
+        do { for try await c in s { out += c } } catch { return .chat }
+        let u = out.uppercased()
+        if u.contains("TASK") { return .task }
+        if u.contains("IMAGE") { return .image }
+        return .chat
     }
 
     /// مصنّف سريع: هل السؤال يحتاج بحث في الويب (معلومة حديثة أو متغيرة)؟

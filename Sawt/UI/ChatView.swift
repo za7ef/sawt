@@ -34,6 +34,9 @@ struct ChatView: View {
     /// وصل شي جديد والمستخدم فوق (نقطة على زر النزول)
     @State private var hasNew = false
     @AppStorage("netWarned") private var netWarned = false
+    /// «صورة» من زر +: الرسالة الجاية تنرسم صورة
+    @State private var imageMode = false
+    @AppStorage("imageEngine") private var imageEngineRaw = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -395,6 +398,18 @@ struct ChatView: View {
                 Button { showFiles = true } label: { Label("الملفات", systemImage: "folder") }
             }
             Section {
+                Button { imageMode = true; focused = true } label: { Label("صورة", systemImage: "paintbrush") }
+                Menu {
+                    Picker("محرك الصور", selection: $imageEngineRaw) {
+                        ForEach(ImageEngine.allCases) { e in
+                            Text("\(e.title) · \(e.tag)").tag(e.rawValue)
+                        }
+                    }
+                } label: {
+                    Label("محرك الصور: \(ImageEngine(rawValue: imageEngineRaw)?.title ?? "ما اخترت")", systemImage: "photo.artframe")
+                }
+            }
+            Section {
                 Menu {
                     Picker("بحث في الويب", selection: Binding(get: { net.mode }, set: { setWeb($0) })) {
                         Text("طافي").tag(NetworkGate.Mode.off)
@@ -429,9 +444,12 @@ struct ChatView: View {
 
     /// شرائح الحالة: تبين وش مشغّل، والضغط يطفيه
     @ViewBuilder private var stateChips: some View {
-        if net.mode != .off || store.thinkMode == .on {
+        if net.mode != .off || store.thinkMode == .on || imageMode {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
+                    if imageMode {
+                        chip("paintbrush", "صورة") { imageMode = false }
+                    }
                     if net.mode != .off {
                         chip("globe", net.mode == .auto ? "بحث تلقائي" : "بحث دايم") { applyWeb(.off) }
                     }
@@ -490,7 +508,7 @@ struct ChatView: View {
                 stateChips
                 HStack(alignment: .bottom, spacing: 4) {
                     attachMenu
-                    ComposerField(text: $draft, placeholder: dictation.isRecording ? "أسمعك…" : "اسأل صوت",
+                    ComposerField(text: $draft, placeholder: dictation.isRecording ? "أسمعك…" : (imageMode ? "صِف الصورة" : "اسأل صوت"),
                                   focused: $focused, clearToken: sendGen)
                     micButton
                     actionButton.padding(.trailing, 4)
@@ -506,6 +524,7 @@ struct ChatView: View {
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: store.isGenerating)
             .animation(.easeOut(duration: 0.2), value: net.mode)
             .animation(.easeOut(duration: 0.2), value: store.thinkMode)
+            .animation(.easeOut(duration: 0.2), value: imageMode)
         }
         .alert("بيتم الوصول للإنترنت", isPresented: Binding(get: { webPending != nil }, set: { if !$0 { webPending = nil } })) {
             Button("متابعة") { netWarned = true; if let m = webPending { applyWeb(m) }; webPending = nil }
@@ -564,6 +583,11 @@ struct ChatView: View {
         draft = ""
         pending = []
         // التفضية الفعلية (وإنهاء إملاء النظام) تصير داخل ComposerField لما يتغير sendGen
+        if imageMode, atts.isEmpty, !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            imageMode = false
+            store.generateImage(t.trimmingCharacters(in: .whitespacesAndNewlines))
+            return
+        }
         store.send(t, attachments: atts, web: net.mode == .on, webAuto: net.mode == .auto) { failed in draft = failed; pending = atts }
     }
 
@@ -649,7 +673,9 @@ struct MessageRow: View, Equatable {
                     if let th = message.thinking, !th.isEmpty {
                         ThinkingSection(text: th, seconds: message.thinkSeconds, live: false, auto: message.autoThink == true)
                     }
-                    if streaming && message.text.isEmpty {
+                    if let f = message.genImage {
+                        GenImageView(file: f, prompt: message.genPrompt)
+                    } else if streaming && message.text.isEmpty {
                         TypingDots()
                     } else {
                         Text(SafeMarkdown.key(message.text))
@@ -660,7 +686,7 @@ struct MessageRow: View, Equatable {
                     if let src = message.sources, !src.isEmpty {
                         SourcesList(sources: src)
                     }
-                    if !streaming {
+                    if !streaming, message.genImage == nil {
                         // صف أدوات خفيف: نسخ، قراءة، مشاركة، والباقي تحت «…»
                         HStack(spacing: 20) {
                             Button { UIPasteboard.general.string = message.text } label: {

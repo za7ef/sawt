@@ -81,6 +81,19 @@ final class ModelManager: ObservableObject {
         slog("background: models unloaded footprint=\(RAM.footprintMB)MB")
     }
 
+    /// يفك النموذج اللغوي قبل رسم صورة محلية (Stable Diffusion يحتاج ~2GB). يرجع هل كان محمّل.
+    func unloadForImage() async -> Bool {
+        let loaded = await LLMService.shared.isReady
+        let had = loaded || llm == .ready
+        llmTask?.cancel()
+        llmToken += 1
+        await LLMService.shared.unload()
+        await LlamaEngine.shared.unload()
+        llm = .idle
+        slog("image: llm unloaded (had=\(had)) footprint=\(RAM.footprintMB)MB avail=\(RAM.availableMB)MB")
+        return had
+    }
+
     private func markDownloaded(_ id: String) {
         guard !downloaded.contains(id) else { return }
         downloaded.insert(id)

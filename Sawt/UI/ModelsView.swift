@@ -65,6 +65,8 @@ struct ModelsView: View {
                 }
                 }
 
+                ImageModelsSection()
+
                 Section {
                     ForEach(Catalog.stts) { s in
                         Button {

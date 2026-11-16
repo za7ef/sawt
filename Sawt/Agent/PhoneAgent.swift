@@ -112,6 +112,7 @@ final class PhoneAgent: ObservableObject {
         AgentNotify.setup()   // لو الإشعارات انمسحت/ما انضبطت أول مرة
         if g.isEmpty { why = "الهدف فاضي" }
         else if running { why = "الوكيل شغّال على مهمة ثانية — قل «وقف» أول" }
+        else if ImageGenerator.busy { why = "صوت يرسم صورة الحين — انتظر يخلص أو وقّفها" }
         else if !(PhoneControl.available && PhoneControl.hasPairing) { why = "التحكم بالجوال مو جاهز (اقتران/الأداة)" }
         else if let s = Self.cpuSpecForStep(), !s.isDownloaded { why = "نموذج المعالج (\(Self.cpuSpecForStep()?.name ?? "")) مو منزّل — نزّله من صفحة النماذج ← المعالج" }
         if why == nil, Self.pick.hasPrefix("cloud:") {

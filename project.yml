@@ -23,6 +23,8 @@ packages:
   SherpaOnnx:
     url: https://github.com/k2-fsa/sherpa-onnx
     exactVersion: 1.13.8
+  SawtSD:
+    path: Packages/SawtSD
 targets:
   Sawt:
     type: application
@@ -82,6 +84,8 @@ targets:
         product: WhisperKit
       - package: SherpaOnnx
         product: sherpa-onnx
+      - package: SawtSD
+        product: StableDiffusion
   SawtWidgets:
     type: app-extension
     platform: iOS
