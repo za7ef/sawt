@@ -131,6 +131,7 @@ struct VoiceSettingsPage: View {
                     ForEach(VoiceDownloads.items) { item in
                         downloadRow(item)
                     }
+                    namaaDownloadRow
                 } header: {
                     Text("أصوات للتنزيل")
                 } footer: {
@@ -225,29 +226,42 @@ struct VoiceSettingsPage: View {
         }
     }
 
-    @ViewBuilder private var namaaRow: some View {
-        switch namaa.state {
-        case .notDownloaded, .failed:
-            if case .failed(let msg) = namaa.state {
-                Text("ما كمل: \(msg)").font(.caption).foregroundStyle(.red)
-            }
-            Button {
-                namaa.download()
-            } label: {
-                LabeledContent {
-                    Text("~1.4 GB تنزيل • ~700 MB بعدها")
-                } label: {
-                    Label("نزّل الصوت", systemImage: "arrow.down.circle")
+    /// نماء في قائمة التنزيلات: الحالة + تنزيل/حذف
+    @ViewBuilder private var namaaDownloadRow: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(Catalog.namaaVoice?.title ?? "نماء سعودي (تجريبي)")
+                switch namaa.state {
+                case .downloading(let p):
+                    ProgressView(value: p).frame(maxWidth: 160)
+                case .converting:
+                    Text("يجهّز النموذج… (دقيقة تقريبًا)").font(.caption).foregroundStyle(.secondary)
+                case .failed(let m):
+                    Text("ما كمل: \(m)").font(.caption).foregroundStyle(.red)
+                case .ready:
+                    Text("نازل على جوالك").font(.caption).foregroundStyle(.secondary)
+                case .notDownloaded:
+                    Text("~1.4 GB تنزيل • ~700 MB بعدها").font(.caption).foregroundStyle(.secondary)
                 }
             }
-        case .downloading(let p):
-            VStack(alignment: .leading, spacing: 6) {
-                ProgressView(value: p) { Text("ينزّل… \(Int(p * 100))٪") }
-                Button("إلغاء", role: .cancel) { namaa.cancel() }.font(.caption)
+            Spacer()
+            switch namaa.state {
+            case .ready:
+                Button(role: .destructive) { confirmNamaaDelete = true } label: { Image(systemName: "trash") }
+                    .buttonStyle(.borderless)
+            case .downloading:
+                Button("إلغاء", role: .cancel) { namaa.cancel() }.buttonStyle(.borderless)
+            case .converting:
+                ProgressView()
+            case .notDownloaded, .failed:
+                Button("تنزيل") { namaa.download() }.buttonStyle(.borderless)
             }
-        case .converting:
-            HStack { ProgressView(); Text("يجهّز النموذج… (دقيقة تقريبًا)").foregroundStyle(.secondary) }
-        case .ready:
+        }
+    }
+
+    /// متقدم: تجربة نماء وخطواته (التنزيل والحذف في «أصوات للتنزيل»)
+    @ViewBuilder private var namaaRow: some View {
+        if case .ready = namaa.state {
             Button {
                 namaa.test()
             } label: {
@@ -264,11 +278,11 @@ struct VoiceSettingsPage: View {
                 Text("8").tag(8)
                 Text("16 (أعلى جودة، بطيء)").tag(16)
             }
-            .font(.caption)
             if let r = namaa.lastTest {
                 Text(r).font(.caption).foregroundStyle(.secondary)
             }
-            Button("حذف صوت نماء", role: .destructive) { confirmNamaaDelete = true }
+        } else {
+            Text("نزّله من «أصوات للتنزيل» فوق.").foregroundStyle(.secondary)
         }
     }
 

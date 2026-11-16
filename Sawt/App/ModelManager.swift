@@ -39,7 +39,40 @@ final class ModelManager: ObservableObject {
     private var llmToken = 0
     private var sttToken = 0
 
-    var allReady: Bool { llm.isReady && stt.isReady }
+    var allReady: Bool { callMissing == nil }
+
+    /// نموذج المحادثة للمكالمة: كرت الشاشة محمّل، أو المعالج (llama.cpp) ونموذجه نازل، أو سحابي مسموح بالمكالمات
+    var callLLMReady: Bool {
+        if CloudLLM.active != nil && CloudLLM.useInCalls { return true }
+        if LLMService.onCPU || ComputeMode.current == "cpu" { return LlamaModelFile.isDownloaded }
+        return llm.isReady
+    }
+
+    /// وش ناقص عشان تبدأ المكالمة، باسمه والسبب (nil = جاهز)
+    var callMissing: String? {
+        if !callLLMReady {
+            if ComputeMode.current == "cpu" || LLMService.onCPU {
+                return "نموذج المعالج (\(GGUFSpec.active.name)) مو منزّل، والتشغيل على المعالج. نزّله من الإعدادات ← النماذج."
+            }
+            if llm.isBusy { return "نموذج المحادثة للحين يتحمّل، لحظات." }
+            if case .failed(let m) = llm { return "نموذج المحادثة ما اشتغل: \(m)" }
+            if !downloaded.contains(AppSettings.shared.llmID) {
+                return "نموذج المحادثة (\(AppSettings.shared.llm.title)) مو منزّل. نزّله من الإعدادات ← النماذج."
+            }
+            return "نموذج المحادثة مو محمّل. افتح الدردشة أو جرّب مرة ثانية."
+        }
+        if !stt.isReady {
+            let sid = AppSettings.shared.sttID
+            let name = Catalog.stts.first { $0.id == sid }?.title ?? sid
+            if stt.isBusy { return "نموذج السمع (\(name)) للحين يتجهز، لحظات." }
+            if case .failed(let m) = stt { return "نموذج السمع (\(name)) ما اشتغل: \(m)" }
+            if sid != "apple", !downloadedSTT.contains(sid) {
+                return "نموذج السمع (\(name)) مو منزّل. نزّله من الإعدادات ← النماذج."
+            }
+            return "نموذج السمع (\(name)) مو جاهز، جرّب مرة ثانية."
+        }
+        return nil
+    }
 
     /// عند فتح التطبيق: نشغّل بس النماذج اللي نزلت قبل. ما ننزّل شي تلقائيًا.
     /// النماذج تتحمل وحدة وحدة عشان ما ترتفع الذاكرة مرة وحدة. الصوت يتحمل وقت الحاجة بس.

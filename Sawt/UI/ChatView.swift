@@ -275,10 +275,6 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 14) {
-                    if (store.current?.messages ?? []).isEmpty && !store.isGenerating {
-                        EmptyState(startVoice: startVoice, cloudTick: cloudTick)
-                            .padding(.top, 120)
-                    }
                     ForEach(store.current?.messages ?? []) { m in
                         MessageRow(message: m).equatable().id(m.id)
                     }
@@ -294,9 +290,18 @@ struct ChatView: View {
                 .padding(.top, 8)
             }
             .scrollDismissesKeyboard(.interactively)
-            // يفتح على آخر رسالة، ولما تتغيّر المساحة (الكيبورد) يبقى ملزّق تحت
-            .defaultScrollAnchor(.bottom)
+            // المحادثة القصيرة تبدأ من فوق؛ الطويلة تفتح على آخر رسالة، ولما تتغيّر المساحة (الكيبورد) تبقى ملزّقة تحت
+            .defaultScrollAnchor(.top, for: .alignment)
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
             .defaultScrollAnchor(.bottom, for: .sizeChanges)
+            .overlay {
+                // الشاشة الفاضية في نص المساحة
+                if (store.current?.messages ?? []).isEmpty && !store.isGenerating {
+                    EmptyState(startVoice: startVoice, cloudTick: cloudTick)
+                        .padding(.horizontal, 24)
+                        .multilineTextAlignment(.center)
+                }
+            }
             .onScrollGeometryChange(for: Bool.self) { g in
                 g.contentSize.height - (g.contentOffset.y + g.containerSize.height) < 120
             } action: { _, v in

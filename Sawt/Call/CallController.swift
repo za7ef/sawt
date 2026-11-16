@@ -118,10 +118,9 @@ final class CallController: ObservableObject {
             Task.detached(priority: .userInitiated) { await LlamaEngine.shared.prewarm(system: sys) }
         }
         let mm = ModelManager.shared
-        guard mm.allReady else {
-            error = mm.llm.isBusy || mm.stt.isBusy
-                ? "النماذج للحين تتجهز، لحظات وجرّب."
-                : "نزّل نموذج المحادثة ونموذج السمع من شاشة النماذج أول."
+        if let missing = mm.callMissing {
+            error = missing
+            slog("call: not ready → \(missing)")
             mm.loadAll()
             return
         }

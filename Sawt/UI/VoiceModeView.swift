@@ -126,7 +126,7 @@ struct VoiceModeView: View {
 
     private var statusText: String {
         switch call.state {
-        case .idle: return models.allReady ? "جاهز" : "يجهّز النماذج…"
+        case .idle: return models.callMissing == nil ? "جاهز" : (models.stt.isBusy || models.llm.isBusy ? "يجهّز النماذج…" : "فيه شي ناقص")
         case .starting: return "يتصل…"
         case .listening: return call.muted ? "المايك مكتوم" : "أسمعك…"
         case .hearing: return "تكلّم، أنا أسمع"
