@@ -28,6 +28,8 @@ struct ChatView: View {
     @State private var webAsk = false
     /// المستخدم قريب من آخر المحادثة؟ (لو طلع لفوق ما نسحبه لتحت مع كل رمز)
     @State private var nearBottom = true
+    /// المستخدم يسحب القائمة بيده الحين (نحدّث «قريب من تحت» بس من حركته، مو من نمو الرد)
+    @State private var userScrolling = false
     @AppStorage("netWarned") private var netWarned = false
 
     var body: some View {
@@ -238,7 +240,13 @@ struct ChatView: View {
             .defaultScrollAnchor(.bottom, for: .sizeChanges)
             .onScrollGeometryChange(for: Bool.self) { g in
                 g.contentSize.height - (g.contentOffset.y + g.containerSize.height) < 120
-            } action: { _, v in nearBottom = v }
+            } action: { _, v in
+                // نمو الرد يبعد آخر المحادثة مؤقتًا: ما نعتبره «طلع لفوق» إلا لو المستخدم هو اللي سحب
+                if userScrolling || v { nearBottom = v }
+            }
+            .onScrollPhaseChange { _, phase in
+                userScrolling = phase == .interacting || phase == .decelerating
+            }
             .onAppear { scrollToEnd(proxy, delayed: true) }
             .onChange(of: store.current?.messages.count) {
                 // رسالة جديدة: ننزل لو المستخدم تحت، أو لو آخر رسالة منه (أرسل للتو)
@@ -623,6 +631,8 @@ struct StreamingRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onChange(of: live.text) { onGrow() }
+        .onChange(of: live.thinking) { onGrow() }
+        .onChange(of: live.status) { onGrow() }
     }
 }
 
