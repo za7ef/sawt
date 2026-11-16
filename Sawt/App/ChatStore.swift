@@ -716,7 +716,7 @@ final class ChatStore: ObservableObject {
             fail("اختر محرك الصور أول: من زر + ← محرك الصور، أو من الإعدادات ← الصور."); return
         }
         if PhoneAgent.shared.running { fail("الوكيل شغّال على مهمة — وقّفه أول وبعدين أرسم."); return }
-        if engine.isLocalSD, !SDModels.installed(engine) {
+        if engine.isLocal, !SDModels.installed(engine) {
             fail("نموذج \(engine.title) مو منزّل. نزّله من الإعدادات ← الصور."); return
         }
         if engine.isGemini {
@@ -775,7 +775,7 @@ final class ChatStore: ObservableObject {
                 }
                 slog("image: prompt=\(prompt.prefix(200)) negative=\(negative.prefix(120))")
                 // ٢) المحلي يحتاج ذاكرة: نفك النموذج اللغوي وقت الرسم ونرجعه بعدين
-                if engine.isLocalSD { reloadLLM = await ModelManager.shared.unloadForImage() }
+                if engine.isLocal { reloadLLM = await ModelManager.shared.unloadForImage() }
                 let img = try await ImageGenerator.shared.generate(engine: engine, prompt: prompt, negative: negative, status: status)
                 try Task.checkCancellation()
                 self.setGenImage(bid, in: conv, img)
@@ -785,7 +785,7 @@ final class ChatStore: ObservableObject {
                 slog("image: failed \(engine.rawValue) \(error)")
                 fail("ما قدرت أرسم بـ\(engine.title): \(SawtError.friendly(error).localizedDescription)")
             }
-            if engine.isLocalSD {
+            if engine.isLocal {
                 await ImageGenerator.shared.unloadSD()
                 if reloadLLM { ModelManager.shared.loadLLM() }
             }

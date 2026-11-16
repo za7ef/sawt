@@ -42,6 +42,9 @@
 - **ml-stable-diffusion** (Apple): تشغيل Stable Diffusion على الجهاز، نسخة مضمّنة بدون أجزاء SD3. ترخيص MIT.
 - **واقعي — CyberRealistic Final** (المصمم Cyberdelia) مدموج مع **LCM-LoRA** لـSD 1.5 (Simian Luo وزملاؤه)، نسخة LocalMuseAI لـCore ML: ترخيص CreativeML OpenRAIL-M، وLCM-LoRA بترخيص OpenRAIL++. ينزل لما تطلبه.
 - **فني — DreamShaper 8 LCM** (المصمم Lykon)، نسخة LocalMuseAI لـCore ML: ترخيص CreativeML OpenRAIL-M. ينزل لما تطلبه.
+- **دقيق — Bonsai Image Ternary 4B** (PrismML)، المبني على **FLUX.2-klein-4B** (Black Forest Labs) بأوزان ثلاثية مضغوطة لـMLX: ترخيص Apache 2.0. ينزل لما تطلبه.
+- **Qwen3-4B** (Alibaba): مُرمّز النص لـ«دقيق»، نسخة 4-bit لـMLX. ترخيص Apache 2.0.
+- **flux-2-swift-mlx** (Vincent Gourbin): مرجع لكتابة تشغيل FLUX.2 بـMLX Swift في صوت. ترخيص MIT.
 - هالنماذج تخضع لقيود الاستخدام في تراخيصها (ممنوع استخدامها في الأذى والتضليل وغيره).
 - **مجدول LCM:** مكتوب في صوت من معادلات ورقة Latent Consistency Models ‏(arXiv:2310.04378).
 

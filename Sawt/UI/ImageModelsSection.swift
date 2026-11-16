@@ -26,15 +26,15 @@ struct ImageModelsSection: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             if engineRetired && engineRaw.isEmpty {
-                Text("المحرك اللي كنت مختاره انشال من التطبيق، وملفاته انحذفت من جوالك. اختر «واقعي» أو «فني» ونزّله.")
+                Text("المحرك اللي كنت مختاره انشال من التطبيق، وملفاته انحذفت من جوالك. اختر «واقعي» أو «فني» أو «دقيق» ونزّله.")
                     .font(.caption).foregroundStyle(.orange)
             }
-            ForEach([ImageEngine.sdReal, .sdArt]) { sdRow($0) }
+            ForEach([ImageEngine.sdReal, .sdArt, .klein]) { sdRow($0) }
             playgroundRow
         } header: {
             Text("الصور")
         } footer: {
-            Text("ما نبدّل بين المحركات تلقائيًا: لو المختار ما اشتغل يقول لك السبب. Stable Diffusion يشتغل على جوالك (يفك نموذج المحادثة وقت الرسم ويرجعه بعدين). Gemini مدفوع وما له مجاني: تقريبًا ‎$0.067 للصورة (1K)، وLite تقريبًا ‎$0.034، ويستخدم مفتاح Gemini حقك.")
+            Text("ما نبدّل بين المحركات تلقائيًا: لو المختار ما اشتغل يقول لك السبب. المحركات المحلية (Stable Diffusion و«دقيق») تشتغل على جوالك (تفك نموذج المحادثة وقت الرسم وترجعه بعدين). Gemini مدفوع وما له مجاني: تقريبًا ‎$0.067 للصورة (1K)، وLite تقريبًا ‎$0.034، ويستخدم مفتاح Gemini حقك.")
         }
         .confirmationDialog("تحذف النموذج؟", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
                             titleVisibility: .visible) {
@@ -78,6 +78,7 @@ struct ImageModelsSection: View {
     private static func detail(_ e: ImageEngine) -> String {
         switch e {
         case .sdReal: "صور واقعية (ناس وأماكن). 512×512، ٦ خطوات، ~0.9 GB"
+        case .klein: "مبني على Bonsai من PrismML · ~3.9 GB · 512×512 بأربع خطوات. يفهم الوصف الطويل ويطلع تفاصيل أدق (يحتاج جوال بذاكرة 8GB)."
         default: "رسم وفن وخيال. 512×512، ٨ خطوات، ~1 GB"
         }
     }

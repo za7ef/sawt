@@ -8,7 +8,7 @@ import StableDiffusion
 
 /// محركات توليد الصور. المستخدم يختار واحد، وما نبدّل لغيره تلقائيًا أبدًا.
 enum ImageEngine: String, CaseIterable, Identifiable {
-    case sdReal, sdArt, playground, gemini, geminiLite
+    case sdReal, sdArt, klein, playground, gemini, geminiLite
 
     var id: String { rawValue }
 
@@ -16,6 +16,7 @@ enum ImageEngine: String, CaseIterable, Identifiable {
         switch self {
         case .sdReal: "واقعي — CyberRealistic"
         case .sdArt: "فني — DreamShaper 8"
+        case .klein: "دقيق"
         case .playground: "Image Playground"
         case .gemini: "Gemini 3.1 Flash Image"
         case .geminiLite: "Gemini 3.1 Flash Lite Image"
@@ -25,13 +26,15 @@ enum ImageEngine: String, CaseIterable, Identifiable {
     /// وصف قصير يطلع في القائمة
     var tag: String {
         switch self {
-        case .sdReal, .sdArt: "محلي"
+        case .sdReal, .sdArt, .klein: "محلي"
         case .playground: "سحابة آبل الخاصة"
         case .gemini, .geminiLite: "سحابي · مدفوع"
         }
     }
 
     var isLocalSD: Bool { self == .sdReal || self == .sdArt }
+    /// يرسم على الجوال (يحتاج تنزيل، ونفك نموذج المحادثة وقت الرسم)
+    var isLocal: Bool { isLocalSD || self == .klein }
     var isGemini: Bool { self == .gemini || self == .geminiLite }
 
     var geminiModel: String { self == .geminiLite ? "gemini-3.1-flash-lite-image" : "gemini-3.1-flash-image" }
@@ -102,18 +105,27 @@ final class SDModels: ObservableObject {
         return d
     }
 
+    /// ملفات كل محرك محلي
+    nonisolated static func files(_ e: ImageEngine) -> [String] {
+        e == .klein ? Klein.files.map(\.path) : needed
+    }
+
     nonisolated static func installed(_ e: ImageEngine) -> Bool {
-        guard e.isLocalSD else { return false }
+        guard e.isLocal else { return false }
         let d = dir(e)
-        return needed.allSatisfy { FileManager.default.fileExists(atPath: d.appendingPathComponent($0).path) }
+        return files(e).allSatisfy { FileManager.default.fileExists(atPath: d.appendingPathComponent($0).path) }
     }
 
     nonisolated static func approxGB(_ e: ImageEngine) -> Double {
-        e == .sdReal ? 0.89 : 0.99
+        switch e {
+        case .sdReal: 0.89
+        case .klein: 3.9
+        default: 0.99
+        }
     }
 
     func download(_ e: ImageEngine) {
-        guard e.isLocalSD, tasks[e] == nil else { return }
+        guard e.isLocal, tasks[e] == nil else { return }
         state[e] = .downloading(0)
         tasks[e] = Task {
             Storage.otherDownloads += 1
@@ -129,7 +141,7 @@ final class SDModels: ObservableObject {
                 try? u.setResourceValues(v)
                 let report: @Sendable (Double) -> Void = { p in Task { @MainActor in SDModels.shared.state[e] = .downloading(p) } }
                 guard let src = Self.source(e) else { throw SawtError.failed("ما فيه مصدر لهالنموذج") }
-                try await Self.fetchFiles(src, into: tmp, progress: report)
+                try await Self.fetchFiles(src, files: Self.files(e), into: tmp, progress: report)
                 try Task.checkCancellation()
                 try? FileManager.default.removeItem(at: d)
                 try FileManager.default.moveItem(at: tmp, to: d)
@@ -170,16 +182,19 @@ final class SDModels: ObservableObject {
             Source(base: "https://huggingface.co/LocalMuseAI/coreml-dreamshaper-8-lcm-6bit-v2/resolve/main/",
                    weights: ["TextEncoder.mlmodelc/weights/weight.bin": 246, "Unet.mlmodelc/weights/weight.bin": 645,
                              "VAEDecoder.mlmodelc/weights/weight.bin": 99])
+        case .klein:
+            // Bonsai Image (PrismML): FLUX.2 Klein 4B بأوزان ثلاثية 2-bit + Qwen3-4B بـ4 بت (MLX)
+            Source(base: Klein.base, weights: Dictionary(uniqueKeysWithValues: Klein.files.map { ($0.path, $0.mb) }))
         default: nil
         }
     }
 
-    nonisolated private static func fetchFiles(_ src: Source, into d: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
+    nonisolated private static func fetchFiles(_ src: Source, files: [String], into d: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
         // الأحجام التقريبية عشان شريط التقدم (الأوزان هي الثقيلة)
         let weights = src.weights
         let total = weights.values.reduce(0, +) + 2
         var done = 0.0
-        for f in needed {
+        for f in files {
             try Task.checkCancellation()
             guard let url = URL(string: src.base + f) else { continue }
             let w = weights[f] ?? 0.2
@@ -285,6 +300,8 @@ actor ImageGenerator {
             let neg = Self.clipTrim(negative, dir: SDModels.dir(engine))
             if used != prompt { slog("image: prompt trimmed to 75 CLIP tokens") }
             img = try await runSD(engine, prompt: used, negative: neg, status: status)
+        case .klein:
+            img = try await runKlein(prompt: prompt, status: status)
         case .playground:
             img = try await runPlayground(prompt: prompt, status: status)
         case .gemini, .geminiLite:
@@ -381,6 +398,34 @@ actor ImageGenerator {
         status("أحفظ الصورة…")
         slog("image: sd \(e.rawValue) \(steps) steps in \(Int(Date().timeIntervalSince(t0) * 1000))ms footprint=\(RAM.footprintMB)MB")
         guard let img = images.compactMap({ $0 }).first else { throw SawtError.failed("النموذج ما رجّع صورة") }
+        return img
+    }
+
+    // MARK: «دقيق» (Bonsai Image: FLUX.2 Klein 4B ثلاثي على MLX)
+
+    private func runKlein(prompt: String, status: @escaping @Sendable (String) -> Void) async throws -> CGImage {
+        guard SDModels.installed(.klein) else { throw SawtError.failed("نموذج «دقيق» مو منزّل. نزّله من الإعدادات ← الصور.") }
+        guard ProcessInfo.processInfo.physicalMemory >= 7_000_000_000 else {
+            throw SawtError.failed("«دقيق» يحتاج جوال بذاكرة 8GB أو أكثر.")
+        }
+        unloadSD()
+        let t0 = Date()
+        let img = try await KleinPipeline.generate(
+            dir: SDModels.dir(.klein), prompt: prompt, seed: UInt64.random(in: 0 ... UInt64(UInt32.max)),
+            onPhase: { phase in
+                switch phase {
+                case "encode": status("أقرأ الوصف…"); ImageProgress.post(.loading)
+                case "load": status("أحمّل نموذج الصور…"); ImageProgress.post(.loading)
+                default: status("أجهّز الصورة…"); ImageProgress.post(.decoding)
+                }
+            },
+            onStep: { k, n in
+                status("أرسم… \(k)/\(n)")
+                ImageProgress.post(.drawing(k, n))
+            })
+        if Task.isCancelled { throw CancellationError() }
+        status("أحفظ الصورة…")
+        slog("image: klein \(Klein.steps) steps in \(Int(Date().timeIntervalSince(t0) * 1000))ms footprint=\(RAM.footprintMB)MB")
         return img
     }
 
