@@ -8,7 +8,7 @@ import StableDiffusion
 
 /// محركات توليد الصور. المستخدم يختار واحد، وما نبدّل لغيره تلقائيًا أبدًا.
 enum ImageEngine: String, CaseIterable, Identifiable {
-    case sdReal, sdArt, klein, playground, gemini, geminiLite
+    case sdReal, sdArt, klein, zimage, playground, gemini, geminiLite
 
     var id: String { rawValue }
 
@@ -17,6 +17,7 @@ enum ImageEngine: String, CaseIterable, Identifiable {
         case .sdReal: "واقعي — CyberRealistic"
         case .sdArt: "فني — DreamShaper 8"
         case .klein: "دقيق"
+        case .zimage: "واقعي+"
         case .playground: "Image Playground"
         case .gemini: "Gemini 3.1 Flash Image"
         case .geminiLite: "Gemini 3.1 Flash Lite Image"
@@ -26,7 +27,7 @@ enum ImageEngine: String, CaseIterable, Identifiable {
     /// وصف قصير يطلع في القائمة
     var tag: String {
         switch self {
-        case .sdReal, .sdArt, .klein: "محلي"
+        case .sdReal, .sdArt, .klein, .zimage: "محلي"
         case .playground: "سحابة آبل الخاصة"
         case .gemini, .geminiLite: "سحابي · مدفوع"
         }
@@ -34,7 +35,9 @@ enum ImageEngine: String, CaseIterable, Identifiable {
 
     var isLocalSD: Bool { self == .sdReal || self == .sdArt }
     /// يرسم على الجوال (يحتاج تنزيل، ونفك نموذج المحادثة وقت الرسم)
-    var isLocal: Bool { isLocalSD || self == .klein }
+    var isLocal: Bool { isLocalSD || usesQwen }
+    /// محركات MLX اللي تستخدم مُرمّز Qwen3-4B المشترك
+    var usesQwen: Bool { self == .klein || self == .zimage }
     var isGemini: Bool { self == .gemini || self == .geminiLite }
 
     var geminiModel: String { self == .geminiLite ? "gemini-3.1-flash-lite-image" : "gemini-3.1-flash-image" }
@@ -107,19 +110,25 @@ final class SDModels: ObservableObject {
 
     /// ملفات كل محرك محلي
     nonisolated static func files(_ e: ImageEngine) -> [String] {
-        e == .klein ? Klein.files.map(\.path) : needed
+        switch e {
+        case .klein: Klein.files.map(\.path)
+        case .zimage: ZImage.files.map(\.path)
+        default: needed
+        }
     }
 
     nonisolated static func installed(_ e: ImageEngine) -> Bool {
         guard e.isLocal else { return false }
         let d = dir(e)
+        if e.usesQwen && !QwenShared.installed { return false }
         return files(e).allSatisfy { FileManager.default.fileExists(atPath: d.appendingPathComponent($0).path) }
     }
 
     nonisolated static func approxGB(_ e: ImageEngine) -> Double {
         switch e {
         case .sdReal: 0.89
-        case .klein: 3.9
+        case .klein: 1.6 + (QwenShared.installed ? 0 : QwenShared.approxGB)
+        case .zimage: 3.63 + (QwenShared.installed ? 0 : QwenShared.approxGB)
         default: 0.99
         }
     }
@@ -141,7 +150,31 @@ final class SDModels: ObservableObject {
                 try? u.setResourceValues(v)
                 let report: @Sendable (Double) -> Void = { p in Task { @MainActor in SDModels.shared.state[e] = .downloading(p) } }
                 guard let src = Self.source(e) else { throw SawtError.failed("ما فيه مصدر لهالنموذج") }
-                try await Self.fetchFiles(src, files: Self.files(e), into: tmp, progress: report)
+                var own: @Sendable (Double) -> Void = report
+                if e.usesQwen && !QwenShared.installed {
+                    // المُرمّز المشترك أول (ينزل مرة وحدة للمحركين)، بجزء من شريط التقدم حسب حجمه
+                    let shareMB = QwenShared.files.reduce(0) { $0 + $1.mb }
+                    let ownMB = src.weights.values.reduce(0, +)
+                    let frac = shareMB / (shareMB + ownMB)
+                    let sdir = QwenShared.dir
+                    let stmp = sdir.deletingLastPathComponent().appendingPathComponent("qwen3-4b-mlx4.partial", isDirectory: true)
+                    try? FileManager.default.removeItem(at: stmp)
+                    try FileManager.default.createDirectory(at: stmp, withIntermediateDirectories: true)
+                    do {
+                        let shared = Source(base: QwenShared.base,
+                                            weights: Dictionary(uniqueKeysWithValues: QwenShared.files.map { ($0.path, $0.mb) }))
+                        try await Self.fetchFiles(shared, files: QwenShared.files.map(\.path), into: stmp) { p in report(p * frac) }
+                        try Task.checkCancellation()
+                        try? FileManager.default.removeItem(at: sdir)
+                        try FileManager.default.moveItem(at: stmp, to: sdir)
+                        slog("image: downloaded shared qwen3 encoder")
+                    } catch {
+                        try? FileManager.default.removeItem(at: stmp)
+                        throw error
+                    }
+                    own = { p in report(frac + p * (1 - frac)) }
+                }
+                try await Self.fetchFiles(src, files: Self.files(e), into: tmp, progress: own)
                 try Task.checkCancellation()
                 try? FileManager.default.removeItem(at: d)
                 try FileManager.default.moveItem(at: tmp, to: d)
@@ -163,6 +196,10 @@ final class SDModels: ObservableObject {
     func delete(_ e: ImageEngine) {
         tasks[e]?.cancel()
         try? FileManager.default.removeItem(at: Self.dir(e))
+        // المُرمّز المشترك ينحذف بس لو المحرك الثاني اللي يستخدمه مو منزّل
+        if e.usesQwen, !ImageEngine.allCases.contains(where: { $0 != e && $0.usesQwen && Self.installed($0) }) {
+            try? FileManager.default.removeItem(at: QwenShared.dir)
+        }
         state[e] = .idle
         objectWillChange.send()
         slog("image: deleted \(e.rawValue)")
@@ -185,6 +222,9 @@ final class SDModels: ObservableObject {
         case .klein:
             // Bonsai Image (PrismML): FLUX.2 Klein 4B بأوزان ثلاثية 2-bit + Qwen3-4B بـ4 بت (MLX)
             Source(base: Klein.base, weights: Dictionary(uniqueKeysWithValues: Klein.files.map { ($0.path, $0.mb) }))
+        case .zimage:
+            // Z-Image Turbo (Tongyi-MAI) بـ4 بت من mflux-community؛ مُرمّز النص من المجلد المشترك
+            Source(base: ZImage.base, weights: Dictionary(uniqueKeysWithValues: ZImage.files.map { ($0.path, $0.mb) }))
         default: nil
         }
     }
@@ -300,8 +340,8 @@ actor ImageGenerator {
             let neg = Self.clipTrim(negative, dir: SDModels.dir(engine))
             if used != prompt { slog("image: prompt trimmed to 75 CLIP tokens") }
             img = try await runSD(engine, prompt: used, negative: neg, status: status)
-        case .klein:
-            img = try await runKlein(prompt: prompt, status: status)
+        case .klein, .zimage:
+            img = try await runMLX(engine, prompt: prompt, status: status)
         case .playground:
             img = try await runPlayground(prompt: prompt, status: status)
         case .gemini, .geminiLite:
@@ -403,29 +443,34 @@ actor ImageGenerator {
 
     // MARK: «دقيق» (Bonsai Image: FLUX.2 Klein 4B ثلاثي على MLX)
 
-    private func runKlein(prompt: String, status: @escaping @Sendable (String) -> Void) async throws -> CGImage {
-        guard SDModels.installed(.klein) else { throw SawtError.failed("نموذج «دقيق» مو منزّل. نزّله من الإعدادات ← الصور.") }
+    private func runMLX(_ e: ImageEngine, prompt: String, status: @escaping @Sendable (String) -> Void) async throws -> CGImage {
+        guard SDModels.installed(e) else { throw SawtError.failed("نموذج «\(e.title)» مو منزّل. نزّله من الإعدادات ← الصور.") }
         guard ProcessInfo.processInfo.physicalMemory >= 7_000_000_000 else {
-            throw SawtError.failed("«دقيق» يحتاج جوال بذاكرة 8GB أو أكثر.")
+            throw SawtError.failed("«\(e.title)» يحتاج جوال بذاكرة 8GB أو أكثر.")
         }
         unloadSD()
         let t0 = Date()
-        let img = try await KleinPipeline.generate(
-            dir: SDModels.dir(.klein), prompt: prompt, seed: UInt64.random(in: 0 ... UInt64(UInt32.max)),
-            onPhase: { phase in
-                switch phase {
-                case "encode": status("أقرأ الوصف…"); ImageProgress.post(.loading)
-                case "load": status("أحمّل نموذج الصور…"); ImageProgress.post(.loading)
-                default: status("أجهّز الصورة…"); ImageProgress.post(.decoding)
-                }
-            },
-            onStep: { k, n in
-                status("أرسم… \(k)/\(n)")
-                ImageProgress.post(.drawing(k, n))
-            })
+        let seed = UInt64.random(in: 0 ... UInt64(UInt32.max))
+        let onPhase: (String) -> Void = { phase in
+            switch phase {
+            case "encode": status("أقرأ الوصف…"); ImageProgress.post(.loading)
+            case "load": status("أحمّل نموذج الصور…"); ImageProgress.post(.loading)
+            default: status("أجهّز الصورة…"); ImageProgress.post(.decoding)
+            }
+        }
+        let onStep: (Int, Int) -> Void = { k, n in
+            status("أرسم… \(k)/\(n)")
+            ImageProgress.post(.drawing(k, n))
+        }
+        let img: CGImage
+        if e == .klein {
+            img = try await KleinPipeline.generate(dir: SDModels.dir(e), prompt: prompt, seed: seed, onPhase: onPhase, onStep: onStep)
+        } else {
+            img = try await ZImagePipeline.generate(dir: SDModels.dir(e), prompt: prompt, seed: seed, onPhase: onPhase, onStep: onStep)
+        }
         if Task.isCancelled { throw CancellationError() }
         status("أحفظ الصورة…")
-        slog("image: klein \(Klein.steps) steps in \(Int(Date().timeIntervalSince(t0) * 1000))ms footprint=\(RAM.footprintMB)MB")
+        slog("image: \(e.rawValue) steps in \(Int(Date().timeIntervalSince(t0) * 1000))ms footprint=\(RAM.footprintMB)MB")
         return img
     }
 

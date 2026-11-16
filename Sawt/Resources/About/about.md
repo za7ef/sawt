@@ -43,7 +43,10 @@
 - **واقعي — CyberRealistic Final** (المصمم Cyberdelia) مدموج مع **LCM-LoRA** لـSD 1.5 (Simian Luo وزملاؤه)، نسخة LocalMuseAI لـCore ML: ترخيص CreativeML OpenRAIL-M، وLCM-LoRA بترخيص OpenRAIL++. ينزل لما تطلبه.
 - **فني — DreamShaper 8 LCM** (المصمم Lykon)، نسخة LocalMuseAI لـCore ML: ترخيص CreativeML OpenRAIL-M. ينزل لما تطلبه.
 - **دقيق — Bonsai Image Ternary 4B** (PrismML)، المبني على **FLUX.2-klein-4B** (Black Forest Labs) بأوزان ثلاثية مضغوطة لـMLX: ترخيص Apache 2.0. ينزل لما تطلبه.
-- **Qwen3-4B** (Alibaba): مُرمّز النص لـ«دقيق»، نسخة 4-bit لـMLX. ترخيص Apache 2.0.
+- **Qwen3-4B** (Alibaba): مُرمّز النص لـ«دقيق» و«واقعي+»، نسخة 4-bit لـMLX. ترخيص Apache 2.0.
+- **واقعي+ — Z-Image Turbo** (Tongyi-MAI، Alibaba): ترخيص Apache 2.0، نسخة mflux-community بـ4 بت لـMLX. ينزل لما تطلبه، ويستخدم نفس مُرمّز النص Qwen3-4B اللي مع «دقيق».
+- **diffusers** (Hugging Face): مرجع لبنية FLUX.2 وZ-Image وخطوات التوليد. ترخيص Apache 2.0.
+- **turbo-mlx** (rinste): مرجع لتشغيل Z-Image بـMLX Swift. ترخيص MIT.
 - **flux-2-swift-mlx** (Vincent Gourbin): مرجع لكتابة تشغيل FLUX.2 بـMLX Swift في صوت. ترخيص MIT.
 - هالنماذج تخضع لقيود الاستخدام في تراخيصها (ممنوع استخدامها في الأذى والتضليل وغيره).
 - **مجدول LCM:** مكتوب في صوت من معادلات ورقة Latent Consistency Models ‏(arXiv:2310.04378).

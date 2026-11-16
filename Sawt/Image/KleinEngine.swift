@@ -14,17 +14,9 @@ enum Klein {
     static let revision = "2c24c81b934a658ba5590cf39088ba929985b4a8"
     static let base = "https://huggingface.co/prism-ml/bonsai-image-ternary-4B-mlx-2bit/resolve/\(revision)/"
 
-    /// الملفات وأحجامها التقريبية بالميقا (لشريط التقدم)
+    /// ملفات «دقيق» نفسه وأحجامها التقريبية بالميقا (لشريط التقدم)
     static let files: [(path: String, mb: Double)] = [
         ("transformer-packed-mflux/diffusion_pytorch_model.safetensors", 1425),
-        ("text_encoder-mlx-4bit/model.safetensors", 2263),
-        ("text_encoder-mlx-4bit/config.json", 0.01),
-        ("text_encoder-mlx-4bit/tokenizer.json", 11.4),
-        ("text_encoder-mlx-4bit/tokenizer_config.json", 0.01),
-        ("text_encoder-mlx-4bit/special_tokens_map.json", 0.01),
-        ("text_encoder-mlx-4bit/added_tokens.json", 0.01),
-        ("text_encoder-mlx-4bit/vocab.json", 2.8),
-        ("text_encoder-mlx-4bit/merges.txt", 1.7),
         ("vae/diffusion_pytorch_model.safetensors", 168),
     ]
 
@@ -32,6 +24,32 @@ enum Klein {
     static let size = 512                 // مضاعفات 32
     static let maxTokens = 512
     static let hiddenLayers = [9, 18, 27] // مخرجات هالطبقات من Qwen3 (بعد ٩ و١٨ و٢٧ طبقة)
+}
+
+/// مُرمّز النص المشترك بين «دقيق» و«واقعي+»: Qwen3-4B بـ4 بت (نفس الأوزان الأصلية للاثنين)،
+/// ينزل مرة وحدة في مجلد مشترك من مستودع Bonsai
+enum QwenShared {
+    static let base = Klein.base + "text_encoder-mlx-4bit/"
+    static let files: [(path: String, mb: Double)] = [
+        ("model.safetensors", 2263),
+        ("config.json", 0.01),
+        ("tokenizer.json", 11.4),
+        ("tokenizer_config.json", 0.01),
+        ("special_tokens_map.json", 0.01),
+        ("added_tokens.json", 0.01),
+        ("vocab.json", 2.8),
+        ("merges.txt", 1.7),
+    ]
+    static let approxGB = 2.28
+
+    static var dir: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ImageModels/qwen3-4b-mlx4", isDirectory: true)
+    }
+
+    static var installed: Bool {
+        files.allSatisfy { FileManager.default.fileExists(atPath: dir.appendingPathComponent($0.path).path) }
+    }
 }
 
 // MARK: - أوزان + طبقة خطية (مكمّمة أو عادية)
@@ -51,8 +69,13 @@ struct KleinWeights {
     func lin(_ x: MLXArray, _ k: String) -> MLXArray {
         var y: MLXArray
         if let s = d[k + ".scales"] {
-            y = quantizedMatmul(x, self[k + ".weight"], scales: s, biases: d[k + ".biases"],
-                                transpose: true, groupSize: group, bits: bits)
+            // البتات والمجموعة من الأشكال: الأعمدة المعبّأة = in·bits/32، والمقاييس = in/group
+            let w = self[k + ".weight"]
+            let inDim = x.dim(-1)
+            let b = bits > 0 ? bits : w.dim(1) * 32 / inDim
+            let g = group > 0 ? group : inDim / s.dim(1)
+            y = quantizedMatmul(x.asType(s.dtype), w, scales: s, biases: d[k + ".biases"],
+                                transpose: true, groupSize: g, bits: b)
         } else {
             y = matmul(x, self[k + ".weight"].T)
         }
@@ -72,17 +95,16 @@ enum KleinError: LocalizedError {
 
 // MARK: - مُرمّز النص (Qwen3-4B بـ4 بت)
 
-final class KleinTextEncoder {
+final class QwenTextEncoder {
     private let w: KleinWeights
     private let tok: any Tokenizer
     private let layerCount: Int
 
     private let heads = 32, kvHeads = 8, headDim = 128
 
-    init(dir: URL) async throws {
+    /// keep = عدد الطبقات اللي نشغّلها (الباقي نشيله قبل ما ينحمّل للذاكرة)
+    init(dir: URL, keep: Int) async throws {
         var all = try loadArrays(url: dir.appendingPathComponent("model.safetensors"))
-        // نحتاج أول ٢٧ طبقة بس: الباقي نشيله قبل ما ينحمّل للذاكرة
-        let keep = Klein.hiddenLayers.max() ?? 27
         for k in Array(all.keys) {
             if k == "model.norm.weight" || k.hasPrefix("lm_head") { all[k] = nil; continue }
             guard k.hasPrefix("model.layers.") else { continue }
@@ -97,14 +119,24 @@ final class KleinTextEncoder {
         tok = try await AutoTokenizer.from(modelFolder: dir)
     }
 
-    /// يرجع [1, 512, 7680]
-    func encode(_ prompt: String) -> MLXArray {
+    /// «دقيق»: قالب المحادثة بدون تفكير، حشو لين 512، ومخرجات الطبقات 9/18/27 جنب بعض → [1, 512, 7680]
+    func encodeKlein(_ prompt: String) -> MLXArray {
         let text = "<|im_start|>user\n\(prompt)<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+        return run(text, padTo: Klein.maxTokens, collect: Klein.hiddenLayers)
+    }
+
+    /// «واقعي+»: القالب مع التفكير مفعّل (بدون وسم think)، بدون حشو، ومخرج الطبقة قبل الأخيرة → [1, L, 2560]
+    func encodeZImage(_ prompt: String) -> MLXArray {
+        let text = "<|im_start|>user\n\(prompt)<|im_end|>\n<|im_start|>assistant\n"
+        return run(text, padTo: nil, collect: [ZImage.hiddenLayer])
+    }
+
+    private func run(_ text: String, padTo: Int?, collect: [Int]) -> MLXArray {
         var ids = tok.encode(text: text, addSpecialTokens: false)
         if ids.count > Klein.maxTokens { ids = Array(ids.prefix(Klein.maxTokens)) }
         let n = ids.count
-        ids += Array(repeating: 151643, count: Klein.maxTokens - n)   // حشو يمين بـ<|endoftext|>
-        let L = Klein.maxTokens
+        if let padTo { ids += Array(repeating: 151643, count: padTo - n) }   // حشو يمين بـ<|endoftext|>
+        let L = ids.count
 
         let input = MLXArray(ids.map { Int32($0) })
         let emb = dequantized(w["model.embed_tokens.weight"].take(input, axis: 0),
@@ -122,7 +154,7 @@ final class KleinTextEncoder {
         var outs: [MLXArray] = []
         for i in 0 ..< layerCount {
             h = layer(h, i, mask: mask, L: L)
-            if Klein.hiddenLayers.contains(i + 1) {
+            if collect.contains(i + 1) {
                 eval(h)
                 outs.append(h)
             }
@@ -313,27 +345,29 @@ final class KleinTransformer {
 
 // MARK: - فك الصورة (AutoencoderKLFlux2، المفكك بس، بدقة float32)
 
-final class KleinVAE {
-    private let w: KleinWeights
-    let bnMean: MLXArray
-    let bnVar: MLXArray
+/// مفكك AutoencoderKL (نفس البنية في FLUX.1 وFLUX.2). الأوزان بأسماء diffusers وتخطيط MLX للالتفاف.
+final class VAEDecoder {
+    let w: KleinWeights
 
-    init(dir: URL) throws {
-        var d = try loadArrays(url: dir.appendingPathComponent("diffusion_pytorch_model.safetensors"))
-        for k in Array(d.keys) {
-            if k.hasPrefix("encoder.") || k.hasPrefix("quant_conv.") || k.hasSuffix("num_batches_tracked") {
-                d[k] = nil; continue
-            }
-            var a = d[k]!.asType(.float32)
-            // أوزان الالتفاف من [O, I, kh, kw] (PyTorch) إلى [O, kh, kw, I] (MLX)
-            if a.ndim == 4 { a = a.transposed(0, 2, 3, 1) }
+    /// pytorchLayout: أوزان الالتفاف [O, I, kh, kw] تنقلب لـ[O, kh, kw, I]. ملفات mflux جاهزة بتخطيط MLX
+    /// وبعض أسمائها فيها .conv/.norm زيادة، فنوحّدها.
+    init(file: URL, pytorchLayout: Bool) throws {
+        let raw = try loadArrays(url: file)
+        var d: [String: MLXArray] = [:]
+        for (k0, v) in raw {
+            if k0.hasPrefix("encoder.") || k0.hasPrefix("quant_conv.") || k0.hasSuffix("num_batches_tracked") { continue }
+            let k = k0.replacingOccurrences(of: "decoder.conv_in.conv.", with: "decoder.conv_in.")
+                .replacingOccurrences(of: "decoder.conv_out.conv.", with: "decoder.conv_out.")
+                .replacingOccurrences(of: "decoder.conv_norm_out.norm.", with: "decoder.conv_norm_out.")
+            // الأوزان المكمّمة (طبقة الانتباه في mflux) تبقى زي ما هي
+            if v.dtype == .uint32 || k.hasSuffix(".scales") || k.hasSuffix(".biases") { d[k] = v; continue }
+            var a = v.asType(.float32)
+            if pytorchLayout && a.ndim == 4 { a = a.transposed(0, 2, 3, 1) }
             d[k] = a
         }
-        guard let m = d["bn.running_mean"], let v = d["bn.running_var"], d["decoder.conv_out.weight"] != nil else {
+        guard d["decoder.conv_out.weight"] != nil, d["decoder.conv_in.weight"] != nil else {
             throw KleinError.missing("vae")
         }
-        bnMean = m
-        bnVar = v
         w = KleinWeights(d: d, bits: 0, group: 0)
     }
 
@@ -360,12 +394,12 @@ final class KleinVAE {
     private func midAttention(_ x: MLXArray, _ p: String) -> MLXArray {
         let s = x.shape
         let n = gn(x, p + ".group_norm").reshaped([s[0], s[1] * s[2], s[3]])
-        let q = w.lin(n, p + ".to_q").expandedDimensions(axis: 1)
-        let k = w.lin(n, p + ".to_k").expandedDimensions(axis: 1)
-        let v = w.lin(n, p + ".to_v").expandedDimensions(axis: 1)
+        let q = w.lin(n, p + ".to_q").asType(.float32).expandedDimensions(axis: 1)
+        let k = w.lin(n, p + ".to_k").asType(.float32).expandedDimensions(axis: 1)
+        let v = w.lin(n, p + ".to_v").asType(.float32).expandedDimensions(axis: 1)
         let o = MLXFast.scaledDotProductAttention(queries: q, keys: k, values: v,
                                                   scale: 1 / Float(s[3]).squareRoot(), mask: nil)
-        let out = w.lin(o.squeezed(axis: 1), p + ".to_out.0").reshaped(s)
+        let out = w.lin(o.squeezed(axis: 1), p + ".to_out.0").asType(.float32).reshaped(s)
         return x + out
     }
 
@@ -375,16 +409,9 @@ final class KleinVAE {
         return MLX.broadcast(e, to: [s[0], s[1], 2, s[2], 2, s[3]]).reshaped([s[0], s[1] * 2, s[2] * 2, s[3]])
     }
 
-    /// الكامن المرقّع [1, h, w, 128] (NHWC) → صورة [1, H, W, 3] بين −1 و1
-    func decode(_ patchified: MLXArray) -> MLXArray {
-        let s = patchified.shape
-        // نرجّع تطبيع BatchNorm
-        var z = patchified.asType(.float32) * MLX.sqrt(bnVar + 1e-4) + bnMean
-        // نفك الترقيع: القناة = c·4 + p1·2 + p2
-        z = z.reshaped([s[0], s[1], s[2], 32, 2, 2]).transposed(0, 1, 4, 2, 5, 3)
-            .reshaped([s[0], s[1] * 2, s[2] * 2, 32])
-        z = conv(z, "post_quant_conv", pad: 0)
-        var h = conv(z, "decoder.conv_in")
+    /// كامن [1, h, w, C] (NHWC، بعد فك التطبيع) → صورة [1, 8h, 8w, 3] بين −1 و1
+    func decode(_ z: MLXArray) -> MLXArray {
+        var h = conv(z.asType(.float32), "decoder.conv_in")
         h = resnet(h, "decoder.mid_block.resnets.0")
         h = midAttention(h, "decoder.mid_block.attentions.0")
         h = resnet(h, "decoder.mid_block.resnets.1")
@@ -396,6 +423,31 @@ final class KleinVAE {
         }
         h = conv(silu(gn(h, "decoder.conv_norm_out")), "decoder.conv_out")
         return h
+    }
+}
+
+/// FLUX.2: BatchNorm + فك الترقيع + post_quant_conv قبل المفكك
+final class KleinVAE {
+    private let dec: VAEDecoder
+    private let bnMean: MLXArray, bnVar: MLXArray
+
+    init(dir: URL) throws {
+        dec = try VAEDecoder(file: dir.appendingPathComponent("diffusion_pytorch_model.safetensors"), pytorchLayout: true)
+        guard let m = dec.w.d["bn.running_mean"], let v = dec.w.d["bn.running_var"],
+              dec.w.has("post_quant_conv.weight") else { throw KleinError.missing("vae") }
+        bnMean = m
+        bnVar = v
+    }
+
+    /// الكامن المرقّع [1, h, w, 128] → صورة [1, 16h, 16w, 3]
+    func decode(_ patchified: MLXArray) -> MLXArray {
+        let s = patchified.shape
+        var z = patchified.asType(.float32) * MLX.sqrt(bnVar + 1e-4) + bnMean
+        // نفك الترقيع: القناة = c·4 + p1·2 + p2
+        z = z.reshaped([s[0], s[1], s[2], 32, 2, 2]).transposed(0, 1, 4, 2, 5, 3)
+            .reshaped([s[0], s[1] * 2, s[2] * 2, 32])
+        z = conv2d(z, dec.w["post_quant_conv.weight"], stride: 1, padding: 0) + dec.w["post_quant_conv.bias"]
+        return dec.decode(z)
     }
 }
 
@@ -434,8 +486,8 @@ enum KleinPipeline {
         onPhase("encode")
         var ctx: MLXArray
         do {
-            let enc = try await KleinTextEncoder(dir: dir.appendingPathComponent("text_encoder-mlx-4bit"))
-            ctx = enc.encode(prompt)
+            let enc = try await QwenTextEncoder(dir: QwenShared.dir, keep: Klein.hiddenLayers.max() ?? 27)
+            ctx = enc.encodeKlein(prompt)
         }
         MLX.Memory.clearCache()
         slog("klein: text encoded \(ctx.shape) footprint=\(RAM.footprintMB)MB")
@@ -473,7 +525,7 @@ enum KleinPipeline {
         return try toImage(pixels)
     }
 
-    private static func toImage(_ px: MLXArray) throws -> CGImage {
+    static func toImage(_ px: MLXArray) throws -> CGImage {
         let s = px.shape   // [1, H, W, 3]
         let rgb = MLX.clip((px[0] + 1) * 127.5, min: 0, max: 255).asType(.uint8)
         let alpha = MLXArray.full([s[1], s[2], 1], values: MLXArray(UInt8(255)), type: UInt8.self)
