@@ -323,14 +323,20 @@ static NSMutableDictionary<NSNumber *, NSDate *> *SawtHung(void) {
     return d;
 }
 
+void SawtXCTClearHung(void) {
+    @synchronized (SawtHung()) { [SawtHung() removeAllObjects]; }
+}
+
 NSObject * _Nullable SawtXCTAXRead(int pid, NSInteger maxDepth, NSInteger maxChildren, double timeout, NSString * _Nullable * _Nullable why) {
     NSString *reason = nil;
     NSObject *root = nil;
     @try {
         NSNumber *key = @(pid);
+        // الشاشة الرئيسية ما نتجاهلها أبدًا (بدونها ما فيه شي نقرأه)
+        BOOL isSystem = SawtPid(SawtSystemApp(SawtAXClient())) == pid;
         @synchronized (SawtHung()) {
             NSDate *since = SawtHung()[key];
-            if (since && -since.timeIntervalSinceNow < 15) {
+            if (!isSystem && since && -since.timeIntervalSinceNow < 15) {
                 if (why) *why = @"العملية معلّقة من قراءة سابقة (نتجاهلها شوي)";
                 return nil;
             }

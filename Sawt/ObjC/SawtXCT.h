@@ -26,6 +26,9 @@ FOUNDATION_EXPORT NSString * _Nullable SawtXCTOpenURL(NSURL *url);
 /// يسكّر اتصال جلسة testmanagerd (زي Poki): الخدمة تطفّي وضع الأتمتة لما ينقطع. يرجع وش صار، ويبدأ بـ✗ لو فشل
 FOUNDATION_EXPORT NSString *SawtXCTCloseSession(void);
 
+/// يمسح قائمة العمليات المعلّقة (بداية كل مهمة)
+FOUNDATION_EXPORT void SawtXCTClearHung(void);
+
 /// وش مصدر عميل الوصول اللي انلقى (للسجل)
 FOUNDATION_EXPORT NSString *SawtXCTAXSource(void);
 

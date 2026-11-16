@@ -237,6 +237,13 @@ enum XCTBackend {
         }
         if let e = await enableAutomation() { return e }
         slog("runner: step automation enabled \(Int(Date().timeIntervalSince(t) * 1000))ms")
+        // مهمة جديدة: ما نحمل «معلّق» من قبل، ونتأكد إن الوصول محمّل بعد التفعيل، ومهلة قصيرة لين يستقر
+        SawtXCTClearHung()
+        let ax: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTLoadAccessibility(4)) }
+        }
+        slog("runner: step accessibility after enable: \(ax ?? "ok") \(Int(Date().timeIntervalSince(t) * 1000))ms")
+        try? await Task.sleep(nanoseconds: 400_000_000)
         return nil
     }
 
@@ -534,17 +541,26 @@ enum XCTBackend {
         if pid == myPid || bundle == me {
             return Screen(name: "صوت", bundle: me, isSelf: true, nodes: [], raw: 0, ms: Int(Date().timeIntervalSince(t) * 1000))
         }
-        let snap: NSObject? = await withCheckedContinuation { (cont: CheckedContinuation<NSObject?, Never>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                var why: NSString?
-                let r = SawtXCTAXRead(pid, maxDepth, maxChildren, timeout, &why)
-                if r == nil {
-                    lastAXError = "\(bundle): \(why ?? "")"
-                    slog("xct: ax read \(bundle) failed: \(why ?? "")")
+        func attempt(_ depth: Int, _ kids: Int, _ secs: Double) async -> (NSObject?, String) {
+            readInFlight = true
+            defer { readInFlight = false }
+            let t0 = Date()
+            return await withCheckedContinuation { (cont: CheckedContinuation<(NSObject?, String), Never>) in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    var why: NSString?
+                    let r = SawtXCTAXRead(pid, depth, kids, secs, &why)
+                    let ms = Int(Date().timeIntervalSince(t0) * 1000)
+                    slog("xct: ax read \(bundle) depth=\(depth) kids=\(kids) deadline=\(Int(secs))s → \(r == nil ? "failed: \(why ?? "")" : "ok") \(ms)ms")
+                    cont.resume(returning: (r, (why as String?) ?? ""))
                 }
-                cont.resume(returning: r)
             }
         }
+        var (snap, why) = await attempt(maxDepth, maxChildren, timeout)
+        // انتهى الوقت: نعيد مرة بحدود أصغر (الشجرة الكاملة للشاشة الرئيسية ممكن تكون كبيرة)
+        if snap == nil && why.contains("ما رد خلال") {
+            (snap, why) = await attempt(25, 100, timeout + 2)
+        }
+        if snap == nil { lastAXError = "\(bundle): \(why)" } else { lastReadOK = Date() }
         guard let snap else { return nil }
         let (name, nodes, raw) = flatten(snap, screen: screen)
         let ms = Int(Date().timeIntervalSince(t) * 1000)
@@ -569,9 +585,14 @@ enum XCTBackend {
         return nil
     }
 
-    /// فحص صحة سريع للجلسة (قراءة بعمق ١). لو رجع 41 نعلّمها منتهية
+    nonisolated(unsafe) static var readInFlight = false
+    nonisolated(unsafe) static var lastReadOK = Date.distantPast
+
+    /// فحص صحة سريع للجلسة (قراءة بعمق ١). لو رجع 41 نعلّمها منتهية.
+    /// ما نفحص وقت قراءة شغّالة أو بعد قراءة ناجحة قريبة (الفحص المتزامن كان يعلّق الشاشة الرئيسية ويخليها «معلّقة»)
     static func checkHealth() {
-        guard prepared, !preparing, let pid = activePIDs().first else { return }
+        guard prepared, !preparing, !readInFlight, Date().timeIntervalSince(lastReadOK) > 10,
+              let pid = activePIDs().first else { return }
         var why: NSString?
         if SawtXCTAXRead(pid, 1, 1, 3, &why) == nil, isAuthLost(why as String?) { markAuthLost("فحص الصحة") }
     }
