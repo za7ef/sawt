@@ -369,9 +369,14 @@ actor ImageGenerator {
     func generate(engine: ImageEngine, prompt: String, negative: String,
                   status: @escaping @Sendable (String) -> Void) async throws -> GeneratedImage {
         let img: CGImage
+        var used = prompt
         switch engine {
         case .sd21, .sdTurbo:
-            img = try await runSD(engine, prompt: prompt, negative: negative, status: status)
+            // نص CLIP يقص بعد 77 رمز (75 + البداية والنهاية): نقص نحن عند حد كلمة عشان الوصف المعروض = المستخدم فعلًا
+            used = Self.clipTrim(prompt, dir: SDModels.dir(engine))
+            let neg = Self.clipTrim(negative, dir: SDModels.dir(engine))
+            if used != prompt { slog("image: prompt trimmed to 75 CLIP tokens") }
+            img = try await runSD(engine, prompt: used, negative: neg, status: status)
         case .playground:
             img = try await runPlayground(prompt: prompt, status: status)
         case .gemini, .geminiLite:
@@ -380,7 +385,7 @@ actor ImageGenerator {
         let name = "\(UUID().uuidString)-gen.png"
         guard let png = UIImage(cgImage: img).pngData() else { throw SawtError.failed("ما قدرت أحفظ الصورة") }
         try png.write(to: Self.outDir.appendingPathComponent(name), options: .atomic)
-        return GeneratedImage(file: name, prompt: prompt, engine: engine)
+        return GeneratedImage(file: name, prompt: used, engine: engine)
     }
 
     /// نفك نموذج SD من الذاكرة (يُستدعى بعد التوليد وقبل ما يرجع النموذج اللغوي)
@@ -391,6 +396,23 @@ actor ImageGenerator {
     }
 
     // MARK: Stable Diffusion (Core ML على المحرك العصبي)
+
+    /// يقص النص عند آخر كلمة تدخل ضمن 75 رمز CLIP (بمقطّع النموذج نفسه؛ ولو ما انقرى نكتفي بـ45 كلمة)
+    static func clipTrim(_ text: String, dir: URL, limit: Int = 77) -> String {
+        let words = text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        guard let tok = try? BPETokenizer(mergesAt: dir.appendingPathComponent("merges.txt"),
+                                          vocabularyAt: dir.appendingPathComponent("vocab.json")) else {
+            return words.prefix(45).joined(separator: " ")
+        }
+        if tok.tokenize(input: text).tokens.count <= limit { return text }
+        var kept: [String] = []
+        for w in words {
+            let next = (kept + [w]).joined(separator: " ")
+            if tok.tokenize(input: next).tokens.count > limit { break }
+            kept.append(w)
+        }
+        return kept.joined(separator: " ").trimmingCharacters(in: CharacterSet(charactersIn: ", "))
+    }
 
     /// حجم دفعة الـUnet من metadata.json (2 = مبني للتوجيه CFG)
     private static func unetBatch(_ dir: URL) -> Int {

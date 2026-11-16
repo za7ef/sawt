@@ -667,7 +667,7 @@ final class ChatStore: ObservableObject {
                     slog("image: prompt direct (english=\(ImageIntent.isEnglish(request)))")
                 } else {
                     status("أكتب وصف الصورة…")
-                    spec = await Self.imagePrompt(for: request)
+                    spec = await Self.imagePrompt(for: request, short: engine.isLocalSD)
                     if spec == nil, engine.isGemini { spec = (request, "") }   // Gemini يفهم العربي
                 }
                 guard let sp = spec else {
@@ -710,12 +710,14 @@ final class ChatStore: ObservableObject {
     }
 
     /// يطلب من نموذج المحادثة JSON فيه وصف إنجليزي: {"prompt": "...", "negative": "..."}
-    static func imagePrompt(for request: String) async -> (String, String)? {
+    /// short: لـStable Diffusion (نص CLIP يقص بعد 77 رمز): ٤٥ كلمة والموضوع أول
+    static func imagePrompt(for request: String, short: Bool) async -> (String, String)? {
+        let limit = short ? "max 45 words, subject first, then short comma-separated tags" : "max 70 words"
         let sys = """
         You write prompts for an image generator. Turn the user's request (any language) into an enriched, detailed English prompt. \
         Keep the user's subject and intent exactly, then add: art style or medium, setting and background, composition and camera angle, \
         lighting, colors and mood, and quality tags (e.g. highly detailed, sharp focus, masterpiece). \
-        Reply with JSON only: {"prompt": "<comma-separated English prompt, max 70 words>", \
+        Reply with JSON only: {"prompt": "<comma-separated English prompt, \(limit)>", \
         "negative": "<comma-separated English list of things to avoid: e.g. blurry, low quality, deformed, extra fingers, watermark, text>"}. No other text.
         """
         guard let s = try? await LLMService.shared.stream(system: sys, history: [], user: String(request.prefix(600)), maxTokens: 220) else { return nil }
