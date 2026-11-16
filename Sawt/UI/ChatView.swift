@@ -41,7 +41,7 @@ struct ChatView: View {
             messages
             composer
         }
-        .background(Theme.bg.ignoresSafeArea())
+        .background(Color.black.ignoresSafeArea())
         .fullScreenCover(isPresented: $voiceMode) {
             VoiceModeView()
                 .environment(\.layoutDirection, .rightToLeft)
@@ -94,18 +94,8 @@ struct ChatView: View {
 
     // MARK: الشريط العلوي
 
-    private var topBar: some View {
-        HStack(spacing: 10) {
-            Button(action: openDrawer) {
-                Image(systemName: "line.3.horizontal").font(.title3.weight(.medium))
-                    .frame(width: 44, height: 44)
-            }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
-
-            Spacer()
-
-            Menu {
+    /// قائمة اختيار النموذج (من اسم النموذج الصغير في النص فوق)
+    @ViewBuilder private var modelMenuItems: some View {
                 let _ = cloudTick
                 let cloud = CloudLLM.active
                 let onCPU = cloud == nil && ComputeMode.current == "cpu"
@@ -136,19 +126,34 @@ struct ChatView: View {
                         }
                     }
                 }
-                Divider()
-                Button { showModels = true } label: { Label("كل النماذج…", systemImage: "square.grid.2x2") }
-            } label: {
-                HStack(spacing: 6) {
-                    Text("صوت").fontWeight(.bold)
-                    Text(activeTitle).foregroundStyle(.secondary).lineLimit(1)
+        Divider()
+        Button { showModels = true } label: { Label("كل النماذج…", systemImage: "square.grid.2x2") }
+    }
+
+    /// رأس بسيط: زر القائمة يمين، اسم النموذج صغير بالنص، وكبسولة (محادثة جديدة + «…») يسار
+    private var topBar: some View {
+        HStack(spacing: 10) {
+            Button(action: openDrawer) {
+                Image(systemName: "line.3.horizontal").font(.title3.weight(.medium))
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+
+            Spacer(minLength: 4)
+
+            Menu { modelMenuItems } label: {
+                HStack(spacing: 4) {
                     statusDot
-                    Image(systemName: "chevron.down").font(.caption.weight(.bold)).foregroundStyle(.secondary)
+                    Text(activeTitle).font(.subheadline.weight(.medium)).lineLimit(1)
+                    Image(systemName: "chevron.down").font(.caption2.weight(.bold))
                 }
-                .padding(.horizontal, 16).padding(.vertical, 10)
-                .glassEffect(.regular.interactive(), in: .capsule)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8).padding(.vertical, 8)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("النموذج: \(activeTitle)")
             .alert("النماذج السحابية", isPresented: $askCloudConsent) {
                 Button("موافق") {
                     UserDefaults.standard.set(true, forKey: "cloudConsent")
@@ -160,14 +165,25 @@ struct ChatView: View {
                 Text("النموذج السحابي يرسل لخوادم الخدمة اللي اخترتها: رسايلك والمحادثة السابقة والصور المرفقة (وفي الوكيل نص الشاشة وصورتها)، حسب سياسة خصوصيتها. الطبقات المجانية ممكن تستخدم البيانات لتحسين خدماتها. هالتنبيه يطلع مرة وحدة.")
             }
 
-            Spacer()
 
-            Button { store.newConversation() } label: {
-                Image(systemName: "square.and.pencil").font(.title3.weight(.medium))
-                    .frame(width: 44, height: 44)
+            Spacer(minLength: 4)
+
+            HStack(spacing: 0) {
+                Menu {
+                    Menu { modelMenuItems } label: { Label("النموذج: \(activeTitle)", systemImage: "cpu") }
+                    Button { showModels = true } label: { Label("كل النماذج…", systemImage: "square.grid.2x2") }
+                } label: {
+                    Image(systemName: "ellipsis").font(.body.weight(.semibold)).frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("المزيد")
+                Button { store.newConversation() } label: {
+                    Image(systemName: "square.and.pencil").font(.title3.weight(.medium)).frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("محادثة جديدة")
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
+            .buttonStyle(.plain)
+            .padding(.horizontal, 6)
+            .glassEffect(.regular.interactive(), in: .capsule)
         }
         .padding(.horizontal, 14)
         .padding(.top, 4)
@@ -470,9 +486,9 @@ struct ChatView: View {
                 }
             }
             .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .padding(.horizontal, 14)
-            .padding(.bottom, 8)
-            .padding(.top, 6)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 10)
+            .padding(.top, 8)
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: draft.isEmpty)
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: store.isGenerating)
             .animation(.easeOut(duration: 0.2), value: net.mode)
@@ -576,8 +592,9 @@ struct MessageRow: View, Equatable {
     var body: some View {
         HStack(alignment: .top) {
             if message.role == .user {
-                // في الواجهة العربية بداية السطر يمين، فرسائلك تطلع يمين مثل ChatGPT
-                VStack(alignment: .leading, spacing: 4) {
+                // رسالتك فقاعة زرقاء غامقة صغيرة في نهاية السطر (يسار بالعربي)، والرد بدون فقاعة
+                Spacer(minLength: 60)
+                VStack(alignment: .trailing, spacing: 4) {
                     if let atts = message.attachments, !atts.isEmpty {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 6) { ForEach(atts) { AttachmentChip(a: $0, size: 72) } }
@@ -585,13 +602,13 @@ struct MessageRow: View, Equatable {
                         .frame(maxWidth: 260)
                     }
                     Text(message.text)
-                        .padding(.horizontal, 14).padding(.vertical, 10)
-                        .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16).padding(.vertical, 11)
+                        .background(Theme.userBubble, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                     if message.viaVoice {
                         Image(systemName: "waveform").font(.caption2).foregroundStyle(.tertiary)
                     }
                 }
-                Spacer(minLength: 50)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     if let m = message.model, !m.isEmpty {
@@ -619,32 +636,44 @@ struct MessageRow: View, Equatable {
                     } else {
                         Text(SafeMarkdown.key(message.text))
                             .textSelection(.enabled)
-                            .lineSpacing(4)
+                            .lineSpacing(6)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     if let src = message.sources, !src.isEmpty {
                         SourcesList(sources: src)
                     }
                     if !streaming {
-                        HStack(spacing: 14) {
+                        // صف أدوات خفيف: نسخ، قراءة، مشاركة، والباقي تحت «…»
+                        HStack(spacing: 20) {
                             Button { UIPasteboard.general.string = message.text } label: {
                                 Image(systemName: "doc.on.doc")
                             }
+                            .accessibilityLabel("نسخ")
                             Button { Speaker.shared.speak(message.text) } label: {
                                 Image(systemName: "speaker.wave.2")
                             }
-                            if NamaaVoice.isInstalled, let namaa = Catalog.namaaVoice {
-                                Button { Speaker.shared.speak(message.text, voice: namaa) } label: {
-                                    Label("نماء", systemImage: "person.wave.2")
-                                        .labelStyle(.titleAndIcon)
+                            .accessibilityLabel("اقرأ الرد")
+                            ShareLink(item: message.text) { Image(systemName: "square.and.arrow.up") }
+                                .accessibilityLabel("مشاركة")
+                            Menu {
+                                if NamaaVoice.isInstalled, let namaa = Catalog.namaaVoice {
+                                    Button { Speaker.shared.speak(message.text, voice: namaa) } label: {
+                                        Label("اقرأ بصوت نماء (تجريبي)", systemImage: "person.wave.2")
+                                    }
                                 }
-                                .accessibilityLabel("اقرأ بصوت نماء السعودي (تجريبي)")
+                                Button { UIPasteboard.general.string = message.text } label: {
+                                    Label("نسخ النص", systemImage: "doc.on.doc")
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis").frame(height: 20)
                             }
+                            .accessibilityLabel("المزيد")
                             if message.viaVoice { Image(systemName: "waveform") }
                         }
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(Color.gray.opacity(0.75))
                         .buttonStyle(.plain)
+                        .padding(.top, 2)
                     }
                 }
             }

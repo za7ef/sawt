@@ -126,6 +126,8 @@ enum Theme {
     static let accent = Color(red: 0.42, green: 0.62, blue: 1.0)
     static let accent2 = Color(red: 0.68, green: 0.45, blue: 1.0)
     static let bg = Color(red: 0.04, green: 0.04, blue: 0.06)
+    /// فقاعة رسائل المستخدم: أزرق غامق
+    static let userBubble = Color(red: 0.03, green: 0.07, blue: 0.42)
 }
 
 /// غلاف بسيط لوقت الخلفية من iOS.
