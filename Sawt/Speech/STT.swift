@@ -1,80 +1,28 @@
-import CoreML
 import Foundation
-import WhisperKit
 
-/// تحويل الكلام إلى نص على الجهاز عن طريق WhisperKit.
+/// تحويل الكلام إلى نص عن طريق سمع آبل (التعرّف على الكلام في iOS). ما فيه نماذج تنزل.
 actor SpeechRecognizer {
     static let shared = SpeechRecognizer()
 
-    private var pipe: WhisperKit?
-    private var loadedID: String?
+    private var ready = false
 
-    var isReady: Bool { pipe != nil || loadedID == "apple" }
+    var isReady: Bool { ready }
 
-    func unload() { pipe = nil; loadedID = nil }
+    func unload() { ready = false }
 
-    /// progress(نسبة التنزيل، هل بدأ التجهيز)
-    func load(variant: String, progress: @escaping @Sendable (Double, Bool) -> Void) async throws {
-        if loadedID == variant, pipe != nil || variant == "apple" { return }
-        pipe = nil
-        loadedID = nil
-        if variant == "apple" {
-            guard await AppleSTT.authorize() else {
-                throw SawtError.failed("اسمح لتطبيق صوت بالتعرّف على الكلام من الإعدادات.")
-            }
-            loadedID = "apple"
-            progress(1, true)
-            slog("stt apple ready, onDevice=\(AppleSTT.supportsOnDevice)")
-            return
+    func load() async throws {
+        if ready { return }
+        guard await AppleSTT.authorize() else {
+            throw SawtError.failed("اسمح لتطبيق صوت بالتعرّف على الكلام من الإعدادات.")
         }
-        // نازل؟ نستخدم المجلد المحلي مباشرة بدون أي اتصال (WhisperKit.download يكلّم Hugging Face حتى لو الملفات موجودة)
-        let folder: URL
-        if let local = Storage.whisperModelDir(variant),
-           FileManager.default.fileExists(atPath: local.appendingPathComponent("AudioEncoder.mlmodelc").path),
-           FileManager.default.fileExists(atPath: local.appendingPathComponent("TextDecoder.mlmodelc").path) {
-            folder = local
-        } else {
-            folder = try await WhisperKit.download(variant: variant) { p in
-                progress(min(p.fractionCompleted, 0.99), false)
-            }
-        }
-        progress(1, true)
-        // المُرمّز الصوتي على كرت الشاشة: تحميله أسرع بكثير من المعالج العصبي اللي يحتاج تجميع طويل أول مرة.
-        let compute = ModelComputeOptions(audioEncoderCompute: .cpuAndGPU, textDecoderCompute: .cpuAndNeuralEngine)
-        let cfg = WhisperKitConfig(model: variant, modelFolder: folder.path, computeOptions: compute, verbose: false,
-                                   prewarm: false, load: true, download: false)
-        pipe = try await WhisperKit(cfg)
-        loadedID = variant
+        ready = true
+        slog("stt apple ready, onDevice=\(AppleSTT.supportsOnDevice)")
     }
 
     /// يرجع النص واللغة المكتشفة.
     func transcribe(_ audio: [Float], language: String?) async throws -> (text: String, language: String) {
-        if loadedID == "apple" { return try await AppleSTT.transcribe(audio, language: language) }
-        guard let pipe else { throw SawtError.notReady("نموذج السمع") }
-        // ويسبر يحتاج على الأقل ثانية تقريبًا
-        var samples = audio
-        if samples.count < 16_000 { samples += [Float](repeating: 0, count: 16_000 - samples.count) }
-        var opts = DecodingOptions(
-            task: .transcribe, language: language, temperature: 0,
-            temperatureFallbackCount: 2, usePrefillPrompt: language != nil,
-            detectLanguage: language == nil, skipSpecialTokens: true,
-            withoutTimestamps: true, suppressBlank: true,
-            noSpeechThreshold: 0.6)
-        opts.chunkingStrategy = ChunkingStrategy.none
-        let results = try await pipe.transcribe(audioArray: samples, decodeOptions: opts)
-        let text = results.map(\.text).joined(separator: " ")
-            .replacingOccurrences(of: "\\[[^\\]]*\\]|\\([^\\)]*\\)", with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let lang = results.first?.language ?? (language ?? "ar")
-        return (Self.filterHallucination(text), lang)
-    }
-
-    /// ويسبر أحيانًا يتخيل جمل مشهورة على الصمت.
-    private static func filterHallucination(_ t: String) -> String {
-        let junk = ["اشتركوا في القناة", "ترجمة نانسي قنقر", "شكرا للمشاهدة", "شكراً للمشاهدة",
-                    "Thank you for watching", "Thanks for watching", "Subtitles by", "موسيقى"]
-        for j in junk where t.localizedCaseInsensitiveContains(j) && t.count < j.count + 12 { return "" }
-        return t
+        guard ready else { throw SawtError.notReady("سمع آبل") }
+        return try await AppleSTT.transcribe(audio, language: language)
     }
 }
 

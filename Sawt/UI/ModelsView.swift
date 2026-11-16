@@ -11,7 +11,6 @@ struct ModelsView: View {
     @State private var customRepo = ""
     @State private var refresh = 0
     @State private var confirmDelete: LLMOption?
-    @State private var confirmSTT: STTOption?
     @State private var confirmAll = false
     @State private var files: [Storage.ModelFolder] = []
     /// تبويب النماذج اللغوية: كرت الشاشة (MLX) أو المعالج (llama.cpp)
@@ -78,45 +77,6 @@ struct ModelsView: View {
                 }
 
                 Section {
-                    ForEach(Catalog.stts) { s in
-                        Button {
-                            settings.sttID = s.id
-                            models.loadSTT()
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(s.title).foregroundStyle(.primary)
-                                    Text("\(s.subtitle) • \(s.approxSize)").font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if settings.sttID == s.id { phaseView(models.stt) }
-                                else if models.downloadedSTT.contains(s.id) {
-                                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(.secondary)
-                                }
-                                if s.id != "apple" && models.downloadedSTT.contains(s.id) {
-                                    Button(role: .destructive) { confirmSTT = s } label: {
-                                        Image(systemName: "trash")
-                                    }
-                                    .buttonStyle(.borderless)
-                                }
-                            }
-                        }
-                    }
-                } header: {
-                    Text("السمع (تحويل الكلام لنص)")
-                } footer: {
-                    if let p = models.stt.progress {
-                        Text("ينزل… \(Int(p * 100))٪")
-                    } else if models.stt == .preparing {
-                        Text("يجهّز نموذج السمع. أول مرة ممكن ياخذ دقيقة أو دقيقتين.")
-                    } else if case .failed(let e) = models.stt {
-                        Text(e).foregroundStyle(.red)
-                    } else {
-                        Text("اضغط على النموذج عشان ينزل ويشتغل.")
-                    }
-                }
-
-                Section {
                     if files.isEmpty {
                         Text("ما فيه ملفات نماذج على الجهاز").foregroundStyle(.secondary)
                     }
@@ -145,13 +105,6 @@ struct ModelsView: View {
             }
             .task { reloadFiles() }
             .id(refresh)
-            .confirmationDialog("تحذف نموذج السمع؟", isPresented: Binding(get: { confirmSTT != nil },
-                                                                     set: { if !$0 { confirmSTT = nil } }),
-                                titleVisibility: .visible) {
-                Button("حذف من الجهاز", role: .destructive) {
-                    if let s = confirmSTT { models.deleteSTT(s.id); reloadFiles() }
-                }
-            }
             .confirmationDialog("تحذف كل النماذج من الجوال؟", isPresented: $confirmAll, titleVisibility: .visible) {
                 Button("حذف الكل", role: .destructive) { models.deleteAllModels(); reloadFiles() }
             }
@@ -258,8 +211,8 @@ struct ModelsView: View {
 
     private func reloadFiles() {
         Task {
-            let down = models.downloaded, downS = models.downloadedSTT
-            let list = await Task.detached(priority: .utility) { Storage.modelFolders(downloaded: down, downloadedSTT: downS) }.value
+            let down = models.downloaded
+            let list = await Task.detached(priority: .utility) { Storage.modelFolders(downloaded: down) }.value
             files = list
         }
     }

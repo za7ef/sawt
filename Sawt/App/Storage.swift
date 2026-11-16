@@ -14,7 +14,7 @@ enum Storage {
         var dirs: [URL] = []
         for d in [FileManager.SearchPathDirectory.documentDirectory, .applicationSupportDirectory, .cachesDirectory] {
             guard let base = fm.urls(for: d, in: .userDomainMask).first else { continue }
-            for name in ["huggingface", "models", "Namaa", "whisper"] {
+            for name in ["huggingface", "models", "Namaa"] {
                 dirs.append(base.appendingPathComponent(name))
             }
         }
@@ -27,8 +27,6 @@ enum Storage {
     static var documents: URL { fm.urls(for: .documentDirectory, in: .userDomainMask)[0] }
     /// مكان نماذج MLX (مكتبة Hugging Face).
     static var hubDir: URL { caches.appendingPathComponent("huggingface/hub") }
-    /// مكان نماذج Whisper.
-    static var whisperDir: URL { documents.appendingPathComponent("huggingface/models/argmaxinc/whisperkit-coreml") }
 
     static func size(_ url: URL) -> Int64 {
         guard let en = fm.enumerator(at: url, includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey]) else {
@@ -82,21 +80,14 @@ enum Storage {
         return nil
     }
 
-    static func whisperModelDir(_ variant: String) -> URL? {
-        guard let items = try? fm.contentsOfDirectory(at: whisperDir, includingPropertiesForKeys: nil) else { return nil }
-        return items.first { $0.lastPathComponent.hasSuffix(variant) }
-    }
-
     struct Usage {
         var models: Int64 = 0
-        var whisper: Int64 = 0
         var cache: Int64 = 0
     }
 
     static func usage() -> Usage {
         var u = Usage()
         u.models = size(hubDir)
-        u.whisper = size(documents.appendingPathComponent("huggingface"))
         let tmp = size(fm.temporaryDirectory)
         let otherCaches = ((try? fm.contentsOfDirectory(at: caches, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.lastPathComponent != "huggingface" }
@@ -108,7 +99,7 @@ enum Storage {
     /// ملفات تنزيل ناقصة داخل مجلد النماذج.
     private static func partials() -> [URL] {
         var out: [URL] = []
-        for root in [hubDir, documents.appendingPathComponent("huggingface")] {
+        for root in [hubDir] {
             guard let en = fm.enumerator(at: root, includingPropertiesForKeys: nil) else { continue }
             for case let f as URL in en {
                 let n = f.lastPathComponent
@@ -148,11 +139,6 @@ enum Storage {
         slog("deleted llm \(repo)")
     }
 
-    static func deleteWhisper(_ variant: String) {
-        if let d = whisperModelDir(variant) { try? fm.removeItem(at: d) }
-        slog("deleted whisper \(variant)")
-    }
-
     static func deleteAllModels() {
         try? fm.removeItem(at: hubDir)
         try? fm.removeItem(at: documents.appendingPathComponent("huggingface"))
@@ -161,7 +147,7 @@ enum Storage {
     }
 
     struct ModelFolder: Identifiable, Sendable {
-        enum Kind: Sendable { case llm(String), whisper(String) }
+        enum Kind: Sendable { case llm(String) }
         var id: String { url.path }
         let url: URL
         let name: String
@@ -173,15 +159,12 @@ enum Storage {
         var statusText: String {
             if incomplete { return "تنزيل ناقص" }
             if !known { return "ملفات قديمة غير مستخدمة" }
-            switch kind {
-            case .llm: return "نموذج لغوي"
-            case .whisper: return "نموذج سمع"
-            }
+            return "نموذج لغوي"
         }
     }
 
     /// كل مجلدات النماذج الموجودة فعليًا.
-    static func modelFolders(downloaded: Set<String>, downloadedSTT: Set<String>) -> [ModelFolder] {
+    static func modelFolders(downloaded: Set<String>) -> [ModelFolder] {
         var out: [ModelFolder] = []
         for d in (try? fm.contentsOfDirectory(at: hubDir, includingPropertiesForKeys: nil)) ?? []
         where d.lastPathComponent.hasPrefix("models--") {
@@ -189,14 +172,6 @@ enum Storage {
             let repo = parts.count >= 2 ? parts[0] + "/" + parts.dropFirst().joined(separator: "--") : d.lastPathComponent
             out.append(ModelFolder(url: d, name: repo, kind: .llm(repo), bytes: size(d),
                                    incomplete: hasPartial(d), known: downloaded.contains(repo)))
-        }
-        for d in (try? fm.contentsOfDirectory(at: whisperDir, includingPropertiesForKeys: nil)) ?? [] {
-            let name = d.lastPathComponent
-            // نموذج Whisper الحقيقي مجلده يبدأ بـ openai_whisper أو distil؛ غيره كاش وإعدادات
-            guard name.hasPrefix("openai_whisper") || name.hasPrefix("distil") else { continue }
-            let variant = downloadedSTT.first { name.hasSuffix($0) }
-            out.append(ModelFolder(url: d, name: name, kind: .whisper(variant ?? name), bytes: size(d),
-                                   incomplete: hasPartial(d), known: variant != nil))
         }
         return out.sorted { $0.bytes > $1.bytes }
     }

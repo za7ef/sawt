@@ -31,7 +31,7 @@ struct SettingsView: View {
             }
             .task {
                 let u = await Task.detached(priority: .utility) { Storage.usage() }.value
-                used = Storage.format(u.models + u.whisper + u.cache)
+                used = Storage.format(u.models + u.cache)
             }
             .navigationTitle("الإعدادات")
             .navigationBarTitleDisplayMode(.inline)
@@ -161,14 +161,14 @@ struct VoiceSettingsPage: View {
                         Text("English").tag("en")
                     }
                     .pickerStyle(.segmented)
-                    if settings.sttID == "apple" && !AppleSTT.supportsOnDevice {
+                    if !AppleSTT.supportsOnDevice {
                         Toggle("اسمح لسمع آبل يستخدم الإنترنت", isOn: $allowAppleServer)
                     }
                 } header: {
                     Text("لغة السمع")
                 } footer: {
-                    if settings.sttID == "apple" && !AppleSTT.supportsOnDevice {
-                        Text("جوالك يحتاج نت عشان يسمع العربي بسمع آبل. البديل بدون نت: Whisper من النماذج.")
+                    if !AppleSTT.supportsOnDevice {
+                        Text("جوالك يحتاج نت عشان يسمع العربي بسمع آبل.")
                     }
                 }
 
@@ -396,7 +396,6 @@ struct StorageDiagPage: View {
             Section {
                 if let u = usage {
                     LabeledContent("النماذج اللغوية", value: Storage.format(u.models))
-                    LabeledContent("نماذج السمع", value: Storage.format(u.whisper))
                     LabeledContent("الكاش", value: Storage.format(u.cache))
                 } else {
                     HStack { ProgressView(); Text("يحسب…").foregroundStyle(.secondary) }
@@ -450,9 +449,9 @@ struct StorageDiagPage: View {
 
     private func refreshUsage() async {
         let u = await Task.detached(priority: .utility) { Storage.usage() }.value
-        let d = models.downloaded, s = models.downloadedSTT, busy = models.downloadingID
+        let d = models.downloaded, busy = models.downloadingID
         let list = await Task.detached(priority: .utility) {
-            Storage.modelFolders(downloaded: d, downloadedSTT: s).filter { f in
+            Storage.modelFolders(downloaded: d).filter { f in
                 if case .llm(let r) = f.kind, r == busy { return false }
                 return f.isOrphan && f.bytes > 1_000_000
             }

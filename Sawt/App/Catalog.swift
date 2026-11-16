@@ -94,10 +94,6 @@ enum Catalog {
     static let stts: [STTOption] = [
         STTOption(id: "apple", title: "سمع آبل",
                   subtitle: "موصى به للمكالمات: ما ياخذ ذاكرة، فيخلي مكان لنموذج أذكى", approxSize: "0 MB"),
-        STTOption(id: "small", title: "Whisper Small",
-                  subtitle: "يشتغل بدون آبل، ياخذ ذاكرة متوسطة", approxSize: "~220 MB"),
-        STTOption(id: "large-v3-v20240930_626MB", title: "Whisper Large v3 Turbo",
-                  subtitle: "أفضل فهم للعربي لكنه ثقيل ويسخّن", approxSize: "~630 MB"),
     ]
 
     /// الأصوات المدمجة. يُتجاهل أي صوت ملفاته غير موجودة في الحزمة.
@@ -247,7 +243,21 @@ final class AppSettings: ObservableObject {
             d.set(true, forKey: "migratedLightDefaults")
             d.removeObject(forKey: "sttID")
         }
-        sttID = d.string(forKey: "sttID") ?? Catalog.stts[0].id
+        // Whisper انشال: سمع آبل هو السمع الوحيد، وملفات Whisper القديمة تنحذف مرة وحدة
+        d.set("apple", forKey: "sttID")
+        d.removeObject(forKey: "downloadedSTT")
+        if !d.bool(forKey: "whisperFilesCleaned") {
+            Task.detached(priority: .utility) {
+                let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                let hf = docs.appendingPathComponent("huggingface", isDirectory: true)
+                if FileManager.default.fileExists(atPath: hf.path) {
+                    try? FileManager.default.removeItem(at: hf)
+                    slog("stt: removed retired Whisper files")
+                }
+                UserDefaults.standard.set(true, forKey: "whisperFilesCleaned")
+            }
+        }
+        sttID = "apple"
         voiceID = d.string(forKey: "voiceID") ?? (Catalog.voices.first?.id ?? "apple")
         speechRate = d.object(forKey: "speechRate") as? Double ?? 1.0
         language = d.string(forKey: "language") ?? "auto"

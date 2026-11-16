@@ -19,14 +19,12 @@ final class ModelManager: ObservableObject {
     @Published var voiceReady = false
     /// النماذج اللي نزلت كاملة.
     @Published var downloaded: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "downloadedLLMs") ?? [])
-    @Published var downloadedSTT: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "downloadedSTT") ?? [])
     /// النموذج اللي ينزل الحين.
     @Published var downloadingID: String? { didSet { refreshDownloadFlag() } }
-    private var sttDownloading = false { didSet { refreshDownloadFlag() } }
 
     /// فيه تنزيل شغال (نموذج لغوي أو سمع أو نماء): مسح الكاش ما يلمس الملفات المؤقتة.
     func refreshDownloadFlag() {
-        let active = downloadingID != nil || sttDownloading || NamaaVoice.shared.isBusy
+        let active = downloadingID != nil || NamaaVoice.shared.isBusy
         if Storage.downloadActive && !active {
             // خلص تنزيل: نتأكد ملفاته برا النسخ الاحتياطي
             Task.detached(priority: .utility) { Storage.excludeModelsFromBackup() }
@@ -62,14 +60,9 @@ final class ModelManager: ObservableObject {
             return "نموذج المحادثة مو محمّل. افتح الدردشة أو جرّب مرة ثانية."
         }
         if !stt.isReady {
-            let sid = AppSettings.shared.sttID
-            let name = Catalog.stts.first { $0.id == sid }?.title ?? sid
-            if stt.isBusy { return "نموذج السمع (\(name)) للحين يتجهز، لحظات." }
-            if case .failed(let m) = stt { return "نموذج السمع (\(name)) ما اشتغل: \(m)" }
-            if sid != "apple", !downloadedSTT.contains(sid) {
-                return "نموذج السمع (\(name)) مو منزّل. نزّله من الإعدادات ← النماذج."
-            }
-            return "نموذج السمع (\(name)) مو جاهز، جرّب مرة ثانية."
+            if stt.isBusy { return "سمع آبل للحين يتجهز، لحظات." }
+            if case .failed(let m) = stt { return "سمع آبل ما اشتغل: \(m)" }
+            return "سمع آبل مو جاهز، جرّب مرة ثانية."
         }
         return nil
     }
@@ -90,10 +83,7 @@ final class ModelManager: ObservableObject {
             } else if llm == .idle, downloaded.contains(AppSettings.shared.llmID) {
                 await activate(AppSettings.shared.llm).value
             }
-            let sid = AppSettings.shared.sttID
-            if stt == .idle, sid == "apple" || downloadedSTT.contains(sid) {
-                await loadSTT().value
-            }
+            if stt == .idle { await loadSTT().value }
         }
     }
 
@@ -270,34 +260,21 @@ final class ModelManager: ObservableObject {
         UserDefaults.standard.set(Array(downloaded), forKey: "downloadedLLMs")
     }
 
-    func deleteSTT(_ variant: String) {
-        guard variant != "apple" else { return }
-        if AppSettings.shared.sttID == variant {
-            sttTask?.cancel(); sttToken += 1; stt = .idle
-            Task { await SpeechRecognizer.shared.unload() }
-        }
-        Storage.deleteWhisper(variant)
-        downloadedSTT.remove(variant)
-        UserDefaults.standard.set(Array(downloadedSTT), forKey: "downloadedSTT")
-    }
-
     /// يحذف مجلد معيّن من شاشة الملفات.
     func deleteFolder(_ f: Storage.ModelFolder) {
         switch f.kind {
         case .llm(let repo):
             if let opt = Catalog.llms.first(where: { $0.id == repo }) { delete(opt) } else { Storage.remove(f) }
-        case .whisper(let v):
-            if downloadedSTT.contains(v) { deleteSTT(v) }
         }
         Storage.remove(f)
     }
 
     /// المجلدات الناقصة أو المهجورة (لتنبيه التنظيف عند الفتح).
     func orphanFolders() async -> [Storage.ModelFolder] {
-        let d = downloaded, s = downloadedSTT
+        let d = downloaded
         let busy = downloadingID
         return await Task.detached(priority: .utility) {
-            Storage.modelFolders(downloaded: d, downloadedSTT: s).filter { f in
+            Storage.modelFolders(downloaded: d).filter { f in
                 if case .llm(let r) = f.kind, r == busy { return false }
                 return f.isOrphan && f.bytes > 1_000_000 && !Storage.isDismissed(f)
             }
@@ -306,52 +283,21 @@ final class ModelManager: ObservableObject {
 
     func deleteAllModels() {
         llmTask?.cancel(); llmToken += 1; llm = .idle; downloadingID = nil
-        Task { await LLMService.shared.unload(); await SpeechRecognizer.shared.unload() }
-        if AppSettings.shared.sttID != "apple" { sttTask?.cancel(); sttToken += 1; stt = .idle }
+        Task { await LLMService.shared.unload() }
         Storage.deleteAllModels()
-        downloaded.removeAll(); downloadedSTT.removeAll()
+        downloaded.removeAll()
         UserDefaults.standard.set([String](), forKey: "downloadedLLMs")
-        UserDefaults.standard.set([String](), forKey: "downloadedSTT")
     }
 
     @discardableResult
     func loadSTT() -> Task<Void, Never> {
-        let variant = AppSettings.shared.sttID
         sttTask?.cancel()
         sttToken += 1
         let token = sttToken
-        stt = downloadedSTT.contains(variant) ? .preparing : .loading(0)
-        sttDownloading = !downloadedSTT.contains(variant)
-        let sttNeedsNet = variant != "apple" && Storage.whisperModelDir(variant) == nil
+        stt = .preparing
         sttTask = Task {
-            defer { if sttToken == token { sttDownloading = false } }
-            if sttNeedsNet, let why = Storage.spaceProblem(forGB: 0.7) {
-                if sttToken == token { stt = .failed(why) }
-                return
-            }
-            if sttNeedsNet {
-                let ok = await NetworkGate.shared.permit("تنزيل نموذج السمع")
-                guard sttToken == token, !Task.isCancelled else { return }
-                guard ok else { stt = .failed("الإنترنت مقفول، فما نزّلت نموذج السمع."); return }
-            }
             do {
-                try await withTimeout(seconds: 1_800, what: "نموذج السمع") {
-                    try await SpeechRecognizer.shared.load(variant: variant) { p, preparing in
-                        Task { @MainActor in
-                            let mm = ModelManager.shared
-                            guard mm.sttToken == token else { return }
-                            if preparing {
-                                if !mm.downloadedSTT.contains(variant) {
-                                    mm.downloadedSTT.insert(variant)
-                                    UserDefaults.standard.set(Array(mm.downloadedSTT), forKey: "downloadedSTT")
-                                }
-                                mm.stt = .preparing
-                            } else if mm.stt != .preparing {
-                                mm.stt = .loading(p)
-                            }
-                        }
-                    }
-                }
+                try await SpeechRecognizer.shared.load()
                 guard sttToken == token else { return }
                 stt = .ready
             } catch {

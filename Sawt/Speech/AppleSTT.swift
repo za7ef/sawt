@@ -20,7 +20,7 @@ enum AppleSTT {
     /// رسالة إذا سمع آبل مختار بس ما يقدر يشتغل على الجهاز وما فيه إذن للإنترنت.
     static var blockedReason: String? {
         guard AppSettings.shared.sttID == "apple", !supportsOnDevice, !serverAllowed else { return nil }
-        return "جوالك ما يدعم سمع آبل للعربي على الجهاز. من الإعدادات اسمح له يستخدم الإنترنت، أو نزّل Whisper من شاشة النماذج."
+        return "جوالك ما يدعم سمع آبل للعربي على الجهاز. من الإعدادات اسمح له يستخدم الإنترنت."
     }
 
     static var supportsOnDevice: Bool { recognizer("ar")?.supportsOnDeviceRecognition ?? false }
@@ -28,10 +28,10 @@ enum AppleSTT {
     /// يحوّل مقطع صوت 16 كيلوهرتز لنص.
     static func transcribe(_ samples: [Float], language: String?) async throws -> (text: String, language: String) {
         guard let rec = recognizer(language), rec.isAvailable else {
-            throw SawtError.failed("تمييز الكلام من آبل مو متاح على جهازك. اختر Whisper من شاشة النماذج.")
+            throw SawtError.failed("تمييز الكلام من آبل مو متاح على جهازك.")
         }
         guard rec.supportsOnDeviceRecognition || AppleSTT.serverAllowed else {
-            throw SawtError.failed("سمع آبل يحتاج يرسل صوتك لآبل على هالجوال. اسمح له من الإعدادات أو اختر Whisper.")
+            throw SawtError.failed("سمع آبل يحتاج يرسل صوتك لآبل على هالجوال. اسمح له من الإعدادات.")
         }
         guard let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false),
               let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(samples.count)) else {
