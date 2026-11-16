@@ -89,6 +89,8 @@ struct VoiceSettingsPage: View {
     @AppStorage("showCallDebug") private var showCallDebug = false
     @AppStorage("allowAppleServerSTT") private var allowAppleServer = false
     @ObservedObject private var namaa = NamaaVoice.shared
+    @ObservedObject private var audar = AudarVoice.shared
+    @State private var confirmAudarDelete = false
     /// خطوات توليد نماء: أقل = أسرع وجودة أقل. "جرّب" يستخدم نفس الاختيار عشان تقارن بأذنك
     @AppStorage("namaaSteps") private var namaaSteps = 7
     @ObservedObject private var voiceDL = VoiceDownloads.shared
@@ -132,6 +134,7 @@ struct VoiceSettingsPage: View {
                         downloadRow(item)
                     }
                     namaaDownloadRow
+                    audarDownloadRow
                 } header: {
                     Text("أصوات للتنزيل")
                 } footer: {
@@ -177,6 +180,14 @@ struct VoiceSettingsPage: View {
                 }
 
                 Section {
+                    audarRow
+                } header: {
+                    Text("متقدم: أودار")
+                } footer: {
+                    Text("ستة أصوات من نموذج واحد، وأقوى شي باللهجة الخليجية. «جرّب» يستخدم صوت أودار المختار، أو الأول لو مختار صوت ثاني.")
+                }
+
+                Section {
                     namaaRow
                 } header: {
                     Text("متقدم: نماء (تجريبي)")
@@ -192,6 +203,9 @@ struct VoiceSettingsPage: View {
         }
         .confirmationDialog("تحذف صوت نماء؟", isPresented: $confirmNamaaDelete, titleVisibility: .visible) {
             Button("حذف", role: .destructive) { namaa.delete(); models.voiceChanged() }
+        }
+        .confirmationDialog("تحذف أصوات أودار؟", isPresented: $confirmAudarDelete, titleVisibility: .visible) {
+            Button("حذف", role: .destructive) { audar.delete(); models.voiceChanged() }
         }
         .navigationTitle("الصوت والمكالمة")
         .navigationBarTitleDisplayMode(.inline)
@@ -256,6 +270,56 @@ struct VoiceSettingsPage: View {
             case .notDownloaded, .failed:
                 Button("تنزيل") { namaa.download() }.buttonStyle(.borderless)
             }
+        }
+    }
+
+    /// أودار في قائمة التنزيلات: الحالة + تنزيل/إلغاء/حذف
+    @ViewBuilder private var audarDownloadRow: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("أودار (٦ أصوات)")
+                switch audar.state {
+                case .downloading(let p):
+                    ProgressView(value: p).frame(maxWidth: 160)
+                case .failed(let m):
+                    Text("ما كمل: \(m)").font(.caption).foregroundStyle(.red)
+                case .ready:
+                    Text("نازل على جوالك").font(.caption).foregroundStyle(.secondary)
+                case .notDownloaded:
+                    Text("~840 MB • عربي (فصحى وخليجي) وإنجليزي").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            switch audar.state {
+            case .ready:
+                Button(role: .destructive) { confirmAudarDelete = true } label: { Image(systemName: "trash") }
+                    .buttonStyle(.borderless)
+            case .downloading:
+                Button("إلغاء", role: .cancel) { audar.cancel() }.buttonStyle(.borderless)
+            case .notDownloaded, .failed:
+                Button("تنزيل") { audar.download() }.buttonStyle(.borderless)
+            }
+        }
+    }
+
+    /// متقدم: تجربة أودار مع الوقت والسرعة
+    @ViewBuilder private var audarRow: some View {
+        if case .ready = audar.state {
+            Button {
+                audar.test()
+            } label: {
+                HStack {
+                    Label("جرّب", systemImage: "play.circle")
+                    Spacer()
+                    if audar.testing { ProgressView() }
+                }
+            }
+            .disabled(audar.testing)
+            if let r = audar.lastTest {
+                Text(r).font(.caption).foregroundStyle(.secondary)
+            }
+        } else {
+            Text("نزّله من «أصوات للتنزيل» فوق.").foregroundStyle(.secondary)
         }
     }
 

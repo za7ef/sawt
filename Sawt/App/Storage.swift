@@ -14,7 +14,7 @@ enum Storage {
         var dirs: [URL] = []
         for d in [FileManager.SearchPathDirectory.documentDirectory, .applicationSupportDirectory, .cachesDirectory] {
             guard let base = fm.urls(for: d, in: .userDomainMask).first else { continue }
-            for name in ["huggingface", "models", "Namaa"] {
+            for name in ["huggingface", "models", "Namaa", "Audar"] {
                 dirs.append(base.appendingPathComponent(name))
             }
         }

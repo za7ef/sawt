@@ -61,6 +61,7 @@ final class SpeechSynth {
     func unload() {
         queue.async { self.sherpa = nil; self.loadedVoice = nil; self.fallback = nil; self.fallbackID = nil }
         NamaaEngine.shared.unload()
+        Task { await AudarEngine.shared.unload() }
     }
 
     private func load(_ voice: VoiceOption) {
@@ -70,7 +71,7 @@ final class SpeechSynth {
         guard let root = Catalog.voicesRoot else { slog("tts: voices folder missing → retry next time"); return }
         let dir = Catalog.voiceDir(voice.folder)
         let espeak = root.appendingPathComponent("espeak-ng-data").path
-        if voice.kind != .apple, voice.kind != .namaa, !FileManager.default.fileExists(atPath: dir.appendingPathComponent("tokens.txt").path) {
+        if voice.kind != .apple, voice.kind != .namaa, !voice.isAudar, !FileManager.default.fileExists(atPath: dir.appendingPathComponent("tokens.txt").path) {
             slog("tts: \(voice.id) files missing → retry next time"); return
         }
         // خيطين بس عشان ما يسخن الجوال ويخلي المعالج للنموذج اللغوي
@@ -83,6 +84,11 @@ final class SpeechSynth {
         case .namaa:
             // نحمّله مع تجهيز المكالمة بدل أول جملة
             NamaaEngine.shared.preload()
+            loadedVoice = voice.id
+            return
+        case .audar(let key):
+            // نحمّله ونعالج المرجع مع تجهيز المكالمة بدل أول جملة
+            Task.detached(priority: .userInitiated) { await AudarEngine.shared.preload(voice: key) }
             loadedVoice = voice.id
             return
         case .piper(let onnx):
@@ -115,7 +121,8 @@ final class SpeechSynth {
         guard !clean.isEmpty else { return ([], 24_000) }
         let arabic = TextCleaner.hasArabic(clean)
         // الأصوات العربية ما تقرأ الإنجليزي زين، فالجمل الإنجليزية تروح لصوت آبل.
-        if voice.kind == .apple || !arabic {
+        // أودار يتكلم إنجليزي كمان، فيقرأ الجملتين بنفس الصوت
+        if voice.kind == .apple || (!arabic && !voice.isAudar) {
             return await apple.synthesize(clean, language: arabic ? "ar-SA" : "en-US", rate: rate)
         }
         if voice.kind == .namaa {
@@ -127,6 +134,16 @@ final class SpeechSynth {
                 let again = await NamaaEngine.shared.synthesize(clean, speed: rate, steps: later ? min(NamaaEngine.chosenSteps, 6) : nil)
                 if again.isEmpty { slog("tts: namaa failed twice, sentence skipped") }
                 return (again, 24_000)
+            }
+            return (s, 24_000)
+        }
+        if case .audar(let key) = voice.kind {
+            // المحرك يحمّل نفسه أول مرة (ما نوقف طابور الأصوات الثانية)
+            let s = await AudarEngine.shared.synthesize(clean, voice: key)
+            if s.isEmpty, !Task.isCancelled {
+                // ما نبدّل الصوت (نفس قاعدة نماء): نعيد المحاولة مرة وحدة بس
+                slog("tts: audar gave nothing → retry once")
+                return (await AudarEngine.shared.synthesize(clean, voice: key), 24_000)
             }
             return (s, 24_000)
         }

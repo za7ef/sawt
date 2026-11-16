@@ -24,7 +24,7 @@ final class ModelManager: ObservableObject {
 
     /// فيه تنزيل شغال (نموذج لغوي أو سمع أو نماء): مسح الكاش ما يلمس الملفات المؤقتة.
     func refreshDownloadFlag() {
-        let active = downloadingID != nil || NamaaVoice.shared.isBusy
+        let active = downloadingID != nil || NamaaVoice.shared.isBusy || AudarVoice.shared.isBusy
         if Storage.downloadActive && !active {
             // خلص تنزيل: نتأكد ملفاته برا النسخ الاحتياطي
             Task.detached(priority: .utility) { Storage.excludeModelsFromBackup() }
@@ -93,7 +93,7 @@ final class ModelManager: ObservableObject {
     func unloadForBackground() async {
         // ما نفك شي وفيه مكالمة أو رد أو تنزيل شغال
         guard !AudioIO.shared.ownedByCall, !ChatStore.shared.isGenerating, downloadingID == nil,
-              !NamaaVoice.shared.isBusy else { return }
+              !NamaaVoice.shared.isBusy, !AudarVoice.shared.isBusy else { return }
         llmTask?.cancel()
         llmToken += 1
         await LLMService.shared.unload()

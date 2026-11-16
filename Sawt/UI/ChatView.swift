@@ -756,6 +756,11 @@ struct MessageRow: View, Equatable {
                                         Label("اقرأ بصوت نماء (تجريبي)", systemImage: "person.wave.2")
                                     }
                                 }
+                                if AudarVoice.isInstalled, let a = Catalog.allVoices.first(where: { $0.isAudar }) {
+                                    Button { Speaker.shared.speak(message.text, voice: AppSettings.shared.voice.isAudar ? AppSettings.shared.voice : a) } label: {
+                                        Label("اقرأ بصوت أودار", systemImage: "person.wave.2")
+                                    }
+                                }
                                 Button { UIPasteboard.general.string = message.text } label: {
                                     Label("نسخ النص", systemImage: "doc.on.doc")
                                 }
