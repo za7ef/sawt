@@ -543,6 +543,24 @@ final class PhoneAgent: ObservableObject {
         return nil
     }
 
+    /// المخطط الحقيقي للرابط (tel/sms/mailto/…)، أو nil لو نطاق مجرد أو host:port (google.com، localhost:3000، example.com:8080)
+    static func urlScheme(_ raw: String) -> String? {
+        let t = raw.trimmingCharacters(in: .whitespaces)
+        guard let r = t.range(of: "^[a-zA-Z][a-zA-Z0-9+.-]*:", options: .regularExpression) else { return nil }
+        let rest = t[r.upperBound...]
+        let head = String(t[r].dropLast()).lowercased()
+        // host:port = اسم فيه نقطة أو localhost، وبعده أرقام (tel:0501234567 يبقى مخطط tel)
+        if head.contains(".") || head == "localhost",
+           rest.range(of: "^[0-9]+([/?#]|$)", options: .regularExpression) != nil { return nil }
+        return head
+    }
+
+    /// نفس القاعدة اللي يستخدمها التأكيد: بدون مخطط = https
+    static func webURL(_ raw: String) -> URL? {
+        let t = raw.trimmingCharacters(in: .whitespaces)
+        return URL(string: urlScheme(t) == nil ? "https://\(t)" : t)
+    }
+
     static func firstJSONArray(_ s: String) -> String {
         guard let a = s.firstIndex(of: "[") else { return "[]" }
         var depth = 0
@@ -814,7 +832,7 @@ final class PhoneAgent: ObservableObject {
         if k == "type", let i = a["id"] as? Int, els.indices.contains(i), els[i].secure { return "الكتابة في خانة كلمة سر." }
         if k == "type", els.contains(where: { $0.secure }) { return "فيه خانة كلمة سر على الشاشة." }
         // روابط تتصل/ترسل مباشرة (tel/sms/mailto/facetime…) مو تصفح
-        if k == "url", let u = (a["url"] as? String)?.lowercased(), !u.hasPrefix("http://"), !u.hasPrefix("https://") {
+        if k == "url", let u = a["url"] as? String, Self.urlScheme(u).map({ $0 != "http" && $0 != "https" }) ?? false {
             return "الرابط يفتح اتصال/رسالة/تطبيق مباشرة."
         }
         // بحث: مفتاح الكيبورد «Search» ما يرسل، فما نوقف الوكيل ونسأل عن كل بحث
@@ -897,10 +915,7 @@ final class PhoneAgent: ObservableObject {
                 u = URL(string: "https://www.google.com/search?q=\(q)")
             } else if let t = a["url"] as? String {
                 // https بس للنطاق المجرد (example.com)؛ tel:/sms:/mailto: وغيرها تبقى كما هي (وتمر على التأكيد)
-                let tt = t.trimmingCharacters(in: .whitespaces)
-                let hasScheme = tt.range(of: "^[a-zA-Z][a-zA-Z0-9+.-]*:", options: .regularExpression) != nil && !tt.contains(where: { $0 == " " })
-                    && tt.range(of: "^[^/]+\\.[^/:]+:[0-9]+", options: .regularExpression) == nil
-                u = URL(string: hasScheme ? tt : "https://\(tt)")
+                u = Self.webURL(t)
             }
             guard let u else { return (false, "رابط غير صالح") }
             return await openURL(u)
