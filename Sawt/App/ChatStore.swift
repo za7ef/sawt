@@ -267,29 +267,16 @@ final class ChatStore: ObservableObject {
     }
 
     /// يبدأ مهمة على الجوال من المحادثة (فقاعة حالة + الوكيل)
-    /// مهمة وقفت لأن التشغيل على كرت الشاشة (ننتظر قرار المستخدم)
-    struct AgentGPUGate: Identifiable { let id = UUID(); let text: String; let goal: String }
-    @Published var agentGPUGate: AgentGPUGate?
-
-    /// «حوّل للمعالج ونفّذ»: نختار نموذج معالج نازل (المختار قبل لو نازل) وبعدين نبدأ المهمة
-    func switchToCPUAndRun(_ g: AgentGPUGate) {
-        let spec = GGUFSpec.active.isDownloaded ? GGUFSpec.active : GGUFSpec.all.first { $0.isDownloaded }
-        guard let spec else {
-            error = "ما فيه نموذج معالج نازل. نزّل واحد من الإعدادات ← النماذج ← المعالج، وبعدين جرّب المهمة."
-            slog("agent: switch to cpu refused (no gguf downloaded)")
-            return
-        }
-        GGUFSpec.choose(spec)
-        if PhoneAgent.pick.hasPrefix("gpu:") { UserDefaults.standard.set("", forKey: "agentModelPick") }
-        slog("agent: user switched to cpu model \(spec.id) to run task")
-        Task.detached(priority: .utility) { await LLMService.shared.warmUp(reason: "switch cpu (agent)") }
-        startPhoneTask(g.text, goal: g.goal)
-    }
-
     private func startPhoneTask(_ t: String, goal g: String) {
+        // نموذج كرت الشاشة: ما نبدأ ولا نبدّل شي؛ المستخدم يغيّر النموذج بنفسه
         if PhoneAgent.blockedByGPU, !PhoneAgent.shared.running {
-            slog("agent: gpu mode → ask user")
-            agentGPUGate = AgentGPUGate(text: t, goal: g)
+            slog("agent: gpu model selected → refused (no switch)")
+            append(Message(role: .user, text: t))
+            let why = PhoneAgent.pick.hasPrefix("gpu:")
+                ? "الوكيل ما يشتغل على نموذج كرت الشاشة. غيّر نموذج الوكيل من الإعدادات ← الوكيل لنموذج المعالج أو نموذج سحابي، وأرسل المهمة مرة ثانية."
+                : "الوكيل ما يشتغل على نموذج كرت الشاشة. غيّر النموذج من فوق لنموذج المعالج أو نموذج سحابي، وأرسل المهمة مرة ثانية."
+            append(Message(role: .assistant, text: why))
+            save()
             return
         }
         append(Message(role: .user, text: t))

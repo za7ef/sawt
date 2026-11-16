@@ -114,7 +114,7 @@ final class PhoneAgent: ObservableObject {
         else if running { why = "الوكيل شغّال على مهمة ثانية — قل «وقف» أول" }
         else if ImageGenerator.busy { why = "صوت يرسم صورة الحين — انتظر يخلص أو وقّفها" }
         else if !(PhoneControl.available && PhoneControl.hasPairing) { why = "التحكم بالجوال مو جاهز (اقتران/الأداة)" }
-        else if Self.blockedByGPU { why = "الوكيل ما يشتغل على كرت الشاشة (iOS يمنعه بالخلفية) — حوّل التشغيل للمعالج من الإعدادات" }
+        else if Self.blockedByGPU { why = "الوكيل ما يشتغل على كرت الشاشة (iOS يمنعه بالخلفية) — غيّر النموذج لنموذج المعالج أو نموذج سحابي" }
         else if let s = Self.cpuSpecForStep(), !s.isDownloaded { why = "نموذج المعالج (\(Self.cpuSpecForStep()?.name ?? "")) مو منزّل — نزّله من صفحة النماذج ← المعالج" }
         if why == nil, Self.pick.hasPrefix("cloud:") {
             if Self.cloud == nil { why = "ما فيه مفتاح للخدمة السحابية المختارة — حطه في «مفاتيح الخدمات»" }

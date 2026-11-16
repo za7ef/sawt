@@ -59,14 +59,6 @@ struct ChatView: View {
                               onCompletion: { url in playground.finish(url) },
                               onCancellation: { playground.finish(nil) })
         .imagePlaygroundGenerationStyle(PlaygroundStyles.selected, in: PlaygroundStyles.allowed)
-        .alert("الوكيل ما يشتغل على كرت الشاشة",
-               isPresented: Binding(get: { store.agentGPUGate != nil }, set: { if !$0 { store.agentGPUGate = nil } }),
-               presenting: store.agentGPUGate) { g in
-            Button("حوّل للمعالج ونفّذ") { store.switchToCPUAndRun(g) }
-            Button("إلغاء", role: .cancel) {}
-        } message: { _ in
-            Text("أثناء المهمة صوت يكون بالخلفية، وiOS يمنع كرت الشاشة بالخلفية.")
-        }
         .alert("المشغّل طافي — تبي أشغّله وأنفّذ المهمة؟",
                isPresented: Binding(get: { store.runnerAsk != nil }, set: { if !$0, store.runnerAsk != nil { store.answerRunnerAsk(run: false) } })) {
             Button("شغّل ونفّذ") { store.answerRunnerAsk(run: true) }
