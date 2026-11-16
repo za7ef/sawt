@@ -41,6 +41,10 @@
 - **Vocos:** تحويل الطيف لصوت. ترخيص MIT.
 - **swift-transformers و Hugging Face Hub:** تنزيل النماذج وقراءة المقطّعات. ترخيص Apache 2.0.
 - **ml-stable-diffusion** (Apple): تشغيل Stable Diffusion على الجهاز، نسخة مضمّنة بدون أجزاء SD3. ترخيص MIT.
-- **Stable Diffusion 2.1 base** (Stability AI، نسخة Apple لـCore ML): ترخيص CreativeML OpenRAIL++-M. و**SD-Turbo** (Stability AI، نسخة mozksoft المضغوطة): ترخيص Stability AI المجتمعي للاستخدام غير التجاري. الاثنين ينزلون لما تطلبهم.
+- **واقعي — CyberRealistic Final** (المصمم Cyberdelia) مدموج مع **LCM-LoRA** لـSD 1.5 (Simian Luo وزملاؤه)، نسخة LocalMuseAI لـCore ML: ترخيص CreativeML OpenRAIL-M، وLCM-LoRA بترخيص OpenRAIL++. ينزل لما تطلبه.
+- **فني — DreamShaper 8 LCM** (المصمم Lykon)، نسخة LocalMuseAI لـCore ML: ترخيص CreativeML OpenRAIL-M. ينزل لما تطلبه.
+- **SD-Turbo** (Stability AI، نسخة mozksoft المضغوطة): ترخيص Stability AI المجتمعي للاستخدام غير التجاري. ينزل لما تطلبه.
+- هالنماذج تخضع لقيود الاستخدام في تراخيصها (ممنوع استخدامها في الأذى والتضليل وغيره).
+- **مجدول LCM:** مكتوب في صوت من معادلات ورقة Latent Consistency Models ‏(arXiv:2310.04378).
 
 أسماء النماذج والشركات ملك أصحابها، وذكرها هنا للنسبة فقط.

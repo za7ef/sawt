@@ -10,6 +10,8 @@ struct ImageModelsSection: View {
     @Environment(\.supportsImagePlayground) private var supportsPlayground
     @State private var confirmDelete: ImageEngine?
     @AppStorage("imageEnhance") private var enhance = true
+    @AppStorage("sd21Retired") private var sd21Retired = false
+    @State private var confirmLegacy = false
 
     var body: some View {
         Section {
@@ -24,7 +26,12 @@ struct ImageModelsSection: View {
                      : "الوصف الإنجليزي يروح مباشرة (أسرع وبدون تحميل النموذج). العربي يترجمه نموذج المحادثة لـStable Diffusion وImage Playground لأنهم ما يفهمون عربي، وGemini ياخذه زي ما هو.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            ForEach([ImageEngine.sd21, .sdTurbo]) { sdRow($0) }
+            if sd21Retired && engineRaw.isEmpty {
+                Text("Stable Diffusion 2.1 انشال من التطبيق وصار المحرك «ما اخترت». اختر «واقعي» أو «فني» ونزّله.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            ForEach([ImageEngine.sdReal, .sdArt, .sdTurbo]) { sdRow($0) }
+            if SDModels.legacyPresent { legacyRow }
             playgroundRow
         } header: {
             Text("الصور")
@@ -35,6 +42,9 @@ struct ImageModelsSection: View {
                             titleVisibility: .visible) {
             Button("حذف", role: .destructive) { if let e = confirmDelete { sd.delete(e) }; confirmDelete = nil }
         }
+        .confirmationDialog("تحذف ملفات SD 2.1 القديمة؟", isPresented: $confirmLegacy, titleVisibility: .visible) {
+            Button("حذف", role: .destructive) { sd.deleteLegacy(); sd21Retired = false }
+        }
     }
 
     @ViewBuilder private func sdRow(_ e: ImageEngine) -> some View {
@@ -43,7 +53,7 @@ struct ImageModelsSection: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(e.title)
-                    Text(e == .sd21 ? "512×512، ٢٠ خطوة، ~1.1 GB" : "512×512، خطوتين، ~1 GB — أسرع بس جودته أقل")
+                    Text(Self.detail(e))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -67,6 +77,27 @@ struct ImageModelsSection: View {
             case .idle:
                 if installed { Text("منزّل ✓").font(.caption).foregroundStyle(.green) }
             }
+        }
+    }
+
+    private static func detail(_ e: ImageEngine) -> String {
+        switch e {
+        case .sdReal: "صور واقعية (ناس وأماكن). 512×512، ٦ خطوات، ~0.9 GB"
+        case .sdArt: "رسم وفن وخيال. 512×512، ٨ خطوات، ~1 GB"
+        default: "512×512، خطوتين، ~1 GB — أسرع بس جودته أقل"
+        }
+    }
+
+    private var legacyRow: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Stable Diffusion 2.1 (قديم)")
+                Text("انشال من التطبيق، وملفاته للحين على جوالك (~1.1 GB).")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(role: .destructive) { confirmLegacy = true } label: { Image(systemName: "trash") }
+                .buttonStyle(.borderless)
         }
     }
 

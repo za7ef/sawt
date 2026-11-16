@@ -8,13 +8,14 @@ import StableDiffusion
 
 /// محركات توليد الصور. المستخدم يختار واحد، وما نبدّل لغيره تلقائيًا أبدًا.
 enum ImageEngine: String, CaseIterable, Identifiable {
-    case sd21, sdTurbo, playground, gemini, geminiLite
+    case sdReal, sdArt, sdTurbo, playground, gemini, geminiLite
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .sd21: "Stable Diffusion 2.1"
+        case .sdReal: "واقعي — CyberRealistic"
+        case .sdArt: "فني — DreamShaper 8"
         case .sdTurbo: "سريع (تجريبي) — SD-Turbo"
         case .playground: "Image Playground"
         case .gemini: "Gemini 3.1 Flash Image"
@@ -25,13 +26,15 @@ enum ImageEngine: String, CaseIterable, Identifiable {
     /// وصف قصير يطلع في القائمة
     var tag: String {
         switch self {
-        case .sd21, .sdTurbo: "محلي"
+        case .sdReal, .sdArt, .sdTurbo: "محلي"
         case .playground: "سحابة آبل الخاصة"
         case .gemini, .geminiLite: "سحابي · مدفوع"
         }
     }
 
-    var isLocalSD: Bool { self == .sd21 || self == .sdTurbo }
+    var isLocalSD: Bool { self == .sdReal || self == .sdArt || self == .sdTurbo }
+    /// نماذج LCM (تحتاج مجدول LCM)
+    var isLCM: Bool { self == .sdReal || self == .sdArt }
     var isGemini: Bool { self == .gemini || self == .geminiLite }
 
     var geminiModel: String { self == .geminiLite ? "gemini-3.1-flash-lite-image" : "gemini-3.1-flash-image" }
@@ -40,6 +43,15 @@ enum ImageEngine: String, CaseIterable, Identifiable {
     static var selected: ImageEngine? {
         get { UserDefaults.standard.string(forKey: "imageEngine").flatMap(ImageEngine.init(rawValue:)) }
         set { UserDefaults.standard.set(newValue?.rawValue ?? "", forKey: "imageEngine") }
+    }
+
+    /// SD 2.1 انشال: لو كان مختار نخليه «ما اخترت» ونعلّم عشان نوضح السبب في الإعدادات
+    static func migrate() {
+        let d = UserDefaults.standard
+        if d.string(forKey: "imageEngine") == "sd21" {
+            d.set("", forKey: "imageEngine")
+            d.set(true, forKey: "sd21Retired")
+        }
     }
 }
 
@@ -83,7 +95,27 @@ final class SDModels: ObservableObject {
         return needed.allSatisfy { FileManager.default.fileExists(atPath: d.appendingPathComponent($0).path) }
     }
 
-    nonisolated static func approxGB(_ e: ImageEngine) -> Double { e == .sd21 ? 1.08 : 1.02 }
+    nonisolated static func approxGB(_ e: ImageEngine) -> Double {
+        switch e {
+        case .sdReal: 0.89
+        case .sdArt: 0.99
+        default: 1.02
+        }
+    }
+
+    /// ملفات SD 2.1 القديمة (انشال من القائمة): نعرض حذفها لو موجودة
+    nonisolated static var legacyDir: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ImageModels/sd21", isDirectory: true)
+    }
+    nonisolated static var legacyPresent: Bool { FileManager.default.fileExists(atPath: legacyDir.path) }
+    func deleteLegacy() {
+        try? FileManager.default.removeItem(at: Self.legacyDir)
+        try? FileManager.default.removeItem(at: Self.legacyDir.deletingLastPathComponent().appendingPathComponent("sd21.partial"))
+        UserDefaults.standard.removeObject(forKey: "sd21Retired")
+        objectWillChange.send()
+        slog("image: deleted legacy sd21")
+    }
 
     func download(_ e: ImageEngine) {
         guard e.isLocalSD, tasks[e] == nil else { return }
@@ -101,8 +133,8 @@ final class SDModels: ObservableObject {
                 var u = d.deletingLastPathComponent(); var v = URLResourceValues(); v.isExcludedFromBackup = true
                 try? u.setResourceValues(v)
                 let report: @Sendable (Double) -> Void = { p in Task { @MainActor in SDModels.shared.state[e] = .downloading(p) } }
-                if e == .sd21 {
-                    try await Self.fetchFiles(into: tmp, progress: report)
+                if let src = Self.source(e) {
+                    try await Self.fetchFiles(src, into: tmp, progress: report)
                 } else {
                     try await Self.fetchFromZip(into: tmp, progress: report)
                 }
@@ -132,20 +164,34 @@ final class SDModels: ObservableObject {
         slog("image: deleted \(e.rawValue)")
     }
 
-    // نسخة Apple الرسمية: الملفات منفصلة في المستودع
-    nonisolated private static let sd21Base = "https://huggingface.co/apple/coreml-stable-diffusion-2-1-base-palettized/resolve/main/split_einsum_v2/compiled/"
+    /// مصدر الملفات المنفصلة: الرابط الأساسي + أحجام الأوزان بالميقا (لشريط التقدم)
+    struct Source: Sendable { let base: String; let weights: [String: Double] }
+
+    // نسخ LocalMuseAI (Core ML، ‏6-bit، ‏split_einsum_v2، ‏512×512، الـUnet بدفعة 2): الملفات منفصلة في المستودع
+    nonisolated static func source(_ e: ImageEngine) -> Source? {
+        switch e {
+        case .sdReal:
+            Source(base: "https://huggingface.co/LocalMuseAI/coreml-cyberrealistic-final-lcm-6bit/resolve/main/",
+                   weights: ["TextEncoder.mlmodelc/weights/weight.bin": 140, "Unet.mlmodelc/weights/weight.bin": 645,
+                             "VAEDecoder.mlmodelc/weights/weight.bin": 99])
+        case .sdArt:
+            Source(base: "https://huggingface.co/LocalMuseAI/coreml-dreamshaper-8-lcm-6bit-v2/resolve/main/",
+                   weights: ["TextEncoder.mlmodelc/weights/weight.bin": 246, "Unet.mlmodelc/weights/weight.bin": 645,
+                             "VAEDecoder.mlmodelc/weights/weight.bin": 99])
+        default: nil
+        }
+    }
     // SD-Turbo (6-bit) موجود كملف zip بس: ناخذ الملفات اللي نحتاجها منه بطلبات Range بدون ما ننزّل الملف كامل
     nonisolated private static let turboZip = "https://huggingface.co/mozksoft/sd-turbo-coreml-q6/resolve/main/sd-turbo-coreml-q6_split_einsum_v2_compiled.zip"
 
-    nonisolated private static func fetchFiles(into d: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
+    nonisolated private static func fetchFiles(_ src: Source, into d: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
         // الأحجام التقريبية عشان شريط التقدم (الأوزان هي الثقيلة)
-        let weights: [String: Double] = ["TextEncoder.mlmodelc/weights/weight.bin": 319, "Unet.mlmodelc/weights/weight.bin": 650,
-                                         "VAEDecoder.mlmodelc/weights/weight.bin": 99]
-        let total = 1080.0
+        let weights = src.weights
+        let total = weights.values.reduce(0, +) + 2
         var done = 0.0
         for f in needed {
             try Task.checkCancellation()
-            guard let url = URL(string: sd21Base + f) else { continue }
+            guard let url = URL(string: src.base + f) else { continue }
             let w = weights[f] ?? 0.2
             let base = done
             let tmp = try await ImageModelDownloader.fetch(URLRequest(url: url)) { got, expected in
@@ -372,7 +418,7 @@ actor ImageGenerator {
         let img: CGImage
         var used = prompt
         switch engine {
-        case .sd21, .sdTurbo:
+        case .sdReal, .sdArt, .sdTurbo:
             // نص CLIP يقص بعد 77 رمز (75 + البداية والنهاية): نقص نحن عند حد كلمة عشان الوصف المعروض = المستخدم فعلًا
             used = Self.clipTrim(prompt, dir: SDModels.dir(engine))
             let neg = Self.clipTrim(negative, dir: SDModels.dir(engine))
@@ -448,20 +494,22 @@ actor ImageGenerator {
         }
         guard let p = pipeline else { throw SawtError.failed("ما تحمّل نموذج الصور") }
         var c = StableDiffusionPipeline.Configuration(prompt: prompt)
-        c.schedulerType = .dpmSolverMultistepScheduler
+        c.schedulerType = e.isLCM ? .lcmScheduler : .dpmSolverMultistepScheduler
         c.seed = UInt32.random(in: 0...UInt32.max)
         c.disableSafety = true
-        if e == .sdTurbo {
+        if e.isLCM {
+            // نماذج LCM: مجدول LCM إلزامي. الـUnet مبني لدفعة 2، فالتوجيه (CFG) ما يزيد الوقت.
+            // CyberRealistic: الناشر جرّب ٤–١٠ واقترح CFG ‏1.5. DreamShaper 8 LCM: الناشر يقترح CFG ‏~2.
+            c.stepCount = e == .sdReal ? 6 : 8
+            c.guidanceScale = e == .sdReal ? 1.5 : 2.0
+            c.negativePrompt = negative
+        } else if e == .sdTurbo {
             // DPM-Solver بخطوتين = خطوات [999, 500] من الدرجة الأولى (مثل DDIM)، وهذا يناسب نماذج الخطوات القليلة.
             // keijiro (ml-stable-diffusion لـSD-Turbo) يوصي بـ1–4 خطوات وتوجيه 1–2.
             // Turbo مدرّب بدون توجيه: 1.0 = نفس النتيجة بدون CFG (الـUnet مبني لدفعة 2 فنحتاج نمرّر الاثنين)
             c.stepCount = 2
             c.guidanceScale = Self.unetBatch(dir) == 2 ? 1.0 : 0.0
             c.negativePrompt = ""
-        } else {
-            c.stepCount = 20
-            c.guidanceScale = 7.5
-            c.negativePrompt = negative
         }
         // المعاينة الحية من تقدير الصورة النهائية في كل خطوة (مو الـlatent المزعج)
         c.useDenoisedIntermediates = true

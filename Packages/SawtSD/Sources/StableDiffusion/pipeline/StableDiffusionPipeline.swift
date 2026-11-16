@@ -15,6 +15,8 @@ public enum StableDiffusionScheduler {
     case dpmSolverMultistepScheduler
     /// Scheduler for rectified flow based multimodal diffusion transformer models
     case discreteFlowScheduler
+    /// Latent Consistency Model scheduler (Sawt addition) for LCM-distilled / LCM-LoRA models
+    case lcmScheduler
 }
 
 /// RNG compatible with StableDiffusionPipeline
@@ -235,6 +237,7 @@ public struct StableDiffusionPipeline: StableDiffusionPipelineProtocol {
             case .pndmScheduler: return PNDMScheduler(stepCount: config.stepCount)
             case .dpmSolverMultistepScheduler: return DPMSolverMultistepScheduler(stepCount: config.stepCount, timeStepSpacing: config.schedulerTimestepSpacing)
             case .discreteFlowScheduler: return DiscreteFlowScheduler(stepCount: config.stepCount, timeStepShift: config.schedulerTimestepShift)
+            case .lcmScheduler: return LCMScheduler(stepCount: config.stepCount, seed: config.seed)
             }
         }
 
