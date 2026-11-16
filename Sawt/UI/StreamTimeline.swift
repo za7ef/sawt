@@ -7,7 +7,10 @@ import SwiftUI
 /// لما يخلص الرد أو ينوقف، الرسالة النهائية تطلع كاملة على طول (هالعرض للرد الجاري بس).
 struct PacedText: View {
     let target: String
+    /// الرد خلص: نطلق آخر كلمة على طول ونبلّغ لما نلحق
+    var done = false
     var onGrow: () -> Void = {}
+    var onCaughtUp: () -> Void = {}
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private struct Reveal { let at: Int; let time: Date }
@@ -15,17 +18,26 @@ struct PacedText: View {
     @State private var reveals: [Reveal] = []
     @State private var lastLen = 0
     @State private var lastGrowth = Date()
+    // نسخة حيّة من المدخلات: مهمة .task تحتفظ بنسخة الـView وقت بدايتها، فقراءة target منها تعطي أول دفعة بس
+    @State private var latest = ""
+    @State private var finished = false
+    @State private var reported = false
 
-    private static let fade = 0.25
+    private static let fade = 0.12
 
     var body: some View {
         if reduceMotion {
             Text(Self.render(target))
                 .onChange(of: target) { onGrow() }
+                .onAppear { if done { onCaughtUp() } }
+                .onChange(of: done) { if done { onCaughtUp() } }
         } else {
             TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reveals.isEmpty)) { tl in
                 Text(styled(at: tl.date))
             }
+            .onAppear { latest = target; finished = done }
+            .onChange(of: target) { latest = target }
+            .onChange(of: done) { finished = done }
             .task {
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 45_000_000)
@@ -64,13 +76,16 @@ struct PacedText: View {
 
     /// يطلع كلمة أو أكثر حسب التراكم: يمشي بإيقاع ثابت وما يتأخر كثير عن النموذج
     private func step() {
-        let chars = Array(target)
+        let chars = Array(latest)
         let now = Date()
         if chars.count != lastLen { lastLen = chars.count; lastGrowth = now }
         if shown > chars.count { shown = chars.count; reveals = [] }
         reveals.removeAll { now.timeIntervalSince($0.time) >= Self.fade }
         let backlog = chars.count - shown
-        guard backlog > 0 else { return }
+        guard backlog > 0 else {
+            if finished, !reported, reveals.isEmpty { reported = true; onCaughtUp() }
+            return
+        }
         let words = backlog > 600 ? 8 : backlog > 300 ? 4 : backlog > 120 ? 2 : 1
         var i = shown
         var released = 0
@@ -79,7 +94,7 @@ struct PacedText: View {
             while j < chars.count, chars[j].isWhitespace { j += 1 }
             while j < chars.count, !chars[j].isWhitespace { j += 1 }
             // آخر كلمة للحين تنكتب: ننتظرها إلا لو النموذج وقف شوي
-            if j == chars.count, now.timeIntervalSince(lastGrowth) < 0.35 { break }
+            if j == chars.count, !finished, now.timeIntervalSince(lastGrowth) < 0.35 { break }
             i = j
             released += 1
         }

@@ -264,13 +264,17 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 14) {
-                    ForEach(store.current?.messages ?? []) { m in
+                    ForEach((store.current?.messages ?? []).filter { $0.id != store.pacingID }) { m in
                         MessageRow(message: m).equatable().id(m.id)
+                            .transition(m.role == .user
+                                ? .asymmetric(insertion: .offset(y: 18).combined(with: .opacity).combined(with: .scale(scale: 0.95, anchor: .bottomTrailing)),
+                                              removal: .identity)
+                                : .identity)
                     }
-                    if store.isGenerating, !store.imageGenerating {
-                        StreamingRow(live: store.live) {
+                    if store.isGenerating || store.pacingID != nil, !store.imageGenerating {
+                        StreamingRow(live: store.live, onGrow: {
                             if nearBottom { proxy.scrollTo("bottom", anchor: .bottom) } else if !hasNew { hasNew = true }
-                        }
+                        }, onCaughtUp: { store.endPacing() })
                             .id("stream")
                     }
                     Color.clear.frame(height: 8).id("bottom")
@@ -769,10 +773,29 @@ struct TypingDots: View {
     }
 }
 
+/// نقطة وحدة تتنفّس لين يوصل أول كلام من الرد
+struct ThinkingDot: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        TimelineView(.animation(paused: reduceMotion)) { ctx in
+            // دورة ~0.65 ثانية: حجم 1→1.25 وشفافية 0.6→1
+            let p = reduceMotion ? 1.0 : (1 - cos(ctx.date.timeIntervalSinceReferenceDate * 2 * .pi / 0.65)) / 2
+            Circle().fill(Theme.accent)
+                .frame(width: 9, height: 9)
+                .scaleEffect(1 + 0.25 * p)
+                .opacity(0.6 + 0.4 * p)
+                .frame(width: 14, height: 14)
+                .padding(.vertical, 6)
+        }
+        .accessibilityLabel("يكتب الرد")
+    }
+}
+
 /// الرد اللي ينكتب الحين: يراقب StreamBuffer بس، فالقائمة ما تنعاد كل كلمة.
 struct StreamingRow: View {
     @ObservedObject var live: StreamBuffer
     var onGrow: () -> Void
+    var onCaughtUp: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -784,14 +807,17 @@ struct StreamingRow: View {
                 ThinkingSection(text: live.thinking, seconds: nil, live: live.text.isEmpty)
             }
             if live.text.isEmpty {
-                if live.status == nil && live.thinking.isEmpty { TypingDots() }
+                if live.status == nil && live.thinking.isEmpty {
+                    ThinkingDot().transition(.opacity.combined(with: .scale(scale: 0.5)))
+                }
             } else {
-                PacedText(target: live.text, onGrow: onGrow)
+                PacedText(target: live.text, done: live.done, onGrow: onGrow, onCaughtUp: onCaughtUp)
                     .lineSpacing(4)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(.easeOut(duration: 0.15), value: live.text.isEmpty)
         .onChange(of: live.thinking) { onGrow() }
         .onChange(of: live.status) { onGrow() }
     }

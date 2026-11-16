@@ -82,8 +82,10 @@ final class StreamBuffer: ObservableObject {
     @Published var text = ""
     @Published var thinking = ""
     @Published var status: String?
+    /// الرد خلص والنص كامل؛ العرض يكمّل الإيقاع لين يلحق ثم تنعرض الرسالة النهائية
+    @Published var done = false
     var thinkStart: Date?
-    func reset() { text = ""; thinking = ""; status = nil; thinkStart = nil }
+    func reset() { text = ""; thinking = ""; status = nil; thinkStart = nil; done = false }
 }
 
 /// يحفظ المحادثات على الجهاز، ويدير الدردشة الكتابية.
@@ -95,6 +97,8 @@ final class ChatStore: ObservableObject {
     @Published var currentID: UUID?
     let live = StreamBuffer()
     @Published var isGenerating = false
+    /// رسالة الرد اللي للحين تنعرض بالإيقاع (مخفية من القائمة لين يلحق العرض)
+    @Published var pacingID: UUID?
     /// رسم صورة شغال (ما نعرض فقاعة الرد الجاري)
     @Published var imageGenerating = false
     @Published var error: String?
@@ -407,7 +411,9 @@ final class ChatStore: ObservableObject {
         let prevUser = recent.last(where: { $0.role == .user })?.text
         var userMsg = Message(role: .user, text: t)
         if !attachments.isEmpty { userMsg.attachments = attachments }
-        append(userMsg)
+        pacingID = nil
+        // فقاعتك تطلع من تحت بانزلاق خفيف وتلاشي
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) { append(userMsg) }
         let convID = currentID
         genConv = convID
         latestPartial = ""
@@ -561,6 +567,7 @@ final class ChatStore: ObservableObject {
                 answer = "انقطع قبل الجواب. جرّب مرة ثانية، أو اطفِ التفكير العميق لسؤال أقصر."
             }
             // لو انضغط إيقاف، stop() حفظ الجزء بنفسه بالترتيب الصح
+            var heldID: UUID?
             if !answer.isEmpty, genID == myGen {
                 // الرد يروح لنفس المحادثة حتى لو تنقّلت لغيرها، ومرة وحدة بس (حتى مع الإيقاف)
                 var reply = Message(role: .assistant, text: answer)
@@ -575,12 +582,26 @@ final class ChatStore: ObservableObject {
                 if searchedAuto { reply.autoSearch = true }
                 reply.notice = notice
                 append(reply, to: convID)
+                if !Task.isCancelled, !UIAccessibility.isReduceMotionEnabled { heldID = reply.id }
                 MemoryStore.shared.extractLater(exchanges: [(t, answer)]) { [weak self] in
                     self?.markMemorySaved(reply.id, in: convID)
                 }
             }
             if genID == myGen {
-                live.reset()
+                if let h = heldID {
+                    // الرد وصل كامل: نكمّل عرضه بنفس الإيقاع بدل ما يقفز مرة وحدة
+                    live.status = nil
+                    live.text = answer
+                    live.done = true
+                    pacingID = h
+                    Task { @MainActor [weak self] in
+                        // احتياط: لو العرض ما اشتغل (مثلًا الشاشة مو ظاهرة) ما تنحبس الرسالة
+                        try? await Task.sleep(nanoseconds: 12_000_000_000)
+                        if self?.pacingID == h { self?.endPacing() }
+                    }
+                } else {
+                    live.reset()
+                }
                 isGenerating = false
             }
             slog.stage("idle")
@@ -646,7 +667,15 @@ final class ChatStore: ObservableObject {
         SafeFile.write(conversations, to: fileURL)
     }
 
+    /// العرض لحق آخر الرد: نعرض الرسالة النهائية
+    func endPacing() {
+        guard pacingID != nil else { return }
+        pacingID = nil
+        if !isGenerating { live.reset() }
+    }
+
     func stop() {
+        pacingID = nil
         genTask?.cancel()
         genTask = nil
         if isGenerating {
@@ -692,6 +721,7 @@ final class ChatStore: ObservableObject {
         }
         genConv = conv
         latestPartial = ""
+        pacingID = nil
         isGenerating = true
         live.reset()
         genID += 1
