@@ -178,6 +178,7 @@ enum XCTBackend {
             DispatchQueue.global(qos: .utility).async { c.resume(returning: SawtXCTCloseSession()) }
         }
         slog("xct: disable failed, close session: \(closed)")
+        // الجاية تفتح جلسة جديدة داخل العملية أول؛ لو ما قرت الشاشة بعدها نعيد التشغيل (sessionDead)
         prepared = false
         generation += 1
         automation = "الإطفاء فشل (\(how.prefix(60)))؛ الجلسة: \(closed)"
@@ -254,7 +255,7 @@ enum XCTBackend {
                 DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTReopenNow()) }
             }
             slog("runner: step reopen session: \(re ?? "ok") [\(SawtXCTSessionInfo())]")
-            if let re { return "القراءة ما ترد، وفشل فتح جلسة جديدة: \(re)" }
+            if let re { sessionDead = true; return "القراءة ما ترد، وفشل فتح جلسة جديدة: \(re)" }
             automationEnabled = false  // الجلسة الجديدة تحتاج تفعيل من جديد
             if let e = await enableAutomation() { return e }
             let ax2: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
@@ -264,7 +265,8 @@ enum XCTBackend {
                 DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTWarmSystem(8)) }
             }
             slog("runner: step after reopen: ax=\(ax2 ?? "ok") warm=\(warm2 ?? "ok") \(Int(Date().timeIntervalSince(t) * 1000))ms")
-            if let warm2 { return "قراءة الشاشة ما ترد حتى بعد جلسة جديدة: \(warm2)" }
+            if let warm2 { sessionDead = true; return "قراءة الشاشة ما ترد حتى بعد جلسة جديدة: \(warm2)" }
+            sessionDead = false
         }
         return nil
     }
@@ -610,6 +612,8 @@ enum XCTBackend {
     }
 
     nonisolated(unsafe) static var readInFlight = false
+    /// انسكّرت جلسة في هذا التشغيل أو ما ترد القراءة حتى بعد جلسة جديدة
+    nonisolated(unsafe) static var sessionDead = false
     nonisolated(unsafe) static var lastReadOK = Date.distantPast
 
     /// فحص صحة سريع للجلسة (قراءة بعمق ١). لو رجع 41 نعلّمها منتهية.

@@ -186,6 +186,11 @@ final class PhoneAgent: ObservableObject {
             }
             if let e = await XCTBackend.beginTask() {
                 say("✗ \(e.prefix(200))")
+                if XCTBackend.sessionDead {
+                    finish("وقفت: \(e.prefix(120)) — صوت بيعيد التشغيل ويرجع المشغّل لحاله، بعدها أرسل المهمة مرة ثانية")
+                    Runner.relaunch(title: "صوت أعاد التشغيل عشان يقرأ الشاشة", body: "افتح صوت ويشتغل المشغّل لحاله، وأرسل المهمة مرة ثانية", turnOnNext: true)
+                    return
+                }
                 finish("وقفت: \(e.prefix(160))"); return
             }
             say("✓ الطريقة: XCTest — \(XCTBackend.sessionState)؛ وضع الأتمتة مفعّل")
@@ -1224,6 +1229,7 @@ struct PhoneAgentView: View {
     @State private var targetFrame = CGRect.zero
     @AppStorage("xctAutomation") private var xctAuto = false
     @AppStorage("phoneIntentAuto") private var intentAuto = true
+    @AppStorage("runnerCleanRelaunch") private var cleanRelaunch = true
     @State private var autoStatus = XCTBackend.sessionState
     @State private var autoBusy = false
     @State private var shareLive = false
@@ -1401,6 +1407,13 @@ struct PhoneAgentView: View {
                         try? await Task.sleep(nanoseconds: 2_000_000_000)
                     }
                 }
+                Toggle(isOn: $cleanRelaunch) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("إعادة تشغيل نظيفة عند الإيقاف")
+                        Text("لما تطفّي المشغّل يطلع صوت ويرسل لك إشعار؛ التشغيل الجاي يبدأ بجلسة جديدة تقرأ الشاشة")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 Toggle(isOn: $intentAuto) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("يفهم المهام من المحادثة تلقائيًا")
@@ -1539,6 +1552,11 @@ enum Runner {
         RunnerActivity.observe()
         if on {
             PhoneAgent.see = .xct
+            // جلسة هذا التشغيل تسكّرت/ماتت: القراءة ما ترجع إلا بعملية جديدة (مثل Poki)، فنعيد التشغيل ويرجع المشغّل لحاله
+            if XCTBackend.sessionDead {
+                relaunch(title: "صوت أعاد التشغيل عشان يقرأ الشاشة", body: "افتح صوت ويشتغل المشغّل لحاله", turnOnNext: true)
+                return "الجلسة انقفلت في هذا التشغيل؛ صوت بيعيد التشغيل ويرجع المشغّل لحاله"
+            }
             if !alive { alive = true; HostPairing.shared.keepAlive(true) }
             let busy = PhoneAgent.shared.running
             if !busy && !XCTBackend.runnerReady { RunnerActivity.show(RunnerActivity.state("prep", "يجهّز جلسة XCTest"), goal: "المشغّل") }
@@ -1554,12 +1572,46 @@ enum Runner {
             if PhoneAgent.shared.running { PhoneAgent.shared.stop() }
             await XCTBackend.disableAutomation()
             XCTBackend.stopAutomation()
+            if cleanRelaunch {
+                relaunch(title: "المشغّل انطفى", body: "افتح صوت عشان تشغّل المشغّل مرة ثانية", turnOnNext: false)
+            }
             return nil
+        }
+    }
+
+    /// إعادة تشغيل نظيفة عند الإيقاف (افتراضيًا شغّالة)
+    static var cleanRelaunch: Bool { UserDefaults.standard.object(forKey: "runnerCleanRelaunch") as? Bool ?? true }
+    private static var relaunching = false
+
+    /// مثل Poki: حالة XCTest داخل العملية (sharedSession والجهاز المحلي وعميل الوصول) تبقى مربوطة بالجلسة القديمة،
+    /// والطريق المضمون لجلسة تقرأ الشاشة هو عملية جديدة. نرسل إشعار يرجّعه، نروح للرئيسية، ونطلع.
+    static func relaunch(title: String, body: String, turnOnNext: Bool) {
+        guard !relaunching else { return }
+        relaunching = true
+        UserDefaults.standard.set(turnOnNext, forKey: "runnerWantsOn")
+        if turnOnNext { UserDefaults.standard.set(true, forKey: "xctAutomation") }
+        slog("runner: relaunch (\(title)) turnOnNext=\(turnOnNext)")
+        let c = UNMutableNotificationContent()
+        c.title = title
+        c.body = body
+        c.sound = .default
+        c.interruptionLevel = .timeSensitive
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "sawt.relaunch", content: c, trigger: nil)) { _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                UserDefaults.standard.synchronize()
+                UIApplication.shared.perform(NSSelectorFromString("suspend"))
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { exit(0) }
+            }
         }
     }
 
     /// عند فتح التطبيق: لو كان شغّال نرجّعه
     static func resume() async {
+        if UserDefaults.standard.bool(forKey: "runnerWantsOn") {
+            UserDefaults.standard.set(false, forKey: "runnerWantsOn")
+            slog("runner: turning on after relaunch")
+            await set(true); return
+        }
         if isOn && !XCTBackend.runnerReady { await set(true) }
         else if isOn && !alive {
             alive = true; HostPairing.shared.keepAlive(true)
