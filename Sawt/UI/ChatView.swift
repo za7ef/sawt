@@ -569,10 +569,10 @@ struct ChatView: View {
     }
 
     private func send() {
-        // الصورة ما تحتاج نموذج المحادثة لو الوصف إنجليزي أو التحسين طافي
+        // الصورة ما تحتاج نموذج المحادثة لو الوصف يروح مباشرة (إنجليزي، أو عربي لـGemini) والتحسين طافي
         let raw = (ComposerField.currentText().flatMap { $0.isEmpty ? nil : $0 } ?? draft).trimmingCharacters(in: .whitespacesAndNewlines)
         let isImage = pending.isEmpty && (imageMode || ImageIntent.forced(raw) || ImageIntent.verdict(raw))
-        let needsLLM = !isImage || (ImageIntent.enhance && !ImageIntent.isEnglish(ImageIntent.strip(raw)))
+        let needsLLM = !isImage || ImageIntent.needsModel(ImageIntent.strip(raw), engine: ImageEngine.selected)
         guard !needsLLM || models.llm.isReady || CloudLLM.active != nil
                 || (LLMService.onCPU && LlamaModelFile.isDownloaded) else {
             store.error = models.llm.isBusy ? "النموذج للحين يتجهز، لحظات." : "اختر نموذج ونزّله من شاشة النماذج أول."

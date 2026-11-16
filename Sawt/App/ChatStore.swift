@@ -660,9 +660,9 @@ final class ChatStore: ObservableObject {
             var reloadLLM = false
             do {
                 // ١) نموذج المحادثة يكتب وصف إنجليزي (المحركات المحلية ما تفهم عربي)
-                // الوصف الإنجليزي يروح مباشرة (بدون نموذج المحادثة: أسرع وذاكرة أقل)
+                // بدون نموذج المحادثة (أسرع وذاكرة أقل) إلا لو الوصف عربي والمحرك ما يفهمه، أو «حسّن الوصف» شغّال
                 var spec: (String, String)?
-                if ImageIntent.isEnglish(request) || !ImageIntent.enhance {
+                if !ImageIntent.needsModel(request, engine: engine) {
                     spec = (request, ImageIntent.defaultNegative)
                     slog("image: prompt direct (english=\(ImageIntent.isEnglish(request)))")
                 } else {
@@ -761,8 +761,15 @@ enum ImageIntent {
     /// أشياء على الجوال نفسه (لقطة شاشة، الصور في الاستوديو) مو رسم
     static let phoneWords = ["لقطة", "سكرين", "الاستوديو", "الألبوم", "البوم", "الكاميرا", "صورة الشاشة", "صوري", "ارسل", "أرسل"]
 
-    /// «حسّن الوصف بالنموذج» (افتراضيًا شغّال): الوصف العربي يكتبه نموذج المحادثة بالإنجليزي
-    static var enhance: Bool { UserDefaults.standard.object(forKey: "imageEnhance") as? Bool ?? true }
+    /// «حسّن الوصف بالنموذج» (افتراضيًا طافي): لو شغّال حتى الوصف الإنجليزي يمر على نموذج المحادثة ويتوسّع
+    static var enhance: Bool { UserDefaults.standard.bool(forKey: "imageEnhance") }
+
+    /// هل نحتاج نموذج المحادثة يكتب الوصف؟ العربي دايمًا لـSD وImage Playground (ما يفهمونه)، وGemini ياخذه مباشرة
+    static func needsModel(_ request: String, engine: ImageEngine?) -> Bool {
+        if enhance { return true }
+        if isEnglish(request) { return false }
+        return !(engine?.isGemini ?? false)
+    }
 
     /// أشياء نتجنبها افتراضيًا في Stable Diffusion لما الوصف يروح مباشرة
     static let defaultNegative = "blurry, low quality, lowres, distorted, deformed, bad anatomy, extra fingers, watermark, text, signature, jpeg artifacts"

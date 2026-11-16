@@ -10,7 +10,7 @@ struct ImageModelsSection: View {
     @State private var probeNote: String?
     @State private var probing = false
     @State private var confirmDelete: ImageEngine?
-    @AppStorage("imageEnhance") private var enhance = true
+    @AppStorage("imageEnhance") private var enhance = false
 
     var body: some View {
         Section {
@@ -21,9 +21,9 @@ struct ImageModelsSection: View {
             VStack(alignment: .leading, spacing: 4) {
                 Toggle("حسّن الوصف بالنموذج", isOn: $enhance)
                 Text(enhance
-                     ? "الوصف العربي يكتبه نموذج المحادثة بالإنجليزي قبل الرسم. الوصف الإنجليزي يروح مباشرة دايمًا (أسرع وبدون تحميل النموذج)."
-                     : "الوصف العربي يروح زي ما هو: Stable Diffusion وImage Playground ما يفهمون عربي، Gemini يفهمه. الإنجليزي يروح مباشرة.")
-                    .font(.caption).foregroundStyle(enhance ? Color.secondary : Color.orange)
+                     ? "كل وصف (عربي أو إنجليزي) يمر على نموذج المحادثة ويكتبه بتفاصيل أكثر قبل الرسم. أبطأ شوي ويحمّل النموذج."
+                     : "الوصف الإنجليزي يروح مباشرة (أسرع وبدون تحميل النموذج). العربي يترجمه نموذج المحادثة لـStable Diffusion وImage Playground لأنهم ما يفهمون عربي، وGemini ياخذه زي ما هو.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             ForEach([ImageEngine.sd21, .sdTurbo]) { sdRow($0) }
             playgroundRow
