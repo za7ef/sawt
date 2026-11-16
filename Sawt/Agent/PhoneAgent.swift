@@ -117,6 +117,7 @@ final class PhoneAgent: ObservableObject {
             if !running, let t = chatTarget { ChatStore.shared.updateText(t.msg, in: t.conv, "🤖 ما بديت: " + why, save: true); chatTarget = nil }
             return why
         }
+        runID &+= 1
         self.goal = g; log = []; lastResult = ""; running = true; stepNo = 0; firstRead = true
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         // يبقى صاحي لما نطلع لتطبيقات ثانية (هنا مو داخل الحلقة عشان ما يسبق finish)
@@ -153,18 +154,28 @@ final class PhoneAgent: ObservableObject {
         confirmCont?.resume(returning: yes); confirmCont = nil
     }
 
+    /// رقم المهمة الحالية: الحلقة القديمة (بعد وقف وبدء مهمة جديدة بسرعة) ما تنهي الجديدة ولا تطفّي أتمتتها
+    private var runID = 0
+
     private func finish(_ r: String) {
         guard running else { return }
+        // الحلقة الملغاة ما تنهي مهمة غيرها (stop/automationEnded ينادونها من برا الحلقة فما تكون ملغاة)
+        if Task.isCancelled { slog("agent: finish ignored from cancelled loop: \(r.prefix(80))"); return }
         running = false; lastResult = r
         updateBubble(final: true)
         unsurface()
         AgentNotify.done(r)
         HostPairing.shared.keepAlive(false)
-        if Self.see == .xct || XCTBackend.automationWanted || XCTBackend.automationEnabled { Task { await XCTBackend.endTask() } }
+        let id = runID
+        if Self.see == .xct || XCTBackend.automationWanted || XCTBackend.automationEnabled {
+            Task { @MainActor in if self.runID == id && !self.running { await XCTBackend.endTask() } }
+        }
+        try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("agent-vision.jpg"))
         slog("agent: finish \(r)")
     }
 
     private func say(_ s: String) {
+        if Task.isCancelled && !running { return }
         log.append(Step(text: s)); slog("agent: \(s.prefix(300))")
         if running { surface(s); updateBubble() }
     }
@@ -176,7 +187,8 @@ final class PhoneAgent: ObservableObject {
         let bg = BGTask("agent")
         defer { bg.end() }
         // أي خروج من الحلقة (فشل، إلغاء، رجوع مبكر بدون finish): نطفّي وضع الأتمتة
-        defer { if Self.see == .xct { Task { await XCTBackend.endTask() } } }
+        let myID = runID
+        defer { if Self.see == .xct { Task { @MainActor in if self.runID == myID && !self.running { await XCTBackend.endTask() } } } }
         // الطريقة المختارة بس، بدون رجوع لطريقة ثانية. XCTest: نشغّل وضع الأتمتة تلقائيًا وننتظره
         if Self.see == .xct {
             if !XCTBackend.runnerReady || !Runner.isOn { say("الطريقة: XCTest — أشغّل المشغّل… (دخّل رمز الجوال لو طلبه)") }
@@ -275,9 +287,10 @@ final class PhoneAgent: ObservableObject {
                     overflowed = false
                     limit = next
                     // نعيد الترتيب بسقف أصغر (مو prefix): خانة البحث والأشرطة تجي آخر القائمة وتنقص لو قصينا من الآخر
-                    let oldCount = els.count, prevHidden = Self.hiddenRows
+                    let prevHidden = Self.hiddenRows
                     els = Self.rank(els, screen: UIScreen.main.bounds, cap: limit)
-                    Self.hiddenRows += prevHidden + max(0, oldCount - els.count - Self.hiddenRows)
+                    // rank يصفّر ويعد الصفوف اللي انطوت هالمرة بس؛ نضيف اللي انطوت قبل (العناصر المقصوصة الثانية مو صفوف)
+                    Self.hiddenRows = prevHidden + Self.hiddenRows
                     screenText = Self.describe(app: app, els)
                     user = user.components(separatedBy: "الشاشة الحالية:\n")[0] + "الشاشة الحالية:\n" + screenText
                     userQ = user
@@ -302,10 +315,10 @@ final class PhoneAgent: ObservableObject {
             for action in acts {
                 guard let kind = action["action"] as? String else { continue }
                 // بعد لمس/فتح/رجوع الشاشة تغيّرت: أرقام العناصر قديمة، نوقف الدفعة ونقرأ من جديد
-                if screenChanged, kind == "tap" || kind == "done" {
+                if screenChanged, kind == "tap" || kind == "done" || kind == "longpress" || action["id"] != nil {
                     slog("agent: batch stopped (stale ids after screen change)"); break
                 }
-                if kind == "tap", !((action["id"] as? Int).map { els.indices.contains($0) } ?? false) {
+                if kind == "tap" || kind == "longpress" || action["id"] != nil, !((action["id"] as? Int).map { els.indices.contains($0) } ?? false) {
                     say("⚠️ رقم عنصر غير موجود: \(action["id"] ?? "؟")")
                     history.append("رقم غلط \(action["id"] ?? "؟") — اختر رقم من القائمة"); lastFailed = true; break
                 }
@@ -335,7 +348,7 @@ final class PhoneAgent: ObservableObject {
                 lastFailed = !r.ok
                 if !r.ok { say("⚠️ \(r.info.prefix(160))"); break }
                 if Task.isCancelled { return }
-                if ["tap", "open", "back", "home", "swipe", "url", "search"].contains(kind) {
+                if ["tap", "longpress", "open", "back", "home", "swipe", "url", "search", "enter"].contains(kind) || (kind == "type" && action["id"] != nil) {
                     screenChanged = true
                     if acts.count > 1 { try? await Task.sleep(nanoseconds: 400_000_000) }
                 }
@@ -565,9 +578,17 @@ final class PhoneAgent: ObservableObject {
         guard let a = s.firstIndex(of: "{") else { return nil }
         var depth = 0
         var end: String.Index?
+        var inStr = false, esc = false
         for i in s[a...].indices {
-            if s[i] == "{" { depth += 1 }
-            if s[i] == "}" { depth -= 1; if depth == 0 { end = i; break } }
+            let c = s[i]
+            // الأقواس داخل النصوص ما تنحسب
+            if inStr {
+                if esc { esc = false } else if c == "\\" { esc = true } else if c == "\"" { inStr = false }
+                continue
+            }
+            if c == "\"" { inStr = true; continue }
+            if c == "{" { depth += 1 }
+            if c == "}" { depth -= 1; if depth == 0 { end = i; break } }
         }
         guard let end else { return nil }
         let j = String(s[a...end])
@@ -716,12 +737,13 @@ final class PhoneAgent: ObservableObject {
         }
     }
 
-    /// إنجليزي: بداية الكلمة (send→sending, pay→payments) ؛ عربي: الجذر داخل الكلمة (يرسل/ترسل/إرسال)
+    /// إنجليزي: صيغ محددة للكلمة (send→sending, pay→payments)؛ عربي: الجذر داخل الكلمة بعد توحيد الهمزات
+    /// (يرسل/ترسل/ارسل، و«رسال» للمصدر إرسال/ارسال اللي ما فيه «رسل» متصلة)
     static let riskyEN = ["send", "delete", "remove", "pay", "buy", "purchase", "subscribe", "transfer", "call", "post",
                           "confirm", "order", "checkout", "submit", "share", "reply", "reset", "erase", "install", "uninstall",
                           "logout", "signout", "sign out", "log out", "unsubscribe", "accept", "approve"]
-    static let riskyAR = ["رسل", "حذف", "مسح", "دفع", "شراء", "اشتر", "اشترك", "تحويل", "اتصل", "اتصال", "نشر",
-                          "تأكيد", "أكد", "اكد", "طلب", "شارك", "مشارك", "رد", "تثبيت", "ثبت", "تسجيل الخروج", "خروج", "إعادة تعيين", "قبول"]
+    static let riskyAR = ["رسل", "رسال", "حذف", "مسح", "دفع", "شراء", "اشتر", "اشترك", "تحويل", "اتصل", "اتصال", "نشر",
+                          "تاكيد", "اكد", "طلب", "شارك", "مشارك", "رد", "تثبيت", "ثبت", "تسجيل الخروج", "خروج", "اعادة تعيين", "قبول"]
 
     /// صيغ محددة بس (مو أي بادئة): send/sends/sending/sent… عشان Sender/Shared/Postcards ما تنحسب
     static func inflections(_ w: String) -> Set<String> {
@@ -739,7 +761,12 @@ final class PhoneAgent: ObservableObject {
     }
 
     static func hasWord(_ text: String, _ words: [String] = []) -> Bool {
-        let low = text.lowercased()
+        // نوحّد الهمزات والتشكيل: «إرسال/أرسل/ارسال» كلها تصير «ارسال/ارسل»
+        let low = String(String.UnicodeScalarView(text.lowercased().unicodeScalars.compactMap { u -> Unicode.Scalar? in
+            if (0x064B...0x0652).contains(u.value) || u.value == 0x0640 { return nil }
+            if [0x0623, 0x0625, 0x0622].contains(u.value) { return Unicode.Scalar(0x0627) }
+            return u
+        }))
         let toks = low.components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }
         for t in toks {
             if t.unicodeScalars.first.map({ $0.value < 0x0600 }) == true {
@@ -755,10 +782,13 @@ final class PhoneAgent: ObservableObject {
 
     static func sensitive(_ a: [String: Any], _ els: [Element]) -> String? {
         let k = a["action"] as? String ?? ""
-        if k == "tap", let i = a["id"] as? Int, els.indices.contains(i) {
-            let l = els[i].label.lowercased()
-            if l.split(separator: " ").count <= 4, Self.hasWord(l) { return "خطوة حساسة (إرسال/حذف/دفع)." }
+        if k == "tap" || k == "longpress", let i = a["id"] as? Int, els.indices.contains(i) {
+            // الاسم أو القيمة (بعض الأزرار اسمها فاضي والنص في القيمة)
+            for l in [els[i].label, els[i].value] where !l.isEmpty {
+                if l.split(separator: " ").count <= 4, Self.hasWord(l) { return "خطوة حساسة (إرسال/حذف/دفع)." }
+            }
         }
+        if k == "type", let i = a["id"] as? Int, els.indices.contains(i), els[i].secure { return "الكتابة في خانة كلمة سر." }
         if k == "type", els.contains(where: { $0.secure }) { return "فيه خانة كلمة سر على الشاشة." }
         // روابط تتصل/ترسل مباشرة (tel/sms/mailto/facetime…) مو تصفح
         if k == "url", let u = (a["url"] as? String)?.lowercased(), !u.hasPrefix("http://"), !u.hasPrefix("https://") {
@@ -1107,7 +1137,7 @@ final class PhoneAgent: ObservableObject {
     /// ينفذ أمر sawtctl بنفس إعداد الاتصال حق شاشة الاختبار
     static func exec(_ op: PhoneControl.Op) async -> String {
         // XCTest مختار: اللمس والسحب والهوم وفتح التطبيق بالمعرّف عن طريقه فقط، ونتيجته ترجع كما هي (بدون رجوع لـsawtctl).
-        // الكتابة والإدخال ما لها طريقة في XCTest، فتمشي عن طريق sawtctl مثل قبل.
+        // الكتابة والإدخال كذلك عن طريق XCTest (typeText، والإدخال = "\n").
         if see == .xct, let r = await XCTBackend.handle(op, screen: UIScreen.main.bounds.size) { return r }
         let info = PhoneControl.storedInfo()
         var port: UInt16 = 0
@@ -1499,6 +1529,8 @@ enum PhoneAgentTrigger {
         let toks = String(String.UnicodeScalarView(bare)).components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }
         let s = toks.joined(separator: " ")
         guard !toks.isEmpty, toks.count <= 3 else { return false }
+        // نفي: «لا توقف»، «ما توقف»، «don't stop»
+        if toks.contains(where: { ["لا", "ما", "لاتوقف", "dont", "don", "not", "never"].contains($0) }) { return false }
         // كلمة كاملة بس (مو «موقف» ولا «stopwatch»)
         // «خلاص» لحالها ما توقف (خلاص فهمت / طيب خلاص)؛ بس «بس خلاص» كأمر كامل
         let stops: Set<String> = ["وقف", "اوقف", "أوقف", "توقف", "وقفه", "وقفها", "stop"]
@@ -1693,7 +1725,9 @@ enum RunnerActivity {
 
     static func show(_ st: AgentActivityAttributes.ContentState, goal: String) {
         idleTask?.cancel(); idleTask = nil
-        if current == nil { current = Activity<AgentActivityAttributes>.activities.first }
+        // نشاط انتهى (من النظام أو المستخدم) ما نحدّثه: نبدأ واحد جديد
+        if let a = current, a.activityState != .active && a.activityState != .stale { current = nil }
+        if current == nil { current = Activity<AgentActivityAttributes>.activities.first { $0.activityState == .active } }
         if let a = current {
             Task { await a.update(ActivityContent(state: st, staleDate: nil)) }
         } else if ActivityAuthorizationInfo().areActivitiesEnabled {

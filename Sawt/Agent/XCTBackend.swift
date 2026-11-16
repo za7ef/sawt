@@ -126,7 +126,6 @@ enum XCTBackend {
         if automationWanted { slog("xct: no auto re-enable mid-task"); return false }
         let cfg = await XCTestProbe.connectionConfig()
         if let e = await prepare(cfg: cfg, force: true) { slog("xct: reauth failed: \(e)"); return false }
-        if automationWanted, let e = await enableAutomation() { slog("xct: reauth enable failed: \(e)"); return false }
         return true
     }
 
@@ -483,7 +482,8 @@ enum XCTBackend {
     }
 
     /// أنواع حاويات نتجاهلها (نمشي على أولادها بس)
-    private static let containers: Set<Int> = [0, 1, 2, 3, 4, 19, 21, 24, 26, 32, 46, 64, 76]
+    /// Other(1) وGroup(3) مو منها: لو لها اسم نخليها (عناصر قابلة للضغط في تطبيقات كثيرة)
+    private static let containers: Set<Int> = [0, 2, 4, 19, 21, 24, 26, 32, 46, 64, 76]
 
     private static func frame(_ v: Any?) -> CGRect? {
         if let v = v as? NSValue { return v.cgRectValue }
@@ -877,13 +877,20 @@ enum XCTBackend {
     }
 
     /// ينتظر عمل async بحد زمني. nil = انتهى الوقت
+    /// يرجع أول اللي يخلص: الشغل أو المهلة. ما ننتظر الشغل لو ما يحترم الإلغاء (withTaskGroup كان ينتظر الأولاد)
     private static func withTimeout<T: Sendable>(_ seconds: Double, _ work: @escaping @Sendable () async -> T) async -> T? {
-        await withTaskGroup(of: T?.self) { g in
-            g.addTask { await work() }
-            g.addTask { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)); return nil }
-            let first = await g.next() ?? nil
-            g.cancelAll()
-            return first
+        await withCheckedContinuation { (c: CheckedContinuation<T?, Never>) in
+            let once = SawtOnce()
+            Task { let v = await work(); if once.take() { c.resume(returning: v) } }
+            Task { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)); if once.take() { c.resume(returning: nil) } }
         }
     }
+}
+
+
+/// علم «مرة وحدة» آمن بين الخيوط
+final class SawtOnce: @unchecked Sendable {
+    private var done = false
+    private let lock = NSLock()
+    func take() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true }
 }

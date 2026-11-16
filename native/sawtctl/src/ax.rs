@@ -63,6 +63,9 @@ async fn read_raw<R: AsyncRead + Unpin>(r: &mut R) -> Result<Raw, String> {
         if frag_count > 1 && frag_id == 0 {
             continue; // أول جزء من رسالة مقسّمة: هيدر بس
         }
+        // حد أعلى للطول اللي يرسله الجهاز (ما نحجز ذاكرة بلا سقف)
+        if len > 64 * 1024 * 1024 { return Err(format!("DTX length too big: {len}")) }
+        if body.len() + len > 128 * 1024 * 1024 { return Err("DTX message too big".into()) }
         let mut part = vec![0u8; len];
         r.read_exact(&mut part).await.map_err(|e| format!("read body: {e}"))?;
         body.extend_from_slice(&part);

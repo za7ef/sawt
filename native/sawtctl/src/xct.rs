@@ -112,7 +112,10 @@ pub(crate) async fn authorize(cfg: &crate::Config, pid: u32, steps: &mut Vec<Jso
         (r1.data, r2.data)
     };
     steps.push(json!({"step": "init_ctrl", "reply": short(&init_reply)}));
-    let authorized = !matches!(auth_reply, Some(Value::Boolean(false)));
+    // الرد الناجح true (أو فاضي في بعض الإصدارات)؛ false أو كائن خطأ (NSError) = رفض
+    let reply_text = short(&auth_reply);
+    let authorized = !matches!(auth_reply, Some(Value::Boolean(false)))
+        && !reply_text.contains("NSError") && !reply_text.contains("NSLocalizedDescription") && !reply_text.contains("ErrorDomain");
     steps.push(json!({"step": "authorize", "pid": pid, "reply": short(&auth_reply), "ok": authorized}));
 
     *HOLD.lock().unwrap() = Some(XctHold { _s: s, _tm: tm });
