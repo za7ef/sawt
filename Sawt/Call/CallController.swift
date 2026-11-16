@@ -701,13 +701,56 @@ final class CallController: ObservableObject {
               while !self.sentenceQueue.isEmpty {
                 if Task.isCancelled || myID != self.replyID { break }
                 var batch: [String] = [self.sentenceQueue.removeFirst()]
-                if voice.kind == .namaa, spoke > 0 {
+                // أودار كمان: الجمل القصيرة (فواصل) تنضم عشان ما تصير سكتة بين كل قطعة
+                if voice.kind == .namaa || voice.isAudar, spoke > 0 {
                     while let n = self.sentenceQueue.first, batch.joined(separator: " ").count + n.count < 140 {
                         batch.append(self.sentenceQueue.removeFirst())
                     }
                 }
                 let sentence = batch.joined(separator: " ")
                 slog.stage("call:tts")
+                if voice.isAudar {
+                    // أودار: الصوت يطلع على دفعات وهو يتولّد، وكل دفعة تنضاف للطابور فورًا
+                    var c2: AsyncStream<[Float]>.Continuation!
+                    let chunks = AsyncStream<[Float]>(bufferingPolicy: .unbounded) { c2 = $0 }
+                    let gen = Task.detached(priority: .userInitiated) { [c2] in
+                        await SpeechSynth.shared.synthesizeStream(sentence, voice: voice, rate: rate) { s, _ in c2!.yield(s) }
+                        c2!.finish()
+                    }
+                    var any = false
+                    for await chunk in chunks {
+                        if Task.isCancelled || myID != self.replyID { break }
+                        let now = Date()
+                        if self.state == .thinking {
+                            self.state = .speaking
+                            slog.stage("call:speaking")
+                            self.debug.firstAudioMs = Int(now.timeIntervalSince(self.turnStart) * 1000)
+                            slog("tts: first audio after \(self.debug.firstAudioMs)ms")
+                        } else if any || spoke > 0, now > self.playUntil.addingTimeInterval(0.05) {
+                            slog("tts: audar gap \(Int(now.timeIntervalSince(self.playUntil) * 1000))ms")
+                        }
+                        any = true
+                        self.playUntil = max(self.playUntil, now).addingTimeInterval(Double(chunk.count) / 24_000)
+                        self.audio.enqueue(samples: chunk, sampleRate: 24_000)
+                    }
+                    gen.cancel()
+                    spoke += 1
+                    if Task.isCancelled || myID != self.replyID { break }
+                    guard any else { continue }
+                    self.enqueued += 1
+                    // علامة نهاية الجملة: سكتة قصيرة (0.12 ث) بعد آخر دفعة، ومعها نحسب إن الجملة انقالت
+                    let pause = [Float](repeating: 0, count: 2_880)
+                    self.playUntil = max(self.playUntil, Date()).addingTimeInterval(0.12)
+                    self.audio.enqueue(samples: pause, sampleRate: 24_000) { [weak self] in
+                        Task { @MainActor in
+                            guard let self, myID == self.replyID else { return }
+                            self.played += 1
+                            self.spokenSoFar += (self.spokenSoFar.isEmpty ? "" : " ") + sentence
+                            self.checkReplyFinished()
+                        }
+                    }
+                    continue
+                }
                 let left = max(0, self.playUntil.timeIntervalSinceNow)
                 let audioOut = await SpeechSynth.shared.synthesize(sentence, voice: voice, rate: rate,
                                                                    later: spoke > 0, gapBudget: spoke > 0 ? left : nil)

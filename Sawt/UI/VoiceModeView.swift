@@ -30,20 +30,26 @@ struct VoiceModeView: View {
                     .contentShape(Circle())
                     .onTapGesture { call.interrupt() }
                     .accessibilityLabel("الكرة: اضغط عشان تقاطعه")
-                Group {
-                    if let st = statusText {
-                        Text(st)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .transition(.opacity)
-                    } else {
-                        Text(" ").font(.subheadline)
-                    }
+                // الحالة: نص رمادي صغير يتبدّل بتلاشي ناعم
+                ZStack {
+                    Text(statusText ?? " ")
+                        .id(statusText ?? "")
+                        .font(.footnote)
+                        .foregroundStyle(.gray)
+                        .multilineTextAlignment(.center)
+                        .transition(.opacity)
                 }
+                .frame(height: 20)
                 .padding(.top, 24)
                 .padding(.horizontal, 32)
-                .animation(.easeInOut(duration: 0.25), value: statusText)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: statusText)
+                .accessibilityElement(children: .combine)
+                CallReplyText(text: replyText, reduceMotion: reduceMotion)
+                    .frame(maxWidth: 320)
+                    .frame(height: 96)
+                    .padding(.top, 18)
+                    .padding(.horizontal, 32)
+                    .allowsHitTesting(false)
                 Spacer()
                 controls
                     .padding(.horizontal, 16)
@@ -157,16 +163,28 @@ struct VoiceModeView: View {
         .padding(.top, 8)
     }
 
-    /// نص صغير تحت الكرة بس وقت الحاجة
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// حالة المكالمة تحت الكرة
     private var statusText: String? {
         switch call.state {
         case .idle:
             if let m = models.callMissing { return models.stt.isBusy || models.llm.isBusy ? "يجهّز…" : m }
             return nil
-        case .starting: return "يتصل…"
-        case .listening: return call.muted ? "المايك مكتوم" : nil
-        case .hearing, .thinking, .speaking: return nil
+        case .starting: return "يجهّز الصوت…"
+        case .listening: return call.muted ? "المايك مكتوم" : "يستمع…"
+        case .hearing: return "يسمعك…"
+        case .thinking: return "يفكر…"
+        case .speaking: return "يتكلم…"
         }
+    }
+
+    /// نص الرد: اللي يتكتب الحين، وبعد ما يخلص الكتابة يبقى آخر رد ظاهر
+    private var replyText: String {
+        if !call.liveAI.isEmpty { return call.liveAI }
+        if call.state == .hearing || call.state == .thinking { return "" }
+        if let t = call.turns.last, t.role == .assistant { return t.text }
+        return ""
     }
 
     private func sendTyped() {
@@ -363,4 +381,44 @@ struct ActivityView: UIViewControllerRepresentable {
         UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
     func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
+}
+
+/// نص رد المساعد في المكالمة: رمادي على الأسود مباشرة (بدون خلفية ولا إطار)، ينزل تلقائيًا مع الكتابة،
+/// وأطرافه فوق وتحت تتلاشى. ما يستقبل لمس.
+struct CallReplyText: View {
+    let text: String
+    let reduceMotion: Bool
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: 22)
+                    Text(text)
+                        .font(.callout)
+                        .foregroundStyle(.gray)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Color.clear.frame(height: 22).id("end")
+                }
+            }
+            .scrollDisabled(true)
+            .onChange(of: text) { _, _ in
+                if reduceMotion { proxy.scrollTo("end", anchor: .bottom) }
+                else { withAnimation(.easeOut(duration: 0.35)) { proxy.scrollTo("end", anchor: .bottom) } }
+            }
+            .onAppear { proxy.scrollTo("end", anchor: .bottom) }
+        }
+        .mask(
+            LinearGradient(stops: [
+                .init(color: .clear, location: 0),
+                .init(color: .black, location: 0.3),
+                .init(color: .black, location: 0.75),
+                .init(color: .clear, location: 1),
+            ], startPoint: .top, endPoint: .bottom)
+        )
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: text.isEmpty)
+        .accessibilityLabel(text)
+    }
 }

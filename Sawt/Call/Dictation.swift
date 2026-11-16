@@ -124,6 +124,30 @@ final class PlaybackOnly {
         }
     }
 
+    /// يجدول بدون انتظار (ورا البفرات اللي قبله مباشرة). يرجع مهمة تخلص لما ينتهي تشغيله.
+    func schedule(_ input: [Float], rate: Double) -> Task<Void, Never>? {
+        guard !input.isEmpty else { return nil }
+        do { try prepare() } catch { slog("playback: \(error)"); return nil }
+        let samples = Self.resample(input, from: rate, to: Self.rate)
+        guard let f = format, let buf = AVAudioPCMBuffer(pcmFormat: f, frameCapacity: AVAudioFrameCount(samples.count)) else { return nil }
+        buf.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { buf.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
+        var cont: CheckedContinuation<Void, Never>?
+        let lock = NSLock()
+        var done = false
+        let t = Task {
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                lock.lock()
+                if done { lock.unlock(); c.resume() } else { cont = c; lock.unlock() }
+            }
+        }
+        player.scheduleBuffer(buf, completionCallbackType: .dataPlayedBack) { _ in
+            lock.lock(); done = true; let c = cont; cont = nil; lock.unlock()
+            c?.resume()
+        }
+        return t
+    }
+
     func stop() {
         player.stop()
         engine.pause()
@@ -155,6 +179,10 @@ final class Speaker {
         let rate = AppSettings.shared.speechRate
         guard !AudioIO.shared.ownedByCall else { return }
         let out = self.out
+        if voice.isAudar {
+            task = Task { await Self.speakStreaming(sentences, voice: voice, rate: rate, out: out) }
+            return
+        }
         task = Task {
             // نجهز الجملة الجاية وهذي تشتغل
             var next: Task<(samples: [Float], rate: Double), Never>? = sentences.first.map { s in
@@ -171,6 +199,51 @@ final class Speaker {
                 if Task.isCancelled { return }
             }
         }
+    }
+
+    /// أودار: التوليد يمشي قدّام بدون ما ينتظر التشغيل (كل الجمل ورا بعض)، والصوت يطلع على دفعات.
+    /// الجمل القصيرة تنضم لبعض (لين ~160 حرف) عشان ما تصير سكتة بين كل فاصلة وفاصلة.
+    private static func speakStreaming(_ sentences: [String], voice: VoiceOption, rate: Double, out: PlaybackOnly) async {
+        var merged: [String] = []
+        for s in sentences {
+            if let l = merged.last, l.count + s.count < 160, merged.count > 1 || l.count >= 40 {
+                merged[merged.count - 1] = l + " " + s
+            } else if let l = merged.last, merged.count == 1, l.count < 40 {
+                // أول قطعة قصيرة: نضم لها اللي بعدها بس لين ~60 حرف (البداية تبقى سريعة)
+                if l.count + s.count < 60 { merged[0] = l + " " + s } else { merged.append(s) }
+            } else {
+                merged.append(s)
+            }
+        }
+        var cont: AsyncStream<[Float]>.Continuation!
+        let chunks = AsyncStream<[Float]>(bufferingPolicy: .unbounded) { cont = $0 }
+        let start = Date()
+        let gen = Task.detached(priority: .userInitiated) { [cont] in
+            for s in merged {
+                if Task.isCancelled { break }
+                await SpeechSynth.shared.synthesizeStream(s, voice: voice, rate: rate) { samples, _ in cont!.yield(samples) }
+            }
+            cont!.finish()
+        }
+        // كل دفعة تنجدول فورًا ورا اللي قبلها (بدون فراغ بين البفرات)؛ ننتظر آخر وحدة بس
+        var playEnd = Date.distantPast
+        var last: Task<Void, Never>?
+        var gaps = 0
+        for await c in chunks {
+            if Task.isCancelled { break }
+            let now = Date()
+            if playEnd == .distantPast {
+                slog("speak: audar first audio \(Int(now.timeIntervalSince(start) * 1000))ms")
+            } else if now > playEnd.addingTimeInterval(0.05) {
+                gaps += 1
+                slog("speak: audar gap \(Int(now.timeIntervalSince(playEnd) * 1000))ms (الصوت خلص قبل الدفعة)")
+            }
+            playEnd = max(playEnd, now).addingTimeInterval(Double(c.count) / 24_000)
+            last = out.schedule(c, rate: 24_000)
+        }
+        if !Task.isCancelled { await last?.value }
+        gen.cancel()
+        slog("speak: audar done gaps=\(gaps)")
     }
 
     func stop() {

@@ -114,6 +114,36 @@ final class SpeechSynth {
         else { slog("tts: load failed \(voice.id) → retry next time") }
     }
 
+    /// مثل synthesize بس يرسل الصوت على دفعات وهو يتولّد (أودار). الأصوات الثانية ترسل دفعة وحدة.
+    /// يرجع false لو ما طلع أي صوت.
+    @discardableResult
+    func synthesizeStream(_ text: String, voice: VoiceOption, rate: Double, later: Bool = false,
+                          onChunk: @escaping @Sendable ([Float], Double) -> Void) async -> Bool {
+        guard case .audar(let key) = voice.kind else {
+            let o = await synthesize(text, voice: voice, rate: rate, later: later)
+            if !o.samples.isEmpty { onChunk(o.samples, o.rate) }
+            return !o.samples.isEmpty
+        }
+        let clean = TextCleaner.forSpeech(text)
+        guard !clean.isEmpty else { return false }
+        for attempt in 0 ..< 2 {
+            let got = Flag()
+            let r = await AudarEngine.shared.synthesizeStream(clean, voice: key) { s in got.set(); onChunk(s, 24_000) }
+            if case .failure(let e) = r { slog("audar: synth failed \(e)") }
+            if got.value || Task.isCancelled { return got.value }
+            // ما نبدّل الصوت (نفس قاعدة نماء): نعيد المحاولة مرة وحدة بس
+            if attempt == 0 { slog("tts: audar gave nothing → retry once") }
+        }
+        return false
+    }
+
+    final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var v = false
+        func set() { lock.lock(); v = true; lock.unlock() }
+        var value: Bool { lock.lock(); defer { lock.unlock() }; return v }
+    }
+
     /// يحوّل جملة لصوت. يُستدعى من أي خيط ويرجع على خيط خلفي.
     /// later: جملة بعد الأولى في المكالمة (نماء يستخدم خطوات أقل)، gapBudget: كم ثانية صوت باقية في الطابور
     func synthesize(_ text: String, voice: VoiceOption, rate: Double, later: Bool = false, gapBudget: Double? = nil) async -> (samples: [Float], rate: Double) {
@@ -137,15 +167,10 @@ final class SpeechSynth {
             }
             return (s, 24_000)
         }
-        if case .audar(let key) = voice.kind {
-            // المحرك يحمّل نفسه أول مرة (ما نوقف طابور الأصوات الثانية)
-            let s = await AudarEngine.shared.synthesize(clean, voice: key)
-            if s.isEmpty, !Task.isCancelled {
-                // ما نبدّل الصوت (نفس قاعدة نماء): نعيد المحاولة مرة وحدة بس
-                slog("tts: audar gave nothing → retry once")
-                return (await AudarEngine.shared.synthesize(clean, voice: key), 24_000)
-            }
-            return (s, 24_000)
+        if case .audar = voice.kind {
+            var all: [Float] = []
+            _ = await synthesizeStream(text, voice: voice, rate: rate) { s, _ in all += s }
+            return (all, 24_000)
         }
         return await withCheckedContinuation { cont in
             queue.async {
