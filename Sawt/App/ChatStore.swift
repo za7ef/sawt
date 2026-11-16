@@ -271,11 +271,17 @@ final class ChatStore: ObservableObject {
     struct AgentGPUGate: Identifiable { let id = UUID(); let text: String; let goal: String }
     @Published var agentGPUGate: AgentGPUGate?
 
-    /// «حوّل للمعالج ونفّذ»: التشغيل للمعالج (ووكيل بنموذج كرت شاشة يرجع «تلقائي») وبعدين نبدأ المهمة
+    /// «حوّل للمعالج ونفّذ»: نختار نموذج معالج نازل (المختار قبل لو نازل) وبعدين نبدأ المهمة
     func switchToCPUAndRun(_ g: AgentGPUGate) {
-        UserDefaults.standard.set("cpu", forKey: "llmDevice")
+        let spec = GGUFSpec.active.isDownloaded ? GGUFSpec.active : GGUFSpec.all.first { $0.isDownloaded }
+        guard let spec else {
+            error = "ما فيه نموذج معالج نازل. نزّل واحد من الإعدادات ← النماذج ← المعالج، وبعدين جرّب المهمة."
+            slog("agent: switch to cpu refused (no gguf downloaded)")
+            return
+        }
+        GGUFSpec.choose(spec)
         if PhoneAgent.pick.hasPrefix("gpu:") { UserDefaults.standard.set("", forKey: "agentModelPick") }
-        slog("agent: user switched llmDevice=cpu to run task")
+        slog("agent: user switched to cpu model \(spec.id) to run task")
         Task.detached(priority: .utility) { await LLMService.shared.warmUp(reason: "switch cpu (agent)") }
         startPhoneTask(g.text, goal: g.goal)
     }

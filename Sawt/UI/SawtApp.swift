@@ -43,6 +43,7 @@ struct SawtApp: App {
         if #available(iOS 26.0, *) {
             slog("bg: continued-processing gpu=\(BGTaskScheduler.supportedResources.contains(.gpu)) llmDevice=\(ComputeMode.current)")
         }
+        ComputeMode.migrate()
         let l = Log.shared
         // لو طاح في التوليد والنموذج على المعالج: نرجّع كرت الشاشة عشان ما يتكرر الكراش
         if l.previousRunCrashed, l.previousStage.contains("llm"), !l.previousStage.contains("llm:load"), (UserDefaults.standard.string(forKey: "llmDevice") ?? "gpu") != "gpu" {

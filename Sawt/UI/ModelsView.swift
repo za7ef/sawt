@@ -6,6 +6,8 @@ struct ModelsView: View {
     @Environment(\.dismiss) private var dismiss
     /// داخل الإعدادات (بدون NavigationStack وزر «تم»)
     var embedded = false
+    @AppStorage("llmDevice") private var device = "gpu"
+    @AppStorage("cloudActive") private var cloudRaw = ""
     @State private var customRepo = ""
     @State private var refresh = 0
     @State private var confirmDelete: LLMOption?
@@ -27,8 +29,6 @@ struct ModelsView: View {
 
     private var content: some View {
             List {
-                RunModeSection()
-
                 Section {
                     Picker("اعرض", selection: $tab) {
                         Text("كرت الشاشة").tag("gpu")
@@ -48,8 +48,9 @@ struct ModelsView: View {
                     } header: {
                         Text("نماذج المعالج")
                     } footer: {
-                        Text("يشتغل على «المعالج» أو «تلقائي» بالخلفية: أبطأ لكنه يكمّل بالخلفية.")
+                        Text("أبطأ من كرت الشاشة لكنه يكمّل بالخلفية، ويشتغل عليه الوكيل.")
                     }
+                    if GGUFSpec.all.contains(where: { $0.isDownloaded }) { CPUTestsSection() }
                 } else {
                 Section {
                     ForEach(Catalog.builtInLLMs) { row($0) }
@@ -175,7 +176,7 @@ struct ModelsView: View {
     }
 
     @ViewBuilder private func row(_ m: LLMOption) -> some View {
-        let active = settings.llmID == m.id
+        let active = settings.llmID == m.id && device != "cpu" && cloudRaw.isEmpty
         let isDown = models.downloaded.contains(m.id)
         let downloading = models.downloadingID == m.id
         let tooBig = m.ramGB > 0 && m.ramGB > ramGB * 0.55
@@ -222,7 +223,11 @@ struct ModelsView: View {
                 if downloading {
                     Button("إيقاف مؤقت") { models.pauseDownload() }.buttonStyle(.glass)
                 } else if !(active && (models.llm.isReady || models.llm == .preparing)) {
-                    Button(isDown ? "تشغيل" : "تنزيل وتشغيل") { models.activate(m) }
+                    Button(isDown ? "تشغيل" : "تنزيل وتشغيل") {
+                        CloudLLM.setActive(nil)
+                        ComputeMode.set("gpu")
+                        models.activate(m)
+                    }
                         .buttonStyle(.glassProminent)
                 }
                 if isDown || m.custom {
@@ -300,6 +305,8 @@ struct CPUModelRow: View {
     let ramGB: Double
     @ObservedObject private var dl: LlamaDownloader
     @AppStorage("cpuModel") private var activeID = GGUFSpec.active.id
+    @AppStorage("llmDevice") private var device = "gpu"
+    @AppStorage("cloudActive") private var cloudRaw = ""
     @State private var confirmDelete = false
 
     init(spec: GGUFSpec, ramGB: Double) {
@@ -309,7 +316,7 @@ struct CPUModelRow: View {
     }
 
     var body: some View {
-        let active = activeID == spec.id
+        let active = activeID == spec.id && device == "cpu" && cloudRaw.isEmpty
         let fits = spec.ramGB <= ramGB * 0.55
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -353,7 +360,7 @@ struct CPUModelRow: View {
                     Button("تنزيل وتشغيل") { dl.activateWhenDone = true; dl.start() }
                         .buttonStyle(.glassProminent)
                 } else if !active {
-                    Button("تشغيل") { GGUFSpec.setActive(spec); activeID = spec.id }
+                    Button("تشغيل") { GGUFSpec.choose(spec) }
                         .buttonStyle(.glassProminent)
                 }
                 if dl.downloaded {

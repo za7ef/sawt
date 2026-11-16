@@ -231,17 +231,14 @@ struct ChatView: View {
     /// كرت الشاشة: نطفي السحابي، ونرجع الإعداد لكرت الشاشة لو كان «المعالج» («تلقائي» يبقى)
     private func pickGPU(_ m: LLMOption) {
         CloudLLM.setActive(nil)
-        if ComputeMode.current == "cpu" { UserDefaults.standard.set("gpu", forKey: "llmDevice"); slog("chat: menu → gpu") }
+        ComputeMode.set("gpu")
         models.activate(m)
         cloudTick += 1
     }
 
     /// المعالج: نطفي السحابي، ونختار نموذج المعالج ونحوّل الإعداد للمعالج
     private func pickCPU(_ s: GGUFSpec) {
-        CloudLLM.setActive(nil)
-        GGUFSpec.setActive(s)
-        UserDefaults.standard.set("cpu", forKey: "llmDevice")
-        slog("chat: menu → cpu \(s.id)")
+        GGUFSpec.choose(s)
         cloudTick += 1
     }
 

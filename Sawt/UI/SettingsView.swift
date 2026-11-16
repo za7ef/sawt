@@ -45,7 +45,7 @@ struct SettingsView: View {
 
     private var modelSummary: String {
         if let c = CloudLLM.active { return "سحابي: \(c.title)" }
-        let dev = llmDevice == "cpu" ? "المعالج" : llmDevice == "auto" ? "تلقائي" : "كرت الشاشة"
+        let dev = llmDevice == "cpu" ? "المعالج" : "كرت الشاشة"
         let name = llmDevice == "cpu" ? GGUFSpec.active.name : (Catalog.llms.first { $0.id == settings.llmID }?.title ?? "")
         return name.isEmpty ? dev : "\(name) • \(dev)"
     }
@@ -288,80 +288,29 @@ struct VoiceSettingsPage: View {
 
 }
 
-// MARK: - طريقة التشغيل (أعلى صفحة النماذج)
+// MARK: - اختبارات المعالج (تبويب المعالج في النماذج)
 
-struct RunModeSection: View {
-    @AppStorage("llmDevice") private var llmDevice = "gpu"
-    @ObservedObject private var llamaDL = LlamaDownloader.shared
-    @State private var cpuWarn = false
+struct CPUTestsSection: View {
     @State private var cpuTest: String?
 
     var body: some View {
-                Section {
-                    Picker("تشغيل النموذج", selection: $llmDevice) {
-                        Text("كرت الشاشة").tag("gpu")
-                        Text("المعالج").tag("cpu")
-                        Text("تلقائي").tag("auto")
-                    }
-                    .pickerStyle(.segmented)
-                    .alert("المعالج", isPresented: $cpuWarn) {
-                        Button("تمام", role: .cancel) {}
-                    } message: {
-                        Text("يشتغل بالخلفية لكن أبطأ من كرت الشاشة.")
-                    }
-                    .onChange(of: llmDevice) { _, v in
-                        Task.detached(priority: .utility) { await LLMService.shared.warmUp(reason: "switch \(v)") }
-                        slog("settings: llmDevice=\(v)")
-                        if v == "cpu" { cpuWarn = true }
-                        if v != "gpu" {
-                            cpuTest = "يختبر المعالج…"
-                            Task {
-                                let r = await LLMService.shared.cpuSelfTest()
-                                cpuTest = r.ok ? "المعالج يشتغل (\(r.info))" : "المعالج ما اشتغل: \(r.info)"
-                                if !r.ok && r.info != "نموذج المعالج مو منزّل" { llmDevice = "gpu" }
-                            }
-                        }
-                    }
-                    if llmDevice != "gpu" {
-                        if llamaDL.downloaded {
-                            HStack {
-                                Text("\(LlamaModelFile.spec.name) جاهز (\(LlamaModelFile.sizeText))")
-                                Spacer()
-                                Button("احذف", role: .destructive) { llamaDL.delete() }.buttonStyle(.borderless)
-                            }
-                        } else if llamaDL.running {
-                            ProgressView(value: llamaDL.progress) { Text("ينزّل نموذج المعالج… \(Int(llamaDL.progress * 100))٪") }
-                            Button("إلغاء", role: .destructive) { llamaDL.cancel() }
-                        } else {
-                            Button("نزّل \(LlamaModelFile.spec.name) (\(LlamaModelFile.sizeText))") { llamaDL.start() }
-                            Text("المتوفر: \(ByteCountFormatter.string(fromByteCount: LlamaModelFile.freeBytes, countStyle: .file))").font(.footnote).foregroundStyle(.secondary)
-                        }
-                        if !llamaDL.message.isEmpty { Text(llamaDL.message).font(.footnote) }
-                    }
-                } header: {
-                    Text("التشغيل")
-                } footer: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("كرت الشاشة أسرع، والمعالج يكمّل بالخلفية. تلقائي: كرت الشاشة قدّام والمعالج بالخلفية.")
-                        if let cpuTest { Text(cpuTest).foregroundStyle(cpuTest.contains("ما اشتغل") ? .red : .secondary) }
-                    }
+        Section {
+            Button("اختبر المعالج") {
+                cpuTest = "يختبر المعالج…"
+                Task {
+                    let r = await LLMService.shared.cpuSelfTest()
+                    cpuTest = r.ok ? "المعالج يشتغل (\(r.info))" : "المعالج ما اشتغل: \(r.info)"
                 }
-
-                if llmDevice != "gpu" {
-                    Section("متقدم") {
-                        Button("اختبر المعالج") {
-                        cpuTest = "يختبر المعالج…"
-                        Task {
-                            let r = await LLMService.shared.cpuSelfTest()
-                            cpuTest = r.ok ? "المعالج يشتغل (\(r.info))" : "المعالج ما اشتغل: \(r.info)"
-                        }
-                    }.disabled(!llamaDL.downloaded)
-                    Button("اختبر سرعة الخيوط (٢/٤/٦)") {
-                        cpuTest = "يقيس السرعة… (دقيقة تقريبًا)"
-                        Task { cpuTest = await LLMService.shared.cpuThreadBench() }
-                    }.disabled(!llamaDL.downloaded)
-                    }
-                }
+            }
+            Button("اختبر سرعة الخيوط (٢/٤/٦)") {
+                cpuTest = "يقيس السرعة… (دقيقة تقريبًا)"
+                Task { cpuTest = await LLMService.shared.cpuThreadBench() }
+            }
+        } header: {
+            Text("متقدم")
+        } footer: {
+            if let cpuTest { Text(cpuTest).foregroundStyle(cpuTest.contains("ما اشتغل") ? Color.red : Color.secondary) }
+        }
     }
 }
 

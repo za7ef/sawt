@@ -47,6 +47,13 @@ struct GGUFSpec: Sendable, Identifiable, Hashable {
         return pick
     }
     /// يغيّر نموذج المعالج ويفضّي الباقي من الذاكرة
+    /// اختيار نموذج معالج من المستخدم: يصير التشغيل على المعالج ويطفي السحابي
+    @MainActor static func choose(_ s: GGUFSpec) {
+        CloudLLM.setActive(nil)
+        setActive(s)
+        ComputeMode.set("cpu")
+    }
+
     static func setActive(_ s: GGUFSpec) {
         UserDefaults.standard.set(s.id, forKey: "cpuModel")
         slog("llama: active cpu model → \(s.id)")
@@ -142,7 +149,7 @@ final class LlamaDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
         MainActor.assumeIsolated {
             self.running = false
             self.downloaded = self.spec.isDownloaded
-            if self.downloaded, self.activateWhenDone { GGUFSpec.setActive(self.spec) }
+            if self.downloaded, self.activateWhenDone { GGUFSpec.choose(self.spec) }
             self.activateWhenDone = false
             self.message = err.map { "فشل الحفظ: \($0)" } ?? (self.downloaded ? "جاهز ✅" : "الملف ناقص، نزّله مرة ثانية")
             slog("llama: download finished ok=\(self.downloaded) \(err ?? "")")

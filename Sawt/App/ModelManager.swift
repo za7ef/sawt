@@ -44,15 +44,15 @@ final class ModelManager: ObservableObject {
     /// نموذج المحادثة للمكالمة: كرت الشاشة محمّل، أو المعالج (llama.cpp) ونموذجه نازل، أو سحابي مسموح بالمكالمات
     var callLLMReady: Bool {
         if CloudLLM.active != nil && CloudLLM.useInCalls { return true }
-        if LLMService.onCPU || ComputeMode.current == "cpu" { return LlamaModelFile.isDownloaded }
+        if ComputeMode.current == "cpu" { return LlamaModelFile.isDownloaded }
         return llm.isReady
     }
 
     /// وش ناقص عشان تبدأ المكالمة، باسمه والسبب (nil = جاهز)
     var callMissing: String? {
         if !callLLMReady {
-            if ComputeMode.current == "cpu" || LLMService.onCPU {
-                return "نموذج المعالج (\(GGUFSpec.active.name)) مو منزّل، والتشغيل على المعالج. نزّله من الإعدادات ← النماذج."
+            if ComputeMode.current == "cpu" {
+                return "نموذج المعالج المختار (\(GGUFSpec.active.name)) مو منزّل. نزّله أو اختر غيره من الإعدادات ← النماذج ← المعالج."
             }
             if llm.isBusy { return "نموذج المحادثة للحين يتحمّل، لحظات." }
             if case .failed(let m) = llm { return "نموذج المحادثة ما اشتغل: \(m)" }

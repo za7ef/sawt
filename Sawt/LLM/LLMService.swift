@@ -414,18 +414,29 @@ actor LLMService {
 }
 
 
-/// طريقة تشغيل النموذج: "gpu" كرت الشاشة، "cpu" المعالج، "auto" كرت الشاشة قدّام والمعالج في الخلفية
+/// طريقة تشغيل النموذج تتبع النموذج المختار: "gpu" نموذج MLX على كرت الشاشة، "cpu" نموذج GGUF على المعالج.
+/// ما فيه «تلقائي» (ما نبدّل بين الأجهزة من نفسنا).
 enum ComputeMode {
     /// لاختبار جهاز معيّن (اختبار المعالج من الإعدادات)
     @TaskLocal static var forced: String?
     /// آخر خطأ من MLX على المعالج (يطلع في الإعدادات)
     nonisolated(unsafe) static var cpuError: String?
-    static var current: String { UserDefaults.standard.string(forKey: "llmDevice") ?? "gpu" }
+    static var current: String { UserDefaults.standard.string(forKey: "llmDevice") == "cpu" ? "cpu" : "gpu" }
+    static func set(_ d: String) {
+        UserDefaults.standard.set(d == "cpu" ? "cpu" : "gpu", forKey: "llmDevice")
+        slog("llm: device → \(d)")
+    }
+    /// ترحيل: «تلقائي» القديم كان يعرض نموذج كرت الشاشة في الرأس، فيصير «gpu»
+    static func migrate() {
+        if UserDefaults.standard.string(forKey: "llmDevice") == "auto" {
+            UserDefaults.standard.set("gpu", forKey: "llmDevice")
+            slog("migrate: llmDevice auto → gpu")
+        }
+    }
     /// nil = ممنوع الحين (كرت الشاشة بس والتطبيق في الخلفية)
     static func device(for mode: String) -> String? {
         switch mode {
         case "cpu": return "cpu"
-        case "auto": return AppPhase.active ? "gpu" : "cpu"
         default: return AppPhase.active ? "gpu" : nil
         }
     }
