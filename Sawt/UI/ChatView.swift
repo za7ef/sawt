@@ -417,8 +417,6 @@ struct ChatView: View {
             }
             Section {
                 Button { imageMode = true; focused = true } label: { Label("صورة", systemImage: "paintbrush") }
-                // تعديل صورة: نختار الصورة، والوصف يقول وش يتغيّر («دقيق» يعدّل، «واقعي+» يعيد الرسم)
-                Button { imageMode = true; showPhotos = true } label: { Label("عدّل صورة", systemImage: "wand.and.stars") }
                 Menu {
                     Picker("محرك الصور", selection: $imageEngineRaw) {
                         ForEach(ImageEngine.allCases) { e in
@@ -528,7 +526,7 @@ struct ChatView: View {
                 stateChips
                 HStack(alignment: .bottom, spacing: 4) {
                     attachMenu
-                    ComposerField(text: $draft, placeholder: dictation.isRecording ? "أسمعك…" : (imageMode ? (pending.contains { $0.kind == .image } ? "وش تبي تغيّر في الصورة؟" : "صِف الصورة") : "اسأل صوت"),
+                    ComposerField(text: $draft, placeholder: dictation.isRecording ? "أسمعك…" : (imageMode ? "صِف الصورة" : "اسأل صوت"),
                                   focused: $focused, clearToken: sendGen)
                     micButton
                     actionButton.padding(.trailing, 4)

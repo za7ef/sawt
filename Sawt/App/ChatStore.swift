@@ -338,6 +338,20 @@ final class ChatStore: ObservableObject {
             if runnerOn { startPhoneTask(t, goal: g) } else { askRunner(t, goal: g, attachments: attachments) }
             return
         }
+        // تعديل صورة مرفقة: صورة وحدة + نص بصيغة أمر تعديل («غيّر…»، «خل السما ليل»، «شيل…»).
+        // القواعد تلقط المرشّح، ونموذج المحادثة يأكّد (تعديل أو سؤال عن الصورة). المو واضح = جواب عادي، مو تعديل.
+        if !phoneChecked, attachments.count == 1, attachments[0].kind == .image,
+           ImageIntent.forced(t) || (ImageIntent.editCandidate(t) && (ImageEngine.selected.map { $0.canEdit && SDModels.installed($0) } ?? false)) {
+            let src = attachments[0], msg = t
+            Task { @MainActor in
+                let c0 = Date()
+                let edit = ImageIntent.forced(msg) ? true : await Self.confirmEdit(msg)
+                slog("chat: edit intent → \(edit) in \(Int(Date().timeIntervalSince(c0) * 1000))ms")
+                if edit { self.generateImage(msg, source: src) }
+                else { self.send(msg, attachments: attachments, web: webAlways, webAuto: webAuto, phoneChecked: true, onFail: onFail) }
+            }
+            return
+        }
         // طلب صورة: «/صورة …» أو قواعد واضحة (ارسم، سوّ لي صورة…)
         if attachments.isEmpty, ImageIntent.forced(t) || (!phoneChecked && ImageIntent.verdict(t)) {
             slog("chat: image intent rule")
@@ -858,6 +872,22 @@ final class ChatStore: ObservableObject {
         return (p, n.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    /// يأكّد إن الرسالة طلب تعديل للصورة المرفقة (مو سؤال عنها). أي شك أو فشل = لا (نجاوب بدل ما نعدّل).
+    static func confirmEdit(_ text: String) async -> Bool {
+        let sys = """
+        The user attached a photo and wrote a message. Decide: does the user want the photo itself EDITED/CHANGED into a new image \
+        (e.g. change the sky, remove something, add something, recolor, change style), or are they ASKING something about the photo? \
+        Reply with exactly one word: EDIT or ASK. If unsure, reply ASK.
+        """
+        guard let s = try? await LLMService.shared.stream(system: sys, history: [], user: String(text.prefix(400)), maxTokens: 8) else {
+            // نموذج المحادثة مو جاهز: نعتمد القاعدة لو صريحة جدًا (أمر تعديل بدون أي سؤال)
+            return ImageIntent.editStrong(text)
+        }
+        var out = ""
+        do { for try await c in s { out += c } } catch { return ImageIntent.editStrong(text) }
+        return splitThinking(out).answer.uppercased().contains("EDIT")
+    }
+
     /// تعليمة تعديل صورة: ترجمة إنجليزية قصيرة بنفس المعنى (بدون إضافات) لـFLUX.2 klein
     static func editPrompt(for request: String) async -> String? {
         let sys = """
@@ -952,6 +982,29 @@ enum ImageIntent {
             return rest.isEmpty ? t : rest
         }
         return t
+    }
+
+    /// أفعال تعديل في أول الرسالة (مع صورة مرفقة)
+    static let editVerbs = ["عدل", "عدّل", "عدلي", "غير", "غيّر", "غيري", "خل", "خلّ", "خلي", "خلّي", "حط", "حطي", "ضيف", "أضف", "اضف", "زيد",
+                            "شيل", "شيلي", "احذف", "امسح", "حول", "حوّل", "اجعل", "بدل", "بدّل", "لون", "لوّن", "نظف", "نظّف", "صلح", "صلّح",
+                            "edit", "change", "make", "add", "remove", "replace", "turn", "convert", "put", "erase"]
+    static let questionWords = ["وش", "ايش", "إيش", "شو", "هل", "كم", "مين", "من", "وين", "ليش", "متى", "كيف", "what", "who", "where", "why",
+                                "how", "is", "are", "does", "do", "can", "which"]
+
+    /// مرشّح تعديل: يبدأ (أو يبدأ بعد «ممكن/لو سمحت/please») بفعل تعديل
+    static func editCandidate(_ text: String) -> Bool {
+        var words = text.lowercased().split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "،" || $0 == "," }).map(String.init)
+        while let f = words.first, ["ممكن", "لو", "سمحت", "please", "pls", "can", "could", "you", "طيب", "يا", "اقدر"].contains(f) { words.removeFirst() }
+        guard let first = words.first else { return false }
+        return editVerbs.contains { first == $0 || (first.hasPrefix($0) && first.count <= $0.count + 3) }
+    }
+
+    /// صريح بدون نموذج: مرشّح تعديل وما فيه علامة سؤال ولا يبدأ بأداة سؤال
+    static func editStrong(_ text: String) -> Bool {
+        let l = text.lowercased()
+        if l.contains("؟") || l.contains("?") { return false }
+        if let f = l.split(separator: " ").first.map(String.init), questionWords.contains(f) { return false }
+        return editCandidate(text)
     }
 
     static func verdict(_ text: String) -> Bool {
