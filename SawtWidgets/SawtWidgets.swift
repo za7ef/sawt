@@ -87,7 +87,12 @@ struct AgentLiveActivity: Widget {
                     }
                 }
                 Spacer()
-                if ctx.state.busy {
+                if ctx.state.waiting {
+                    VStack(spacing: 6) {
+                        Button(intent: ApproveAgentIntent()) { Label("موافق", systemImage: "checkmark") }.tint(.green)
+                        Button(intent: DenyAgentIntent()) { Label("رفض", systemImage: "xmark") }.tint(.red)
+                    }
+                } else if ctx.state.busy {
                     Button(intent: StopAgentIntent()) { Label("إيقاف", systemImage: "stop.fill") }.tint(.red)
                 } else {
                     Button(intent: StopRunnerIntent()) { Label("إطفاء", systemImage: "power") }.tint(.orange)
@@ -109,10 +114,18 @@ struct AgentLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     // عنوان الحالة والوصف في نصين منفصلين (عشان ترتيب العربي ما يلخبط النقطتين)
-                    HStack(spacing: 6) {
-                        Text(ctx.state.phaseTitle).font(.subheadline.bold())
-                        Text(ctx.state.step).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
-                        Spacer(minLength: 0)
+                    VStack(spacing: 8) {
+                        HStack(spacing: 6) {
+                            Text(ctx.state.phaseTitle).font(.subheadline.bold())
+                            Text(ctx.state.step).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                            Spacer(minLength: 0)
+                        }
+                        if ctx.state.waiting {
+                            HStack(spacing: 10) {
+                                Button(intent: ApproveAgentIntent()) { Label("موافق", systemImage: "checkmark").frame(maxWidth: .infinity) }.tint(.green)
+                                Button(intent: DenyAgentIntent()) { Label("رفض", systemImage: "xmark").frame(maxWidth: .infinity) }.tint(.red)
+                            }
+                        }
                     }
                     .environment(\.layoutDirection, .rightToLeft)
                 }

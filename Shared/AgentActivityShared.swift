@@ -59,3 +59,23 @@ struct StopRunnerIntent: LiveActivityIntent {
         return .result()
     }
 }
+
+/// موافقة على الخطوة الحساسة (من الجزيرة/شاشة القفل)
+struct ApproveAgentIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "موافقة على خطوة الوكيل"
+    init() {}
+    func perform() async throws -> some IntentResult {
+        await MainActor.run { NotificationCenter.default.post(name: Notification.Name("sawt.confirmYes"), object: nil) }
+        return .result()
+    }
+}
+
+/// رفض الخطوة الحساسة
+struct DenyAgentIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "رفض خطوة الوكيل"
+    init() {}
+    func perform() async throws -> some IntentResult {
+        await MainActor.run { NotificationCenter.default.post(name: Notification.Name("sawt.confirmNo"), object: nil) }
+        return .result()
+    }
+}

@@ -247,7 +247,20 @@ enum XCTBackend {
         }
         slog("runner: step accessibility after enable: \(ax ?? "ok") \(Int(Date().timeIntervalSince(t) * 1000))ms")
         // قارئ XCUIApplication: ما نسخّن عميل الوصول (طلبه المباشر هو اللي ما يرد)، ولا نعيد الجلسة بسببه
-        if useAppReader { slog("runner: reader=app (XCUIApplication snapshot)"); return nil }
+        if useAppReader {
+            slog("runner: reader=app (XCUIApplication snapshot)")
+            // تسخين بدون انتظار: لقطة SpringBoard على الخيط الرئيسي (أول لقطة ~٣٫٧ث، بعدها أسرع بكثير)؛ القراءة الأولى تنتظرها لو لسا
+            if !appWarmed {
+                appWarmed = true
+                Task.detached(priority: .userInitiated) {
+                    let tw = Date()
+                    let r = await readViaApp(pid: 0, bundle: "com.apple.springboard", screen: CGSize(width: 1, height: 1), timeout: 12, t: tw)
+                    slog("runner: warm app snapshot \(r == nil ? "failed: \(lastAXError)" : "ok") \(Int(Date().timeIntervalSince(tw) * 1000))ms")
+                }
+            }
+            logSnapshotAPIs()
+            return nil
+        }
         // تسخين مثل proveReadable في Poki: أول طلب يدفع كلفة أول لقطة بدل ما تنضرب قراءة المهمة الأولى
         let warm: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
             DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTWarmSystem(8)) }
@@ -630,6 +643,23 @@ enum XCTBackend {
     /// القارئ: "app" (افتراضي) = لقطة XCUIApplication على الخيط الرئيسي مثل الاختبار بالضبط؛ "ax" = طلب عميل الوصول المباشر (ما رد أبدًا لين 181)
     static var useAppReader: Bool { (UserDefaults.standard.string(forKey: "xctReader") ?? "app") != "ax" }
     nonisolated(unsafe) private static var appSnapBusy = false
+    nonisolated(unsafe) private static var appWarmed = false
+    nonisolated(unsafe) private static var apisLogged = false
+
+    /// للتشخيص: هل فيه لقطة بمعاملات (عمق/خصائص) في هذا الإصدار؟ نسجّل الموجود بس، ما نستخدمه للحين
+    private static func logSnapshotAPIs() {
+        guard !apisLogged else { return }
+        apisLogged = true
+        var found: [String] = []
+        for (clsName, sels) in [("XCUIApplication", ["snapshotWithError:", "_snapshotWithError:", "snapshotForElement:attributes:parameters:error:"]),
+                                ("XCUIElement", ["snapshotWithError:", "_snapshotForElement:attributes:parameters:error:"]),
+                                ("XCUIApplicationProcess", ["snapshotForElement:attributes:parameters:error:", "_snapshotForElement:attributes:parameters:error:"]),
+                                ("XCAXClient_iOS", ["requestSnapshotForElement:attributes:parameters:error:", "snapshotParameters", "defaultParameters"])] {
+            guard let c = NSClassFromString(clsName) else { found.append("\(clsName)=∅"); continue }
+            for n in sels where class_getInstanceMethod(c, NSSelectorFromString(n)) != nil { found.append("\(clsName).\(n)") }
+        }
+        slog("xct: snapshot apis: \(found.joined(separator: " | "))")
+    }
 
     /// آخر تطبيقات فتحناها بنفسنا (الأحدث أول)؛ الهوم يصفّرها
     nonisolated(unsafe) static var recentOpened: [String] = []
@@ -682,7 +712,11 @@ enum XCTBackend {
 
     /// لقطة XCUIApplication: نفس مسار snapshotSpringboard في الاختبار (initWithBundleIdentifier + snapshotWithError على الخيط الرئيسي)
     private static func readViaApp(pid: Int32, bundle: String, screen: CGSize, timeout: Double, t: Date) async -> Screen? {
+        // لقطة سابقة (مثل التسخين) شغّالة: ننتظرها بدل ما نفشل (أول لقطة تدفع كلفة تحميل الوصول، والباقي أسرع)
+        let tw = Date()
+        while appSnapBusy && Date().timeIntervalSince(tw) < timeout { try? await Task.sleep(nanoseconds: 100_000_000) }
         if appSnapBusy { lastAXError = "\(bundle): لقطة سابقة ما خلصت بعد"; return nil }
+        if Date().timeIntervalSince(tw) > 0.15 { slog("xct: app read waited \(Int(Date().timeIntervalSince(tw) * 1000))ms for previous snapshot") }
         appSnapBusy = true
         readInFlight = true
         let t0 = Date()

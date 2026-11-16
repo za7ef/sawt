@@ -22,7 +22,7 @@ final class PhoneAgent: ObservableObject {
     private var lastReadError = ""
 
     private var task: Task<Void, Never>?
-    private var lastFront = ""
+    private var lastFront = "" { didSet { Self.frontNow = lastFront } }
     private var overflowed = false
     private var confirmToken: UUID?
     private var firstRead = true
@@ -40,7 +40,21 @@ final class PhoneAgent: ObservableObject {
         obs = NotificationCenter.default.addObserver(forName: Notification.Name("sawt.stopAgent"), object: nil, queue: .main) { _ in
             Task { @MainActor in PhoneAgent.shared.stop() }
         }
+        for (name, yes) in [("sawt.confirmYes", true), ("sawt.confirmNo", false)] {
+            _ = NotificationCenter.default.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { _ in
+                Task { @MainActor in PhoneAgent.shared.answerFromOutside(yes) }
+            }
+        }
         AgentNotify.setup()
+    }
+
+    /// موافقة/رفض من الإشعار أو الجزيرة: بس لو فيه سؤال ينتظر
+    func answerFromOutside(_ yes: Bool) {
+        guard confirmCont != nil else { return }
+        say(yes ? "✅ موافق" : "✋ رفض")
+        AgentNotify.clearConfirm()
+        answer(yes)
+        if running { surface(yes ? "موافق، أكمّل" : "رفضت الخطوة") }
     }
 
     /// يحدّث النشاط المباشر والإشعار الثابت بالخطوة الحالية
@@ -343,7 +357,9 @@ final class PhoneAgent: ObservableObject {
                 if kind == "done" {
                     let sum = (action["summary"] as? String) ?? "خلصت"
                     // لازم نتأكد من الشاشة: أول done نعيد القراءة ونسأله يتحقق
-                    if !verifying && n < maxSteps {
+                    // done أول خطوة بالرد = النموذج شاف الشاشة الحالية نفسها (ما صار شي بعد القراءة): ما نحتاج قراءة+تفكير زيادة
+                    let freshScreen = !screenChanged && actMs == 0 && !lastFailed
+                    if !verifying && n < maxSteps && !freshScreen {
                         verifying = true
                         sayLoop(myID, "🔎 أتأكد من الشاشة قبل ما أقول خلصت")
                         history.append("قال خلص (\(sum)) — يتحقق")
@@ -370,6 +386,9 @@ final class PhoneAgent: ObservableObject {
                 }
             }
             slog("agent: timing step=\(n) ax=\(axMs)ms llm=\(llmMs)ms action=\(actMs)ms els=\(els.count) acts=\(acts.count)")
+            log.append(Step(text: String(format: "⏱ قراءة %.1f ث · تفكير %.1f ث · تنفيذ %.1f ث (%ld عنصر%@)",
+                                         Double(axMs) / 1000, Double(llmMs) / 1000, Double(actMs) / 1000, els.count,
+                                         LLMService.onCPU ? "، المعالج" : "")))
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
         finishLoop(myID, "وصلت الحد (\(maxSteps) خطوات) قبل ما أخلص")
@@ -378,7 +397,7 @@ final class PhoneAgent: ObservableObject {
     private func askConfirm(_ q: String) async -> Bool {
         say("❓ \(q)")
         confirm = q
-        surface("ينتظر تأكيدك", waiting: true)
+        surface("ينتظر تأكيدك: " + String(q.prefix(70)), waiting: true)
         AgentNotify.agentConfirm(q)
         // بدون رد خلال دقيقتين = لا
         let token = UUID(); confirmToken = token
@@ -652,8 +671,9 @@ final class PhoneAgent: ObservableObject {
                 if s.isSelf { return (s.name, []) }
                 var els = s.nodes.map { Element(kind: $0.kind, label: $0.label, value: $0.value, frame: $0.frame, secure: $0.secure) }
                 els = els.filter { $0.frame.intersects(b) }
-                Self.searchKey = els.contains { $0.kind == "key" && ["search", "بحث", "ابحث"].contains($0.label.lowercased().trimmingCharacters(in: .whitespaces)) }
-                els = Self.rank(els, screen: b)
+                Self.searchKey = Self.detectSearchKey(els, screen: b)
+                // على المعالج (التطبيق بالخلفية) كل رمز في الطلب يكلّف: قائمة أقصر
+                els = Self.rank(els, screen: b, cap: LLMService.onCPU ? 35 : 60)
                 return (s.name, els)
             }
             slog("agent: xct read failed: \(XCTBackend.lastAXError)")
@@ -690,7 +710,7 @@ final class PhoneAgent: ObservableObject {
         let b = UIScreen.main.bounds
         els = els.filter { $0.frame.intersects(b) }
         // مفتاح الإدخال في الكيبورد مكتوب عليه Search/بحث؟ (نفحصه قبل القص لأن الكيبورد يجي آخر الشجرة)
-        Self.searchKey = els.contains { $0.kind == "key" && ["search", "بحث", "ابحث"].contains($0.label.lowercased().trimmingCharacters(in: .whitespaces)) }
+        Self.searchKey = Self.detectSearchKey(els, screen: b)
         els = Self.rank(els, screen: b)
         // مشاركة الشاشة + المعالج (خلفية): ما فيه رؤية للنموذج، فنقرأ النص من الصورة ونضيفه كعناصر قابلة للضغط
         if Self.see == .share, LLMService.onCPU {
@@ -704,6 +724,30 @@ final class PhoneAgent: ObservableObject {
     static var hiddenRows = 0
     /// الكيبورد ظاهر ومفتاح الإدخال فيه «بحث» (الإدخال حينها ما يرسل شي)
     static var searchKey = false
+    static let safeEnterLabels: Set<String> = ["search", "بحث", "ابحث", "البحث", "go", "انتقال", "اذهب", "الذهاب", "ذهاب", "done", "تم", "next", "التالي"]
+    static let browsers: Set<String> = ["com.apple.mobilesafari", "com.google.chrome.ios", "org.mozilla.ios.Firefox", "com.microsoft.msedge", "com.brave.ios.browser", "com.duckduckgo.mobile.ios"]
+
+    /// مفتاح الإدخال في الكيبورد مكتوب عليه بحث/انتقال/تم؟ (زر أو مفتاح في النص السفلي، قبل القص لأن الكيبورد يجي آخر الشجرة)
+    static func detectSearchKey(_ els: [Element], screen b: CGRect) -> Bool {
+        let bottom = els.filter { ($0.kind == "key" || $0.kind == "button") && $0.frame.minY > b.height * 0.5 }
+        let hit = bottom.contains { e in
+            [e.label, e.value].contains { safeEnterLabels.contains($0.lowercased().trimmingCharacters(in: .whitespaces)) }
+        }
+        if !hit, els.contains(where: { $0.kind == "key" }) {
+            // للتشخيص: أسماء آخر أزرار الكيبورد (مفتاح الإدخال عادة يمين تحت)
+            let tail = bottom.suffix(4).map { "\($0.kind):\($0.label)" }.joined(separator: "، ")
+            slog("agent: keyboard return key not recognized; bottom: \(tail)")
+        }
+        return hit
+    }
+
+    /// الإدخال آمن؟ مفتاح بحث/انتقال، أو متصفح (شريط العنوان/البحث)، أو خانة بحث فيها النص اللي كتبناه
+    static var frontNow = ""
+    static func enterIsSafe(_ els: [Element]) -> Bool {
+        if searchKey { return true }
+        if browsers.contains(frontNow) { return true }
+        return els.contains { $0.kind == "search" && !$0.value.isEmpty }
+    }
 
     /// ترتيب العناصر قبل القص: خانات الكتابة/البحث أول، بعدين أشرطة فوق/تحت (تبويبات، أدوات، بحث آيفون ٢٦+)،
     /// بعدين الأزرار، وآخر شي النصوص. صفوف القوائم الطويلة نخلي أول ٨ بس.
@@ -745,8 +789,9 @@ final class PhoneAgent: ObservableObject {
         var lines = ["التطبيق: \(app)"]
         for (i, e) in els.enumerated() {
             var l = "[\(i)] \(e.kind)"
-            if !e.label.isEmpty { l += " \"\(e.label.prefix(30))\"" }
-            if !e.value.isEmpty && e.value != e.label { l += " = \"\(e.value.prefix(20))\"" }
+            let lc = LLMService.onCPU ? 24 : 30, vc = LLMService.onCPU ? 16 : 20
+            if !e.label.isEmpty { l += " \"\(e.label.prefix(lc))\"" }
+            if !e.value.isEmpty && e.value != e.label { l += " = \"\(e.value.prefix(vc))\"" }
             if e.secure { l += " (كلمة سر)" }
             lines.append(l)
         }
@@ -842,7 +887,7 @@ final class PhoneAgent: ObservableObject {
             return "الرابط يفتح اتصال/رسالة/تطبيق مباشرة."
         }
         // بحث: مفتاح الكيبورد «Search» ما يرسل، فما نوقف الوكيل ونسأل عن كل بحث
-        if k == "enter" { return Self.searchKey ? nil : "زر الإدخال ممكن يرسل." }
+        if k == "enter" { return enterIsSafe(els) ? nil : "زر الإدخال ممكن يرسل." }
         return nil
     }
 
@@ -1226,8 +1271,8 @@ enum AgentNotify {
             await MainActor.run {
                 switch id {
                 case "agent.stop": PhoneAgent.shared.stop()
-                case "agent.yes": PhoneAgent.shared.answer(true)
-                case "agent.no": PhoneAgent.shared.answer(false)
+                case "agent.yes": PhoneAgent.shared.answerFromOutside(true)
+                case "agent.no": PhoneAgent.shared.answerFromOutside(false)
                 default: break
                 }
             }
@@ -1243,8 +1288,9 @@ enum AgentNotify {
         let c = UNUserNotificationCenter.current()
         c.delegate = delegate
         let stop = UNNotificationAction(identifier: "agent.stop", title: "إيقاف", options: [.destructive])
-        let yes = UNNotificationAction(identifier: "agent.yes", title: "كمّل", options: [])
-        let no = UNNotificationAction(identifier: "agent.no", title: "لا", options: [.destructive])
+        // بدون .foreground: الرد يوصل للتطبيق وهو بالخلفية بدون ما يفتح
+        let yes = UNNotificationAction(identifier: "agent.yes", title: "موافق", options: [], icon: UNNotificationActionIcon(systemImageName: "checkmark"))
+        let no = UNNotificationAction(identifier: "agent.no", title: "رفض", options: [.destructive], icon: UNNotificationActionIcon(systemImageName: "xmark"))
         c.setNotificationCategories([
             UNNotificationCategory(identifier: "agent.run", actions: [stop], intentIdentifiers: []),
             UNNotificationCategory(identifier: "agent.confirm", actions: [yes, no, stop], intentIdentifiers: []),
@@ -1279,6 +1325,10 @@ enum AgentNotify {
         c.body = r
         c.interruptionLevel = .passive
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "agent-done", content: c, trigger: nil))
+    }
+
+    static func clearConfirm() {
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["agent-confirm"])
     }
 
     static func clear() {
