@@ -385,30 +385,33 @@ struct ActivityView: UIViewControllerRepresentable {
 
 /// نص رد المساعد في المكالمة: رمادي على الأسود مباشرة (بدون خلفية ولا إطار)، ينزل تلقائيًا مع الكتابة،
 /// وأطرافه فوق وتحت تتلاشى. ما يستقبل لمس.
+/// النزول حركة خطية مستمرة (إزاحة النص كله بدل القفز سطر سطر): كل ما طال النص تتحرك الإزاحة بسلاسة للهدف الجديد.
 struct CallReplyText: View {
     let text: String
     let reduceMotion: Bool
+    @State private var textHeight: CGFloat = 0
+    /// هامش فوق وتحت داخل منطقة التلاشي
+    private let pad: CGFloat = 22
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 0) {
-                    Color.clear.frame(height: 22)
-                    Text(text)
-                        .font(.callout)
-                        .foregroundStyle(.gray)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: .infinity)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Color.clear.frame(height: 22).id("end")
-                }
-            }
-            .scrollDisabled(true)
-            .onChange(of: text) { _, _ in
-                if reduceMotion { proxy.scrollTo("end", anchor: .bottom) }
-                else { withAnimation(.easeOut(duration: 0.35)) { proxy.scrollTo("end", anchor: .bottom) } }
-            }
-            .onAppear { proxy.scrollTo("end", anchor: .bottom) }
+        GeometryReader { geo in
+            let shift = max(0, textHeight + pad * 2 - geo.size.height)
+            Text(text)
+                .font(.callout)
+                .foregroundStyle(.gray)
+                .multilineTextAlignment(.center)
+                .frame(width: geo.size.width)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(GeometryReader { t in
+                    Color.clear
+                        .onAppear { textHeight = t.size.height }
+                        .onChange(of: t.size.height) { _, h in textHeight = h }
+                })
+                .padding(.top, pad)
+                .offset(y: -shift)
+                .animation(reduceMotion ? nil : .linear(duration: 0.9), value: shift)
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+                .clipped()
         }
         .mask(
             LinearGradient(stops: [
