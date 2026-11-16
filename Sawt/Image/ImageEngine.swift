@@ -147,7 +147,7 @@ final class SDModels: ObservableObject {
             guard let url = URL(string: sd21Base + f) else { continue }
             let w = weights[f] ?? 0.2
             let base = done
-            let tmp = try await Downloader.fetch(URLRequest(url: url)) { got, expected in
+            let tmp = try await ImageModelDownloader.fetch(URLRequest(url: url)) { got, expected in
                 let part = expected > 0 ? Double(got) / Double(expected) : 0
                 progress(min(0.99, (base + w * part) / total))
             }
@@ -189,7 +189,7 @@ final class SDModels: ObservableObject {
 
 // MARK: - تنزيل ملف واحد مع التقدم
 
-enum Downloader {
+enum ImageModelDownloader {
     /// ينزّل لملف مؤقت ويرجع مكانه. يرفض أي رد غير 200/206.
     static func fetch(_ req: URLRequest, progress: @escaping @Sendable (Int64, Int64) -> Void) async throws -> URL {
         let box = DownloadDelegate(progress: progress)
@@ -317,7 +317,7 @@ enum ZipRange {
             tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             FileManager.default.createFile(atPath: tmp.path, contents: nil)
         } else {
-            tmp = try await Downloader.fetch(range(url, start, start + e.compressedSize - 1)) { got, _ in progress(got) }
+            tmp = try await ImageModelDownloader.fetch(range(url, start, start + e.compressedSize - 1)) { got, _ in progress(got) }
         }
         defer { try? FileManager.default.removeItem(at: tmp) }
         try? FileManager.default.removeItem(at: dest)
@@ -556,7 +556,6 @@ enum PlaygroundStyles {
         case ImagePlaygroundStyle.animation.id: base = "أنيميشن"
         case ImagePlaygroundStyle.illustration.id: base = "رسم توضيحي"
         case ImagePlaygroundStyle.sketch.id: base = "سكتش"
-        case ImagePlaygroundStyle.emoji.id: base = "إيموجي"
         case ImagePlaygroundStyle.externalProvider.id: base = "ChatGPT"
         default: base = s.id
         }
