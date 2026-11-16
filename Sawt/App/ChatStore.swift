@@ -33,6 +33,8 @@ struct Message: Identifiable, Codable, Equatable {
     var genNegative: String?
     /// الصورة للحين تنرسم (يظهر البرومبت والتقدم بدل صف الأدوات)
     var genPending: Bool?
+    /// خطوات مهمة الوكيل (الخط الزمني في الفقاعة)
+    var agentSteps: [AgentStepRec]?
 }
 
 struct Conversation: Identifiable, Codable, Equatable {
@@ -67,6 +69,15 @@ final class TextAccumulator: @unchecked Sendable {
 }
 
 @MainActor
+/// خطوة في الخط الزمني لمهمة الوكيل
+struct AgentStepRec: Identifiable, Codable, Equatable {
+    enum State: String, Codable { case pending, running, done, failed, ask, skipped }
+    var id = UUID()
+    var title: String
+    var state: State
+    var details: [String] = []
+}
+
 final class StreamBuffer: ObservableObject {
     @Published var text = ""
     @Published var thinking = ""
@@ -107,6 +118,14 @@ final class ChatStore: ObservableObject {
             conversations = list.sorted { $0.updated > $1.updated }
             // رسم انقطع (التطبيق انقفل وقته): نوقف مؤشر التقدم
             for ci in conversations.indices {
+                // مهمة انقطعت (التطبيق انقفل وقتها): الخطوة الشغالة تصير فاشلة
+                for mi in conversations[ci].messages.indices {
+                    guard var st = conversations[ci].messages[mi].agentSteps else { continue }
+                    for k in st.indices where st[k].state == .running || st[k].state == .ask || st[k].state == .pending {
+                        st[k].state = st[k].state == .pending ? .skipped : .failed
+                    }
+                    conversations[ci].messages[mi].agentSteps = st
+                }
                 for mi in conversations[ci].messages.indices where conversations[ci].messages[mi].genPending == true {
                     conversations[ci].messages[mi].genPending = nil
                     conversations[ci].messages[mi].text = "🎨 انقطع الرسم. جرّب مرة ثانية."

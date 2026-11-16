@@ -18,6 +18,10 @@ final class PhoneAgent: ObservableObject {
     @Published var log: [Step] = []
     @Published var confirm: String?          // نص السؤال لما ننتظر تأكيد
     @Published var lastResult = ""
+    /// الخط الزمني للمهمة (يطلع في فقاعة المحادثة)
+    @Published var timeline: [AgentStepRec] = []
+    /// تفاصيل قبل ما تبدأ الخطوة (رد النموذج يجي قبل وصف الخطوة)
+    private var pendingDetails: [String] = []
     /// سبب آخر فشل قراءة بالطريقة المختارة (يطلع للمستخدم بدل الرجوع لطريقة ثانية)
     private var lastReadError = ""
 
@@ -86,8 +90,55 @@ final class PhoneAgent: ObservableObject {
     /// فقاعة الحالة في المحادثة لما ينطلق من «/جوال»
     var chatTarget: (conv: UUID?, msg: UUID)?
 
+    // ───── الخط الزمني ─────
+    /// يحوّل سطر السجل لحالة خطوة (بدون ما نغيّر نصوص السجل نفسها)
+    private func track(_ s: String) {
+        func addDetail(_ d: String) {
+            if let i = timeline.indices.last { timeline[i].details.append(d) } else { pendingDetails.append(d) }
+        }
+        func begin(_ title: String, _ state: AgentStepRec.State = .running) {
+            if let i = timeline.indices.last, timeline[i].state == .running { timeline[i].state = .done }
+            timeline.append(AgentStepRec(title: title, state: state, details: pendingDetails))
+            pendingDetails = []
+        }
+        func fail(_ d: String) {
+            if let i = timeline.indices.last, timeline[i].state == .running || timeline[i].state == .ask {
+                timeline[i].state = .failed
+                timeline[i].details.append(d)
+            } else {
+                begin(d, .failed)
+            }
+        }
+        if s.hasPrefix("الهدف:") || s.hasPrefix("⏹️ انوقف") || s.hasPrefix("✅ موافق") || s.hasPrefix("✋ رفض") { return }
+        // «3. 🤖 يضغط على …» = خطوة جديدة
+        if let r = s.range(of: ". 🤖 "), s[s.startIndex..<r.lowerBound].allSatisfy(\.isNumber) {
+            begin(String(s[r.upperBound...]))
+            return
+        }
+        if s.hasPrefix("🔎") { begin("أتأكد من الشاشة"); return }
+        if s.hasPrefix("❓") {
+            if let i = timeline.indices.last, timeline[i].state == .running {
+                timeline[i].state = .ask
+                timeline[i].details.append(String(s.dropFirst(2)))
+            } else {
+                begin("يحتاج موافقتك", .ask)
+                addDetail(String(s.dropFirst(2)))
+            }
+            return
+        }
+        if s.hasPrefix("⚠️") || s.hasPrefix("✗") || s.hasPrefix("رفضت") || s.hasPrefix("⏹️ وقفت") {
+            fail(s.replacingOccurrences(of: "⚠️ ", with: "").replacingOccurrences(of: "✗ ", with: ""))
+            return
+        }
+        // أسطر التجهيز (الطريقة، المشغّل، الشاشة الرئيسية…)
+        if timeline.isEmpty { begin("أجهّز التحكم بالجوال") }
+        addDetail(s.hasPrefix("✓ ") ? String(s.dropFirst(2)) : s)
+    }
+
     private func updateBubble(final: Bool = false) {
         guard let t = chatTarget else { return }
+        let tl = timeline
+        ChatStore.shared.editMessage(t.msg, in: t.conv, persist: false) { $0.agentSteps = tl }
         // فقاعة الإقرار تعرض الخطوات؛ والنتيجة تنزل كرد عادي مستقل
         var lines = ["تمام، جاري تنفيذ المهمة…"]
         let steps = log.dropFirst().suffix(final ? 12 : 6).map { "• " + $0.text }
@@ -135,6 +186,7 @@ final class PhoneAgent: ObservableObject {
         }.map { $0.bundle }.filter { !$0.isEmpty }
         XCTBackend.recentOpened = []
         self.goal = g; log = []; lastResult = ""; running = true; stepNo = 0; firstRead = true
+        timeline = []; pendingDetails = []
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         // يبقى صاحي لما نطلع لتطبيقات ثانية (هنا مو داخل الحلقة عشان ما يسبق finish)
         HostPairing.shared.keepAlive(true)
@@ -167,6 +219,11 @@ final class PhoneAgent: ObservableObject {
     }
 
     func answer(_ yes: Bool) {
+        if confirmCont != nil, let i = timeline.indices.last, timeline[i].state == .ask {
+            timeline[i].state = yes ? .running : .failed
+            timeline[i].details.append(yes ? "وافقت" : "رفضت")
+        }
+        if running, confirmCont != nil { updateBubble() }
         confirm = nil
         confirmCont?.resume(returning: yes); confirmCont = nil
     }
@@ -183,6 +240,15 @@ final class PhoneAgent: ObservableObject {
     private func finish(_ r: String) {
         guard running else { return }
         running = false; lastResult = r
+        // اللي ما كمل يصير ✗: الشغالة/المنتظرة فاشلة، واللي ما وصلناه متخطّى
+        let ok = r.hasPrefix("✅")
+        for k in timeline.indices {
+            switch timeline[k].state {
+            case .running, .ask: timeline[k].state = ok ? .done : .failed
+            case .pending: timeline[k].state = .skipped
+            default: break
+            }
+        }
         updateBubble(final: true)
         unsurface()
         AgentNotify.done(r)
@@ -200,6 +266,7 @@ final class PhoneAgent: ObservableObject {
 
     private func say(_ s: String) {
         log.append(Step(text: s)); slog("agent: \(s.prefix(300))")
+        track(s)
         if running { surface(s); updateBubble() }
     }
 
@@ -332,6 +399,7 @@ final class PhoneAgent: ObservableObject {
             let llmMs = Int(Date().timeIntervalSince(tLLM) * 1000)
             slog("agent: raw step=\(n) «\(raw.prefix(300))»")
             log.append(Step(text: "🤖 النموذج (\(llmMs)ms\(img == nil ? "" : "، مع صورة")): \(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))"))
+            pendingDetails.append("رد النموذج (\(llmMs)ms): \(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(400))")
             guard action?["action"] is String else {
                 sayLoop(myID, "⚠️ رد غير مفهوم: \(raw.prefix(120))"); finishLoop(myID, "النموذج ما رد بخطوة صالحة"); return
             }
@@ -382,9 +450,11 @@ final class PhoneAgent: ObservableObject {
                 }
             }
             slog("agent: timing step=\(n) ax=\(axMs)ms llm=\(llmMs)ms action=\(actMs)ms els=\(els.count) acts=\(acts.count)")
-            log.append(Step(text: String(format: "⏱ قراءة %.1f ث · تفكير %.1f ث · تنفيذ %.1f ث (%ld عنصر%@)",
-                                         Double(axMs) / 1000, Double(llmMs) / 1000, Double(actMs) / 1000, els.count,
-                                         LLMService.onCPU ? "، المعالج" : "")))
+            let timing = String(format: "⏱ قراءة %.1f ث · تفكير %.1f ث · تنفيذ %.1f ث (%ld عنصر%@)",
+                                Double(axMs) / 1000, Double(llmMs) / 1000, Double(actMs) / 1000, els.count,
+                                LLMService.onCPU ? "، المعالج" : "")
+            log.append(Step(text: timing))
+            if let i = timeline.indices.last { timeline[i].details.append(timing) }
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
         finishLoop(myID, "وصلت الحد (\(maxSteps) خطوات) قبل ما أخلص")

@@ -696,6 +696,13 @@ struct MessageRow: View, Equatable {
                             .transition(.opacity.combined(with: .scale(scale: 0.97)))
                     } else if streaming && message.text.isEmpty {
                         TypingDots()
+                    } else if let steps = message.agentSteps, !steps.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(message.text.components(separatedBy: "\n").first ?? "")
+                                .foregroundStyle(.secondary)
+                            AgentTimeline(steps: steps)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     } else {
                         Text(SafeMarkdown.key(message.text))
                             .textSelection(.enabled)
@@ -779,13 +786,12 @@ struct StreamingRow: View {
             if live.text.isEmpty {
                 if live.status == nil && live.thinking.isEmpty { TypingDots() }
             } else {
-                Text(SafeMarkdown.key(live.text))
+                PacedText(target: live.text, onGrow: onGrow)
                     .lineSpacing(4)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onChange(of: live.text) { onGrow() }
         .onChange(of: live.thinking) { onGrow() }
         .onChange(of: live.status) { onGrow() }
     }
