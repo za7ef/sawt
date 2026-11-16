@@ -603,3 +603,51 @@ NSString *SawtXCTCloseSession(void) {
         return [NSString stringWithFormat:@"✗ %@: %@", e.name, e.reason ?: @""];
     }
 }
+
+
+// زر الهوم مثل Poki: حدث HID (صفحة 0x0C، Menu 0x40) عبر performDeviceEvent:error: عشان يرجع الرفض بدل ما يضيع بصمت
+NSString * _Nullable SawtXCTPressHome(void) {
+    @try {
+        id device = ((id (*)(id, SEL))objc_msgSend)(NSClassFromString(@"XCUIDevice"), NSSelectorFromString(@"sharedDevice"));
+        if (!device) return @"XCUIDevice مو موجود";
+        Class ev = NSClassFromString(@"XCDeviceEvent");
+        SEL make = NSSelectorFromString(@"deviceEventWithPage:usage:duration:");
+        SEL perform = NSSelectorFromString(@"performDeviceEvent:error:");
+        if (ev && [ev respondsToSelector:make] && [device respondsToSelector:perform]) {
+            id event = ((id (*)(id, SEL, unsigned int, unsigned int, double))objc_msgSend)(ev, make, 0x0C, 0x40, 0.1);
+            NSError *err = nil;
+            if (event && ((BOOL (*)(id, SEL, id, NSError **))objc_msgSend)(device, perform, event, &err)) return nil;
+            return err ? err.localizedDescription : @"performDeviceEvent رجع NO";
+        }
+        SEL press = NSSelectorFromString(@"pressButton:");
+        if (![device respondsToSelector:press]) return @"لا performDeviceEvent ولا pressButton";
+        ((void (*)(id, SEL, long long))objc_msgSend)(device, press, 1);
+        return nil;
+    } @catch (NSException *e) {
+        return [NSString stringWithFormat:@"%@: %@", e.name, e.reason ?: @""];
+    }
+}
+
+// فتح تطبيق بمعرّفه عبر testmanagerd مثل Poki (_XCT_launchApplicationWithBundleID) بدون XCUIApplication وانتظار الهدوء
+NSString * _Nullable SawtXCTLaunch(NSString *bundle, double timeout) {
+    @try {
+        NSString *why = nil;
+        id session = SawtSharedSession(&why);
+        if (!session) return why;
+        SEL proxySel = NSSelectorFromString(@"daemonProxy");
+        id proxy = [session respondsToSelector:proxySel] ? ((id (*)(id, SEL))objc_msgSend)(session, proxySel) : nil;
+        if (!proxy) return @"daemonProxy مو موجود";
+        SEL launch = NSSelectorFromString(@"_XCT_launchApplicationWithBundleID:arguments:environment:completion:");
+        if (![proxy respondsToSelector:launch]) return @"_XCT_launchApplicationWithBundleID مو مدعوم";
+        dispatch_semaphore_t done = dispatch_semaphore_create(0);
+        __block NSString *code = @"ما رد";
+        ((void (*)(id, SEL, id, id, id, id))objc_msgSend)(proxy, launch, bundle, @[], @{}, ^(NSError *e) {
+            code = e ? (e.localizedDescription ?: @"فشل") : nil;
+            dispatch_semaphore_signal(done);
+        });
+        if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeout * NSEC_PER_SEC)))) return @"ما رد";
+        return code;
+    } @catch (NSException *e) {
+        return [NSString stringWithFormat:@"%@: %@", e.name, e.reason ?: @""];
+    }
+}

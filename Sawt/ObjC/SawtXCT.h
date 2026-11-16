@@ -35,6 +35,12 @@ FOUNDATION_EXPORT NSString * _Nullable SawtXCTReopenNow(void);
 /// وش الجلسة المستخدمة (shared/own) وحالة الجهاز المحلي، للسجل
 FOUNDATION_EXPORT NSString *SawtXCTSessionInfo(void);
 
+/// زر الهوم بحدث HID (مثل Poki). nil = نجح
+FOUNDATION_EXPORT NSString * _Nullable SawtXCTPressHome(void);
+
+/// يفتح تطبيق بمعرّفه عبر testmanagerd. nil = نجح
+FOUNDATION_EXPORT NSString * _Nullable SawtXCTLaunch(NSString *bundle, double timeout);
+
 /// يمسح قائمة العمليات المعلّقة (بداية كل مهمة)
 FOUNDATION_EXPORT void SawtXCTClearHung(void);
 

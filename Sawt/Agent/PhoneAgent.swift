@@ -1551,6 +1551,13 @@ enum Runner {
         UserDefaults.standard.set(on, forKey: "xctAutomation")
         RunnerActivity.observe()
         if on {
+            // تشغيل واحد بالمرة (الزر وفتح التطبيق وبداية المهمة ممكن يطلبونه سوا)
+            if starting {
+                while starting { try? await Task.sleep(nanoseconds: 200_000_000) }
+                return XCTBackend.runnerReady ? nil : "المشغّل ما اشتغل"
+            }
+            starting = true
+            defer { starting = false }
             PhoneAgent.see = .xct
             // جلسة هذا التشغيل تسكّرت/ماتت: القراءة ما ترجع إلا بعملية جديدة (مثل Poki)، فنعيد التشغيل ويرجع المشغّل لحاله
             if XCTBackend.sessionDead {
@@ -1582,6 +1589,7 @@ enum Runner {
     /// إعادة تشغيل نظيفة عند الإيقاف (افتراضيًا شغّالة)
     static var cleanRelaunch: Bool { UserDefaults.standard.object(forKey: "runnerCleanRelaunch") as? Bool ?? true }
     private static var relaunching = false
+    private static var starting = false
 
     /// مثل Poki: حالة XCTest داخل العملية (sharedSession والجهاز المحلي وعميل الوصول) تبقى مربوطة بالجلسة القديمة،
     /// والطريق المضمون لجلسة تقرأ الشاشة هو عملية جديدة. نرسل إشعار يرجّعه، نروح للرئيسية، ونطلع.

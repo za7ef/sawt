@@ -229,7 +229,10 @@ enum XCTBackend {
     }
 
     /// بداية مهمة: إعداد الاختبار والجلسة والوصول، بعدين وضع الأتمتة. كل خطوة بوقتها في السجل (عشان نعرف وش يعتّم)
+    nonisolated(unsafe) static var beginning = false
     static func beginTask() async -> String? {
+        beginning = true
+        defer { beginning = false }
         let cfg = await XCTestProbe.connectionConfig()
         let t = Date()
         if !prepared {
@@ -619,7 +622,7 @@ enum XCTBackend {
     /// فحص صحة سريع للجلسة (قراءة بعمق ١). لو رجع 41 نعلّمها منتهية.
     /// ما نفحص وقت قراءة شغّالة أو بعد قراءة ناجحة قريبة (الفحص المتزامن كان يعلّق الشاشة الرئيسية ويخليها «معلّقة»)
     static func checkHealth() {
-        guard prepared, !preparing, !readInFlight, Date().timeIntervalSince(lastReadOK) > 10 else { return }
+        guard prepared, !preparing, !readInFlight, !beginning, Date().timeIntervalSince(lastReadOK) > 10 else { return }
         // مثل Poki: الفحص على الشاشة الرئيسية بعمق ١ (مو أول تطبيق بالقائمة اللي ممكن يكون صوت أو تطبيق مشغول)
         let why = SawtXCTWarmSystem(3)
         if let why { slog("xct: health check: \(why)") }
@@ -729,32 +732,22 @@ enum XCTBackend {
         return result(err.map { "السحب المركّب فشل: \($0)" }, "drag \(Int(a.x)),\(Int(a.y))→\(Int(b.x)),\(Int(b.y))", t)
     }
 
-    /// زر الهوم
+    /// زر الهوم (حدث HID على خيط خلفي، مثل Poki؛ pressButton على الخيط الرئيسي كان يضيّع الرفض بصمت)
     static func home() async -> String {
-        await onMain { () -> String in
-            let t = Date()
-            var err: String?
-            if let exc = SawtTryCatch({
-                guard let cls = NSClassFromString("XCUIDevice"), let dev = send0(cls as AnyObject, "sharedDevice") as? NSObject else { err = "XCUIDevice مو موجود"; return }
-                let sel = NSSelectorFromString("pressButton:")
-                guard dev.responds(to: sel), let imp = dev.method(for: sel) else { err = "pressButton: مو مدعوم"; return }
-                typealias BtnFn = @convention(c) (AnyObject, Selector, Int) -> Void
-                unsafeBitCast(imp, to: BtnFn.self)(dev, sel, 1)   // XCUIDeviceButtonHome = 1
-            }) { err = exc }
-            return result(err, "home", t)
+        let t = Date()
+        let err: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTPressHome()) }
         }
+        return result(err, "home", t)
     }
 
-    /// يفتح تطبيق بمعرّف الحزمة
+    /// يفتح تطبيق بمعرّف الحزمة عبر testmanagerd (مثل Poki)
     static func open(bundle: String) async -> String {
-        await onMain { () -> String in
-            let t = Date()
-            var err: String?
-            if let exc = SawtTryCatch({
-                if let a = app(bundle: bundle) { err = callVoid(a, "activate") } else { err = "ما قدر يسوي XCUIApplication" }
-            }) { err = exc }
-            return result(err, "open \(bundle)", t)
+        let t = Date()
+        let err: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTLaunch(bundle, 15)) }
         }
+        return result(err, "open \(bundle)", t)
     }
 
     /// معرّف حزمة؟ (com.apple.x) — بدون مسافات وفيه نقطتين على الأقل

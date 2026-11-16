@@ -28,6 +28,11 @@ struct SawtApp: App {
             MainActor.assumeIsolated { CallActivity.endSync() }
         }
         Task { @MainActor in CallActivity.cleanupOrphans() }
+        // بعد إعادة تشغيل نظيفة: نرجّع المشغّل لحاله حتى لو الشريط الجانبي مو ظاهر
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            if UserDefaults.standard.bool(forKey: "runnerWantsOn") { await Runner.resume() }
+        }
         // تسخين صامت عند الرجوع للتطبيق (أول سؤال بعدها يطلع أسرع)
         nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { _ in
             Task.detached(priority: .utility) {
