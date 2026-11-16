@@ -126,7 +126,8 @@ final class PhoneAgent: ObservableObject {
         surface("يبدأ…")
         // ننتظر المهمة القديمة تخلص تنظيفها (الجلسة) قبل نبدأ
         let old = task
-        task = Task { await old?.value; await self.loop() }
+        let id = runID
+        task = Task { await old?.value; await self.loop(id) }
         return nil
     }
 
@@ -157,10 +158,14 @@ final class PhoneAgent: ObservableObject {
     /// رقم المهمة الحالية: الحلقة القديمة (بعد وقف وبدء مهمة جديدة بسرعة) ما تنهي الجديدة ولا تطفّي أتمتتها
     private var runID = 0
 
+    /// إنهاء من داخل الحلقة: بس لو هي لسا المهمة الحالية (الحلقة القديمة بعد وقف+بدء سريع ما تنهي الجديدة)
+    private func finishLoop(_ id: Int, _ r: String) {
+        guard id == runID else { slog("agent: finish ignored from old loop: \(r.prefix(80))"); return }
+        finish(r)
+    }
+
     private func finish(_ r: String) {
         guard running else { return }
-        // الحلقة الملغاة ما تنهي مهمة غيرها (stop/automationEnded ينادونها من برا الحلقة فما تكون ملغاة)
-        if Task.isCancelled { slog("agent: finish ignored from cancelled loop: \(r.prefix(80))"); return }
         running = false; lastResult = r
         updateBubble(final: true)
         unsurface()
@@ -175,39 +180,37 @@ final class PhoneAgent: ObservableObject {
     }
 
     private func say(_ s: String) {
-        if Task.isCancelled && !running { return }
         log.append(Step(text: s)); slog("agent: \(s.prefix(300))")
         if running { surface(s); updateBubble() }
     }
 
     // ───── الحلقة ─────
-    private func loop() async {
+    private func loop(_ myID: Int) async {
         if Task.isCancelled { return }
         if Self.see == .share { ScreenShare.shared.start() }
         let bg = BGTask("agent")
         defer { bg.end() }
         // أي خروج من الحلقة (فشل، إلغاء، رجوع مبكر بدون finish): نطفّي وضع الأتمتة
-        let myID = runID
         defer { if Self.see == .xct { Task { @MainActor in if self.runID == myID && !self.running { await XCTBackend.endTask() } } } }
         // الطريقة المختارة بس، بدون رجوع لطريقة ثانية. XCTest: نشغّل وضع الأتمتة تلقائيًا وننتظره
         if Self.see == .xct {
             if SawtXCTPhoneLocked() {
                 say("✗ الجوال مقفل")
-                finish("وقفت: الجوال مقفل — افتح القفل وأرسل المهمة مرة ثانية"); return
+                finishLoop(myID, "وقفت: الجوال مقفل — افتح القفل وأرسل المهمة مرة ثانية"); return
             }
             if !XCTBackend.runnerReady || !Runner.isOn { say("الطريقة: XCTest — أشغّل المشغّل… (دخّل رمز الجوال لو طلبه)") }
             if let e = await Runner.set(true) {
                 say("✗ XCTest ما اشتغل: \(e.prefix(200))")
-                finish("وقفت: المشغّل ما اشتغل — \(e.prefix(160))"); return
+                finishLoop(myID, "وقفت: المشغّل ما اشتغل — \(e.prefix(160))"); return
             }
             if let e = await XCTBackend.beginTask() {
                 say("✗ \(e.prefix(200))")
                 if XCTBackend.sessionDead {
-                    finish("وقفت: \(e.prefix(120)) — صوت بيعيد التشغيل ويرجع المشغّل لحاله، بعدها أرسل المهمة مرة ثانية")
+                    finishLoop(myID, "وقفت: \(e.prefix(120)) — صوت بيعيد التشغيل ويرجع المشغّل لحاله، بعدها أرسل المهمة مرة ثانية")
                     Runner.relaunch(title: "صوت أعاد التشغيل عشان يقرأ الشاشة", body: "افتح صوت ويشتغل المشغّل لحاله، وأرسل المهمة مرة ثانية", turnOnNext: true)
                     return
                 }
-                finish("وقفت: \(e.prefix(160))"); return
+                finishLoop(myID, "وقفت: \(e.prefix(160))"); return
             }
             say("✓ الطريقة: XCTest — \(XCTBackend.sessionState)؛ وضع الأتمتة مفعّل")
         } else {
@@ -240,9 +243,9 @@ final class PhoneAgent: ObservableObject {
                 fails += 1
                 if Self.see == .xct && fails >= 2 {
                     say("✗ \(lastReadError)")
-                    finish("وقفت: \(lastReadError)"); return
+                    finishLoop(myID, "وقفت: \(lastReadError)"); return
                 }
-                if fails >= 3 { finish("ما قدرت أقرأ الشاشة"); return }
+                if fails >= 3 { finishLoop(myID, "ما قدرت أقرأ الشاشة"); return }
                 try? await Task.sleep(nanoseconds: 800_000_000); continue
             }
             fails = 0
@@ -261,7 +264,7 @@ final class PhoneAgent: ObservableObject {
                     if let r = await readScreen(), !isSelf { s2 = r; slog("agent: left sawt after \((i + 1) * 500)ms"); break }
                 }
                 guard let s2 else {
-                    finish("ما قدرت أطلع من صوت (الهوم: \(hr.prefix(80))؛ القراءة: \(lastReadError.isEmpty ? "صوت لسا قدّام" : lastReadError))"); return
+                    finishLoop(myID, "ما قدرت أطلع من صوت (الهوم: \(hr.prefix(80))؛ القراءة: \(lastReadError.isEmpty ? "صوت لسا قدّام" : lastReadError))"); return
                 }
                 (app, els) = s2
             }
@@ -311,7 +314,7 @@ final class PhoneAgent: ObservableObject {
             slog("agent: raw step=\(n) «\(raw.prefix(300))»")
             log.append(Step(text: "🤖 النموذج (\(llmMs)ms\(img == nil ? "" : "، مع صورة")): \(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))"))
             guard action?["action"] is String else {
-                say("⚠️ رد غير مفهوم: \(raw.prefix(120))"); finish("النموذج ما رد بخطوة صالحة"); return
+                say("⚠️ رد غير مفهوم: \(raw.prefix(120))"); finishLoop(myID, "النموذج ما رد بخطوة صالحة"); return
             }
             let acts = Self.actions(raw)
             var actMs = 0
@@ -337,13 +340,13 @@ final class PhoneAgent: ObservableObject {
                         history.append("قال خلص (\(sum)) — يتحقق")
                         break
                     }
-                    finish("✅ \(sum)"); return
+                    finishLoop(myID, "✅ \(sum)"); return
                 }
                 verifying = false
                 if let why = Self.sensitive(action, els) {
                     let ok = await askConfirm("\(why)\n\(desc)\nأكمل؟")
                     if Task.isCancelled { return }
-                    if !ok { say("رفضت — وقفت"); finish("انلغى قبل خطوة حساسة"); return }
+                    if !ok { say("رفضت — وقفت"); finishLoop(myID, "انلغى قبل خطوة حساسة"); return }
                 }
                 let tA = Date()
                 let r = await perform(kind, action, els)
@@ -360,7 +363,7 @@ final class PhoneAgent: ObservableObject {
             slog("agent: timing step=\(n) ax=\(axMs)ms llm=\(llmMs)ms action=\(actMs)ms els=\(els.count) acts=\(acts.count)")
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
-        finish("وصلت الحد (\(maxSteps) خطوات) قبل ما أخلص")
+        finishLoop(myID, "وصلت الحد (\(maxSteps) خطوات) قبل ما أخلص")
     }
 
     private func askConfirm(_ q: String) async -> Bool {
@@ -742,11 +745,11 @@ final class PhoneAgent: ObservableObject {
     }
 
     /// إنجليزي: صيغ محددة للكلمة (send→sending, pay→payments)؛ عربي: الجذر داخل الكلمة بعد توحيد الهمزات
-    /// (يرسل/ترسل/ارسل، و«رسال» للمصدر إرسال/ارسال اللي ما فيه «رسل» متصلة)
+    /// (يرسل/ترسل/ارسل)، والمصدر «ارسال» ككلمة كاملة بس عشان «رسالة» ما تنحسب
     static let riskyEN = ["send", "delete", "remove", "pay", "buy", "purchase", "subscribe", "transfer", "call", "post",
                           "confirm", "order", "checkout", "submit", "share", "reply", "reset", "erase", "install", "uninstall",
                           "logout", "signout", "sign out", "log out", "unsubscribe", "accept", "approve"]
-    static let riskyAR = ["رسل", "رسال", "حذف", "مسح", "دفع", "شراء", "اشتر", "اشترك", "تحويل", "اتصل", "اتصال", "نشر",
+    static let riskyAR = ["رسل", "حذف", "مسح", "دفع", "شراء", "اشتر", "اشترك", "تحويل", "اتصل", "اتصال", "نشر",
                           "تاكيد", "اكد", "طلب", "شارك", "مشارك", "رد", "تثبيت", "ثبت", "تسجيل الخروج", "خروج", "اعادة تعيين", "قبول"]
 
     /// صيغ محددة بس (مو أي بادئة): send/sends/sending/sent… عشان Sender/Shared/Postcards ما تنحسب
@@ -778,6 +781,8 @@ final class PhoneAgent: ObservableObject {
             } else {
                 // «رد» قصيرة: بس كلمة كاملة (رد/الرد/ورد)، الباقي جذر داخل الكلمة
                 if ["رد", "الرد", "ورد"].contains(t) { return true }
+                // المصدر «إرسال» كلمة كاملة بس (مو «رسالة»)
+                if ["ارسال", "الارسال", "وارسال", "للارسال", "بارسال"].contains(t) { return true }
                 if riskyAR.contains(where: { $0.count >= 3 && !$0.contains(" ") && t.contains($0) }) { return true }
             }
         }
@@ -1533,8 +1538,9 @@ enum PhoneAgentTrigger {
         let toks = String(String.UnicodeScalarView(bare)).components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }
         let s = toks.joined(separator: " ")
         guard !toks.isEmpty, toks.count <= 3 else { return false }
-        // نفي: «لا توقف»، «ما توقف»، «don't stop»
-        if toks.contains(where: { ["لا", "ما", "لاتوقف", "dont", "don", "not", "never"].contains($0) }) { return false }
+        // نفي بس لو أداة النفي قبل فعل المضارع مباشرة: «لا توقف»/«ما توقف»/«don't stop». «لا، وقف» = وقف
+        for i in toks.indices.dropFirst() where ["لا", "ما"].contains(toks[i - 1]) && toks[i].hasPrefix("ت") && toks[i].contains("وقف") { return false }
+        if [" dont stop", " don t stop", " do not stop", " never stop", " not stop"].contains(where: { (" " + s).contains($0) }) { return false }
         // كلمة كاملة بس (مو «موقف» ولا «stopwatch»)
         // «خلاص» لحالها ما توقف (خلاص فهمت / طيب خلاص)؛ بس «بس خلاص» كأمر كامل
         let stops: Set<String> = ["وقف", "اوقف", "أوقف", "توقف", "وقفه", "وقفها", "stop"]

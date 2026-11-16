@@ -512,12 +512,14 @@ enum XCTBackend {
             var label = text(kvc(s, "label"))
             var value = text(kvc(s, "value"))
             if value.isEmpty { value = text(kvc(s, "placeholderValue")) }
-            if label.isEmpty && value.isEmpty { label = text(kvc(s, "identifier")) }
+            var idOnly = false
+            if label.isEmpty && value.isEmpty { label = text(kvc(s, "identifier")); idOnly = !label.isEmpty }
             let f = frame(kvc(s, "frame")) ?? .zero
             var myLabel = parentLabel
             let visible = f.width > 1 && f.height > 1 && f.intersects(b)
             if visible {
-                let k = kind(type) ?? ((label.isEmpty && value.isEmpty) || containers.contains(type) ? nil : "other")
+                // Other/Group: بس لو لها اسم أو قيمة حقيقية (مو معرّف برمجي بس، يزيد ضجيج)
+                let k = kind(type) ?? ((label.isEmpty && value.isEmpty) || containers.contains(type) || ((type == 1 || type == 3) && idOnly) ? nil : "other")
                 // نص داخل زر/صف بنفس الاسم: تكرار
                 let dup = type == 48 && !label.isEmpty && label == parentLabel
                 // بدون أي نص: نخلي بس الخانات والمفاتيح والمفاتيح الثنائية (الباقي ما يقدر النموذج يميّزه)

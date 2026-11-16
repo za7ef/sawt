@@ -78,9 +78,9 @@ static id SawtSharedSession(NSString **why) {
     if (!cls) { *why = @"XCTRunnerDaemonSession مو موجود"; return nil; }
     BOOL closed; @synchronized (cls) { closed = gSawtClosed; }
     // أول جلسة: مثل Poki ننتظر وعد الجلسة المشتركة لين ٣ ثواني؛ لو ما اكتمل نفتح جلسة خاصة فينا
-    static BOOL promised = NO;
-    if (!closed && !promised) {
-        promised = YES;
+    static dispatch_once_t promiseOnce;
+    __block BOOL late = NO;
+    if (!closed) dispatch_once(&promiseOnce, ^{
         SEL ps = NSSelectorFromString(@"sharedSessionPromiseAndImplicitlyInitiateSession:");
         if ([cls respondsToSelector:ps]) {
             id promise = ((id (*)(id, SEL, BOOL))objc_msgSend)(cls, ps, YES);
@@ -93,10 +93,11 @@ static id SawtSharedSession(NSString **why) {
                     usleep(10000);
                 }
                 NSLog(@"Sawt: shared session promise %@", done ? @"fulfilled" : @"late → own session");
-                if (!done) closed = YES;
+                if (!done) late = YES;
             }
         }
-    }
+    });
+    if (late) closed = YES;
     if (closed) {
         NSString *e = SawtReopenSession(cls);
         if (e) { *why = [@"إعادة فتح الجلسة: " stringByAppendingString:e]; return nil; }
