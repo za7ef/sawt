@@ -247,7 +247,25 @@ enum XCTBackend {
         let warm: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
             DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTWarmSystem(8)) }
         }
-        slog("runner: step warm system read: \(warm ?? "ok") \(Int(Date().timeIntervalSince(t) * 1000))ms")
+        slog("runner: step warm system read: \(warm ?? "ok") \(Int(Date().timeIntervalSince(t) * 1000))ms [\(SawtXCTSessionInfo())]")
+        if let warm, warm.contains("ما رد") || warm.contains("معلّقة") {
+            // القراءة ما ترجع أبدًا = عميل الوصول مربوط باتصال ميت. نفتح جلسة جديدة ونبني الجهاز المحلي عليها (بداية المهمة بس)
+            let re: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
+                DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTReopenNow()) }
+            }
+            slog("runner: step reopen session: \(re ?? "ok") [\(SawtXCTSessionInfo())]")
+            if let re { return "القراءة ما ترد، وفشل فتح جلسة جديدة: \(re)" }
+            automationEnabled = false  // الجلسة الجديدة تحتاج تفعيل من جديد
+            if let e = await enableAutomation() { return e }
+            let ax2: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
+                DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTLoadAccessibility(4)) }
+            }
+            let warm2: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
+                DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTWarmSystem(8)) }
+            }
+            slog("runner: step after reopen: ax=\(ax2 ?? "ok") warm=\(warm2 ?? "ok") \(Int(Date().timeIntervalSince(t) * 1000))ms")
+            if let warm2 { return "قراءة الشاشة ما ترد حتى بعد جلسة جديدة: \(warm2)" }
+        }
         return nil
     }
 

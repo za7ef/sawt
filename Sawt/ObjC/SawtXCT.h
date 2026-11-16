@@ -29,6 +29,12 @@ FOUNDATION_EXPORT NSString *SawtXCTCloseSession(void);
 /// أول قراءة بالجلسة غالية (Poki: ٨ ثواني أول مرة): قراءة الشاشة الرئيسية بعمق ١ تدفع الكلفة. nil = نجحت
 FOUNDATION_EXPORT NSString * _Nullable SawtXCTWarmSystem(double timeout);
 
+/// يفتح جلسة جديدة خاصة فينا ويبني الجهاز المحلي عليها (لما القراءة ما ترد). nil = نجحت
+FOUNDATION_EXPORT NSString * _Nullable SawtXCTReopenNow(void);
+
+/// وش الجلسة المستخدمة (shared/own) وحالة الجهاز المحلي، للسجل
+FOUNDATION_EXPORT NSString *SawtXCTSessionInfo(void);
+
 /// يمسح قائمة العمليات المعلّقة (بداية كل مهمة)
 FOUNDATION_EXPORT void SawtXCTClearHung(void);
 

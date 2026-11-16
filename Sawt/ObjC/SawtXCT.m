@@ -6,14 +6,95 @@
 // كتابة مستقلة لصوت. الأسماء الخاصة (XCTRunnerDaemonSession، XCSynthesizedEventRecord، XCPointerEventPath،
 // _XCT_synthesizeEvent:) من أطر XCTest اللي تنحمّل وقت التشغيل من صورة المطوّر.
 
+// بعد ما نسكّر الجلسة، sharedSession يظل يرجّع الجلسة المسكّرة، وجهاز XCUIDevice المحلي (اللي منه عميل الوصول
+// ولقطة الشاشة) مربوط فيها: أي طلب قراءة يروح لاتصال ميت وما يرجع له رد أبدًا، والضغط يمشي لأنه على وكيل الجلسة.
+// الحل (نفس فكرة Poki): نفتح جلسة جديدة على اتصال جديد، نخلي sharedSession يرجّعها، ونبني جهاز محلي جديد عليها.
+static id gSawtOwned;
+static BOOL gSawtClosed;
+static NSString *gSawtRebind = @"";
+
+static void SawtPointSharedSession(Class cls) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Method m = class_getClassMethod(cls, NSSelectorFromString(@"sharedSession"));
+        if (!m) return;
+        IMP orig = method_getImplementation(m);
+        IMP repl = imp_implementationWithBlock(^id(id me) {
+            id owned; @synchronized (cls) { owned = gSawtOwned; }
+            return owned ?: ((id (*)(id, SEL))orig)(me, NSSelectorFromString(@"sharedSession"));
+        });
+        method_setImplementation(m, repl);
+    });
+}
+
+static NSString *SawtRebuildLocalDevice(void) {
+    Class cls = NSClassFromString(@"XCUIDevice");
+    SEL make = NSSelectorFromString(@"initLocalDeviceWithPlatform:"), install = NSSelectorFromString(@"setLocalDevice:"), local = NSSelectorFromString(@"localDevice");
+    if (!cls || ![cls instancesRespondToSelector:make] || ![cls respondsToSelector:install] || ![cls respondsToSelector:local]) return @"unavailable";
+    static NSMutableArray *retired;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ retired = [NSMutableArray array]; });
+    @try {
+        id old = ((id (*)(id, SEL))objc_msgSend)(cls, local);
+        long long platform = 2;
+        SEL plat = NSSelectorFromString(@"platform");
+        if (old && [old respondsToSelector:plat]) {
+            const char *t = [old methodSignatureForSelector:plat].methodReturnType;
+            platform = (t && (t[0] == 'q' || t[0] == 'Q')) ? ((long long (*)(id, SEL))objc_msgSend)(old, plat) : ((int (*)(id, SEL))objc_msgSend)(old, plat);
+        }
+        id fresh = ((id (*)(id, SEL, long long))objc_msgSend)([cls alloc], make, platform);
+        if (!fresh) return @"no_device";
+        ((void (*)(id, SEL, id))objc_msgSend)(cls, install, fresh);
+        if (old && old != fresh) @synchronized (retired) { [retired addObject:old]; }
+        return @"rebuilt";
+    } @catch (NSException *e) {
+        return [NSString stringWithFormat:@"exception %@", e.reason ?: e.name];
+    }
+}
+
+/// جلسة جديدة على اتصال جديد بعد الإغلاق. nil = نجحت
+static NSString *SawtReopenSession(Class cls) {
+    SEL conn = NSSelectorFromString(@"connectionForInitiatingSharedSession"), open = NSSelectorFromString(@"sessionWithConnection:completion:");
+    if (![cls respondsToSelector:conn] || ![cls respondsToSelector:open]) return @"فتح جلسة جديدة مو مدعوم";
+    id c = ((id (*)(id, SEL))objc_msgSend)(cls, conn);
+    __block id opened = nil; __block NSError *fail = nil;
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    ((void (*)(id, SEL, id, id))objc_msgSend)(cls, open, c, ^(id s, NSError *e) { opened = s; fail = e; dispatch_semaphore_signal(done); });
+    if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 6 * NSEC_PER_SEC))) return @"فتح الجلسة ما رد خلال ٦ ثواني";
+    if (!opened) return fail ? fail.localizedDescription : @"فتح الجلسة رجع فاضي";
+    @synchronized (cls) { gSawtOwned = opened; gSawtClosed = NO; }
+    SawtPointSharedSession(cls);
+    gSawtRebind = SawtRebuildLocalDevice();
+    SawtXCTClearHung();
+    NSLog(@"Sawt: reopened own session; local device %@", gSawtRebind);
+    return nil;
+}
+
 static id SawtSharedSession(NSString **why) {
     Class cls = NSClassFromString(@"XCTRunnerDaemonSession");
     if (!cls) { *why = @"XCTRunnerDaemonSession مو موجود"; return nil; }
+    BOOL closed; @synchronized (cls) { closed = gSawtClosed; }
+    if (closed) {
+        NSString *e = SawtReopenSession(cls);
+        if (e) { *why = [@"إعادة فتح الجلسة: " stringByAppendingString:e]; return nil; }
+    }
     SEL s = NSSelectorFromString(@"sharedSession");
     if (![cls respondsToSelector:s]) { *why = @"sharedSession مو مدعوم"; return nil; }
     id session = ((id (*)(id, SEL))objc_msgSend)(cls, s);
     if (!session) *why = @"sharedSession رجع فاضي";
     return session;
+}
+
+NSString * _Nullable SawtXCTReopenNow(void) {
+    Class cls = NSClassFromString(@"XCTRunnerDaemonSession");
+    if (!cls) return @"XCTRunnerDaemonSession مو موجود";
+    return SawtReopenSession(cls);
+}
+
+NSString *SawtXCTSessionInfo(void) {
+    id owned; Class cls = NSClassFromString(@"XCTRunnerDaemonSession");
+    @synchronized (cls ?: NSNull.null) { owned = gSawtOwned; }
+    return [NSString stringWithFormat:@"session=%@ device=%@", owned ? @"own" : @"shared", gSawtRebind.length ? gSawtRebind : @"original"];
 }
 
 NSString * _Nullable SawtXCTEnableAutomation(void) {
@@ -514,6 +595,9 @@ NSString *SawtXCTCloseSession(void) {
         SEL inv = NSSelectorFromString(@"invalidate");
         if (!link || ![link respondsToSelector:inv]) return @"✗ ما فيه اتصال نقدر نسكّره";
         ((void (*)(id, SEL))objc_msgSend)(link, inv);
+        // الجاية تفتح جلسة جديدة وتبني الجهاز المحلي عليها (عشان القراءة ما تروح للاتصال الميت)
+        Class cls = NSClassFromString(@"XCTRunnerDaemonSession");
+        @synchronized (cls) { gSawtOwned = nil; gSawtClosed = YES; }
         return [NSString stringWithFormat:@"تسكّر (%@ invalidate)", NSStringFromClass([link class])];
     } @catch (NSException *e) {
         return [NSString stringWithFormat:@"✗ %@: %@", e.name, e.reason ?: @""];
