@@ -1,5 +1,6 @@
 import PhotosUI
 import SwiftUI
+import ImagePlayground
 
 struct ChatView: View {
     @EnvironmentObject var store: ChatStore
@@ -25,6 +26,7 @@ struct ChatView: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var attaching = false
     @ObservedObject private var net = NetworkGate.shared
+    @ObservedObject private var playground = PlaygroundBridge.shared
     /// وضع البحث اللي ينتظر موافقة تنبيه الإنترنت
     @State private var webPending: NetworkGate.Mode?
     /// المستخدم قريب من آخر المحادثة؟ (لو طلع لفوق ما نسحبه لتحت مع كل رمز)
@@ -50,6 +52,13 @@ struct ChatView: View {
                 .environment(\.layoutDirection, .rightToLeft)
         }
         .sheet(isPresented: $showModels) { ModelsView() }
+        // Image Playground: النافذة تنفتح بالبرومبت لما المحرك يطلبها
+        .imagePlaygroundSheet(isPresented: Binding(get: { playground.prompt != nil },
+                                                   set: { if !$0 { playground.dismissed() } }),
+                              concept: playground.prompt ?? "",
+                              onCompletion: { url in playground.finish(url) },
+                              onCancellation: { playground.finish(nil) })
+        .imagePlaygroundGenerationStyle(PlaygroundStyles.selected, in: PlaygroundStyles.allowed)
         .alert("الوكيل ما يشتغل على كرت الشاشة",
                isPresented: Binding(get: { store.agentGPUGate != nil }, set: { if !$0 { store.agentGPUGate = nil } }),
                presenting: store.agentGPUGate) { g in

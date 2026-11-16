@@ -25,7 +25,8 @@ enum ImageEngine: String, CaseIterable, Identifiable {
     /// وصف قصير يطلع في القائمة
     var tag: String {
         switch self {
-        case .sd21, .sdTurbo, .playground: "محلي"
+        case .sd21, .sdTurbo: "محلي"
+        case .playground: "سحابة آبل الخاصة"
         case .gemini, .geminiLite: "سحابي · مدفوع"
         }
     }
@@ -493,27 +494,27 @@ actor ImageGenerator {
         return img
     }
 
-    // MARK: Image Playground (Apple Intelligence على الجهاز)
+    // MARK: Image Playground (نافذة آبل؛ في iOS 27 يرسم على سحابة آبل الخاصة)
+    // ImageCreator (الرسم البرمجي) انلغى في iOS 27، فنفتح نافذة Image Playground بالبرومبت جاهز والمستخدم يأكّد
 
     private func runPlayground(prompt: String, status: @escaping @Sendable (String) -> Void) async throws -> CGImage {
-        status("أرسم بـImage Playground…")
-        ImageProgress.post(.waiting)
-        let style = await PlaygroundStyles.selectedStyle()
-        do {
-            let creator = try await ImageCreator()
-            let styles = creator.availableStyles
-            guard let st = style.flatMap({ s in styles.first { $0.id == s.id } }) ?? styles.first(where: { PlaygroundStyles.isLocal($0) }) else {
-                throw SawtError.failed("Image Playground ما فيه أنماط متاحة")
-            }
-            slog("image: playground style=\(st.id) available=\(styles.map(\.id))")
-            for try await img in creator.images(for: [.text(prompt)], style: st, limit: 1) {
-                return img.cgImage
-            }
-            throw SawtError.failed("Image Playground ما رجّع صورة")
-        } catch let e as ImageCreator.Error {
-            slog("image: playground error \(e)")
-            throw SawtError.failed("Image Playground رفض: \(PlaygroundStyles.explain(e))")
+        guard await NetworkGate.shared.permit("رسم صورة بـImage Playground (سحابة آبل الخاصة)") else {
+            throw SawtError.failed("الإنترنت مقفول")
         }
+        status("كمّل في Image Playground…")
+        ImageProgress.post(.waiting)
+        let url = await withTaskCancellationHandler {
+            await PlaygroundBridge.shared.request(prompt)
+        } onCancel: {
+            Task { @MainActor in PlaygroundBridge.shared.finish(nil) }
+        }
+        try Task.checkCancellation()
+        guard let url else { throw CancellationError() }
+        guard let ui = UIImage(contentsOfFile: url.path), let cg = ui.cgImage else {
+            throw SawtError.failed("ما قدرت أقرأ الصورة من Image Playground")
+        }
+        slog("image: playground ok \(cg.width)x\(cg.height)")
+        return cg
     }
 
     // MARK: Gemini (سحابي مدفوع)
@@ -566,54 +567,65 @@ actor ImageGenerator {
 // MARK: - أنماط Image Playground
 
 enum PlaygroundStyles {
-    /// الأنماط على الجهاز؛ externalProvider (iOS 26: أنماط ChatGPT) هو اللي يروح للسحابة
-    static func isLocal(_ s: ImagePlaygroundStyle) -> Bool {
-        s.id != ImagePlaygroundStyle.externalProvider.id
-    }
+    /// الأنماط اللي تظهر في النافذة (externalProvider = مزوّد خارجي مثل ChatGPT، اختياري)
+    static let all: [(id: String, label: String)] = [
+        ("animation", "أنيميشن"), ("illustration", "رسم توضيحي"), ("sketch", "سكتش"), ("externalProvider", "ChatGPT (مزوّد خارجي)"),
+    ]
 
-    static func label(_ s: ImagePlaygroundStyle) -> String {
-        let base: String
-        switch s.id {
-        case ImagePlaygroundStyle.animation.id: base = "أنيميشن"
-        case ImagePlaygroundStyle.illustration.id: base = "رسم توضيحي"
-        case ImagePlaygroundStyle.sketch.id: base = "سكتش"
-        case ImagePlaygroundStyle.externalProvider.id: base = "ChatGPT"
-        default: base = s.id
-        }
-        return isLocal(s) ? base : "\(base) (سحابي)"
-    }
-
-    static var selectedID: String? {
-        get { UserDefaults.standard.string(forKey: "playgroundStyle") }
-        set { UserDefaults.standard.set(newValue, forKey: "playgroundStyle") }
-    }
-
-    /// النمط المختار لو موجود
-    static func selectedStyle() async -> ImagePlaygroundStyle? {
-        guard let id = selectedID else { return nil }
-        guard let c = try? await ImageCreator() else { return nil }
-        return c.availableStyles.first { $0.id == id }
-    }
-
-    /// الأنماط المتاحة أو سبب عدم التوفر (لصفحة النماذج وزر التجربة)
-    static func probe() async -> (styles: [ImagePlaygroundStyle], error: String?) {
-        do {
-            let c = try await ImageCreator()
-            return (c.availableStyles, nil)
-        } catch let e as ImageCreator.Error {
-            return ([], explain(e))
-        } catch {
-            return ([], error.localizedDescription)
+    static func style(_ id: String) -> ImagePlaygroundStyle {
+        switch id {
+        case "illustration": .illustration
+        case "sketch": .sketch
+        case "externalProvider": .externalProvider
+        default: .animation
         }
     }
 
-    static func explain(_ e: ImageCreator.Error) -> String {
-        switch e {
-        case .notSupported: return "الجهاز أو التطبيق ما يدعمه (notSupported)"
-        case .unavailable: return "Apple Intelligence مو جاهز أو للحين ينزّل (unavailable)"
-        case .backgroundCreationForbidden: return "لازم صوت يكون قدّام وقت الرسم"
-        case .creationCancelled: return "انلغى"
-        default: return String(describing: e)
+    static var selectedID: String { UserDefaults.standard.string(forKey: "playgroundStyle") ?? "" }
+    /// النمط اللي تفتح عليه النافذة
+    static var selected: ImagePlaygroundStyle { style(selectedID) }
+    /// المسموح في النافذة: أنماط آبل، والمزوّد الخارجي بس لو اختاره
+    static var allowed: [ImagePlaygroundStyle] {
+        var a: [ImagePlaygroundStyle] = [.animation, .illustration, .sketch]
+        if selectedID == "externalProvider" { a.append(.externalProvider) }
+        return a
+    }
+}
+
+/// طلب رسم ينتظر نافذة Image Playground (الواجهة تعرضها وترجع الرابط)
+@MainActor
+final class PlaygroundBridge: ObservableObject {
+    static let shared = PlaygroundBridge()
+    @Published private(set) var prompt: String?
+    private var cont: CheckedContinuation<URL?, Never>?
+
+    func request(_ p: String) async -> URL? {
+        finish(nil)   // أي طلب قديم معلّق
+        return await withCheckedContinuation { c in
+            cont = c
+            prompt = p
+        }
+    }
+
+    func finish(_ url: URL?) {
+        prompt = nil
+        let c = cont
+        cont = nil
+        // الملف مؤقت والنظام ممكن يمسحه بعد ما يرجع الرد: ننسخه فورًا
+        var kept: URL?
+        if let url {
+            let dst = FileManager.default.temporaryDirectory.appendingPathComponent("pg-\(UUID().uuidString).\(url.pathExtension.isEmpty ? "png" : url.pathExtension)")
+            if (try? FileManager.default.copyItem(at: url, to: dst)) != nil { kept = dst } else { kept = url }
+        }
+        c?.resume(returning: kept)
+    }
+
+    /// النافذة انقفلت: لو ما وصل رابط ولا إلغاء خلال ثانية نعتبرها انلغت
+    func dismissed() {
+        prompt = nil
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1))
+            if self.prompt == nil, self.cont != nil { self.finish(nil) }
         }
     }
 }

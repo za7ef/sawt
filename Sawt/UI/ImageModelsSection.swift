@@ -6,9 +6,8 @@ struct ImageModelsSection: View {
     @ObservedObject private var sd = SDModels.shared
     @AppStorage("imageEngine") private var engineRaw = ""
     @AppStorage("playgroundStyle") private var styleID = ""
-    @State private var styles: [ImagePlaygroundStyle] = []
-    @State private var probeNote: String?
-    @State private var probing = false
+    @State private var probeNote: Bool?
+    @Environment(\.supportsImagePlayground) private var supportsPlayground
     @State private var confirmDelete: ImageEngine?
     @AppStorage("imageEnhance") private var enhance = true
 
@@ -76,30 +75,19 @@ struct ImageModelsSection: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Image Playground")
-                    Text("من Apple Intelligence على جوالك. رسوم كرتونية، والوصف يروح بالإنجليزي.")
+                    Text("نافذة آبل تنفتح بالوصف جاهز وتأكّد منها. في iOS 27 يرسم على سحابة آبل الخاصة (يحتاج نت).")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(probing ? "…" : "افحص") {
-                    probing = true
-                    Task {
-                        let r = await PlaygroundStyles.probe()
-                        styles = r.styles
-                        probeNote = r.error.map { "ما يشتغل: \($0)" } ?? "شغّال ✓ (\(r.styles.count) أنماط)"
-                        probing = false
-                    }
-                }
-                .buttonStyle(.borderless)
-                .disabled(probing)
+                Button("افحص") { probeNote = supportsPlayground }
+                    .buttonStyle(.borderless)
             }
-            if let n = probeNote {
-                Text(n).font(.caption).foregroundStyle(styles.isEmpty ? Color.red : Color.green)
+            if let ok = probeNote {
+                Text(ok ? "متاح ✓" : "مو متاح: شغّل Apple Intelligence وتوليد الصور من الإعدادات، وتأكد إن لغة الجهاز ومنطقته مدعومة.")
+                    .font(.caption).foregroundStyle(ok ? Color.green : Color.red)
             }
-            if !styles.isEmpty {
-                Picker("النمط", selection: $styleID) {
-                    Text("تلقائي").tag("")
-                    ForEach(styles, id: \.id) { s in Text(PlaygroundStyles.label(s)).tag(s.id) }
-                }
+            Picker("النمط", selection: $styleID) {
+                ForEach(PlaygroundStyles.all, id: \.id) { s in Text(s.label).tag(s.id == "animation" ? "" : s.id) }
             }
         }
     }
