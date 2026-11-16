@@ -25,7 +25,8 @@ struct ChatView: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var attaching = false
     @ObservedObject private var net = NetworkGate.shared
-    @State private var webAsk = false
+    /// وضع البحث اللي ينتظر موافقة تنبيه الإنترنت
+    @State private var webPending: NetworkGate.Mode?
     /// المستخدم قريب من آخر المحادثة؟ (لو طلع لفوق ما نسحبه لتحت مع كل رمز)
     @State private var nearBottom = true
     /// المستخدم يسحب القائمة بيده الحين (نحدّث «قريب من تحت» بس من حركته، مو من نمو الرد)
@@ -358,135 +359,158 @@ struct ChatView: View {
         }
     }
 
+    /// «+»: المرفقات وبحث الويب والتفكير (حالتهم ظاهرة هنا وكشرائح فوق النص)
     private var attachMenu: some View {
         Menu {
-            Button { showCamera = true } label: { Label("الكاميرا", systemImage: "camera") }
-            Button { showPhotos = true } label: { Label("الصور", systemImage: "photo.on.rectangle") }
-            Button { showFiles = true } label: { Label("الملفات", systemImage: "folder") }
+            Section {
+                Button { showCamera = true } label: { Label("الكاميرا", systemImage: "camera") }
+                Button { showPhotos = true } label: { Label("الصور", systemImage: "photo.on.rectangle") }
+                Button { showFiles = true } label: { Label("الملفات", systemImage: "folder") }
+            }
+            Section {
+                Menu {
+                    Picker("بحث في الويب", selection: Binding(get: { net.mode }, set: { setWeb($0) })) {
+                        Text("طافي").tag(NetworkGate.Mode.off)
+                        Text("تلقائي").tag(NetworkGate.Mode.auto)
+                        Text("دايم").tag(NetworkGate.Mode.on)
+                    }
+                } label: { Label("بحث في الويب: \(net.modeLabel)", systemImage: "globe") }
+                Menu {
+                    Picker("التفكير", selection: Binding(get: { store.thinkMode }, set: { store.setThinkMode($0) })) {
+                        ForEach(ThinkMode.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                } label: { Label("التفكير: \(store.thinkMode.label)", systemImage: "brain") }
+            }
         } label: {
             Image(systemName: "plus").font(.title3.weight(.medium)).frame(width: 40, height: 44)
         }
         .buttonStyle(.plain)
-        .padding(.leading, 4)
+        .padding(.leading, 6)
     }
 
-    /// زر الإنترنت/البحث في الويب: مقفول = التطبيق ما يتصل بالإنترنت أبدًا.
-    private var webButton: some View {
-        Button {
-            // أول مرة يطلع من طافي: نعرض تنبيه الإنترنت مرة وحدة
-            if net.mode == .off, !netWarned { webAsk = true } else { net.cycle() }
-        } label: {
-            ZStack(alignment: .bottomTrailing) {
-                Image(systemName: "globe")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(net.mode == .off ? Color.secondary : Theme.accent)
-                    .frame(width: 34, height: 44)
-                    .background(net.mode == .on ? Theme.accent.opacity(0.18) : .clear, in: Circle())
-                if net.mode == .auto {
-                    Text("A").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.accent).offset(x: -2, y: -8)
+    /// أول مرة يطلع من طافي: تنبيه الإنترنت مرة وحدة
+    private func setWeb(_ m: NetworkGate.Mode) {
+        if net.mode == .off, m != .off, !netWarned { webPending = m } else { applyWeb(m) }
+    }
+    private func applyWeb(_ m: NetworkGate.Mode) {
+        switch m {
+        case .off: net.on = false
+        case .auto: net.auto = true; net.on = true
+        case .on: net.auto = false; net.on = true
+        }
+    }
+
+    /// شرائح الحالة: تبين وش مشغّل، والضغط يطفيه
+    @ViewBuilder private var stateChips: some View {
+        if net.mode != .off || store.thinkMode == .on {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    if net.mode != .off {
+                        chip("globe", net.mode == .auto ? "بحث تلقائي" : "بحث دايم") { applyWeb(.off) }
+                    }
+                    if store.thinkMode == .on {
+                        chip("brain", "تفكير عميق") { store.setThinkMode(.off) }
+                    }
                 }
+                .padding(.horizontal, 12).padding(.top, 8)
             }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("بحث في الويب: \(net.modeLabel)")
-        .alert("بيتم الوصول للإنترنت", isPresented: $webAsk) {
-            Button("متابعة") { netWarned = true; net.cycle() }
-            Button("إلغاء", role: .cancel) {}
-        } message: {
-            Text("سؤالك بيروح لمحرك بحث (DuckDuckGo، أو ويكيبيديا كبديل) عشان يجيب صفحات، والباقي يظل على جوالك. لما تقفل الزر ينقطع التطبيق عن الإنترنت.")
-        }
     }
 
-    /// تفكير عميق (لكل محادثة)
-    private var thinkButton: some View {
-        Button {
-            store.cycleThinkMode()
-        } label: {
-            let m = store.thinkMode
-            ZStack(alignment: .bottomTrailing) {
-                Image(systemName: "brain")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(m == .off ? Color.secondary : Theme.accent)
-                    .frame(width: 34, height: 44)
-                    .background(m == .on ? Theme.accent.opacity(0.18) : .clear, in: Circle())
-                if m == .auto {
-                    Text("A").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.accent).offset(x: -2, y: -8)
-                }
+    private func chip(_ icon: String, _ title: String, off: @escaping () -> Void) -> some View {
+        Button(action: off) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                Text(title)
+                Image(systemName: "xmark").font(.caption2.weight(.bold))
             }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(Theme.accent.opacity(0.15), in: Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("تفكير عميق: \(store.thinkMode.label)")
+        .accessibilityLabel("\(title)، اضغط عشان تطفيه")
     }
 
+    private var micButton: some View {
+        Button {
+            if dictation.isRecording {
+                let gen = sendGen
+                dictation.stop { text in
+                    guard gen == sendGen else { return }
+                    draft += (draft.isEmpty ? "" : " ") + text
+                }
+            } else {
+                dictation.start()
+            }
+        } label: {
+            Image(systemName: dictation.isRecording ? "stop.circle.fill" : (dictation.isBusy ? "ellipsis" : "mic"))
+                .font(.title3)
+                .symbolEffect(.pulse, isActive: dictation.isRecording)
+                .foregroundStyle(dictation.isRecording ? .red : .primary)
+                .frame(width: 38, height: 44)
+        }
+        .buttonStyle(.plain)
+        .disabled(dictation.isBusy || !models.stt.isReady)
+    }
+
+    /// خانة وحدة مثل ChatGPT: «+» ثم النص ثم المايك ثم الزر الأزرق (مكالمة ← إرسال ← إيقاف)
     private var composer: some View {
         VStack(spacing: 0) {
-        pendingBar
-        GlassEffectContainer(spacing: 12) {
-            HStack(alignment: .bottom, spacing: 10) {
-                HStack(alignment: .bottom, spacing: 8) {
+            pendingBar
+            VStack(alignment: .leading, spacing: 0) {
+                stateChips
+                HStack(alignment: .bottom, spacing: 4) {
                     attachMenu
-                    thinkButton
-                    webButton
-                    ComposerField(text: $draft, placeholder: dictation.isRecording ? "أسمعك…" : "اكتب رسالة",
+                    ComposerField(text: $draft, placeholder: dictation.isRecording ? "أسمعك…" : "اسأل صوت",
                                   focused: $focused, clearToken: sendGen)
-
-                    Button {
-                        if dictation.isRecording {
-                            let gen = sendGen
-                            dictation.stop { text in
-                                guard gen == sendGen else { return }
-                                draft += (draft.isEmpty ? "" : " ") + text
-                            }
-                        } else {
-                            dictation.start()
-                        }
-                    } label: {
-                        Image(systemName: dictation.isRecording ? "stop.circle.fill" : (dictation.isBusy ? "ellipsis" : "mic"))
-                            .font(.title3)
-                            .symbolEffect(.pulse, isActive: dictation.isRecording)
-                            .foregroundStyle(dictation.isRecording ? .red : .primary)
-                            .frame(width: 40, height: 44)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(dictation.isBusy || !models.stt.isReady)
-                    .padding(.trailing, 6)
+                    micButton
+                    actionButton.padding(.bottom, 4).padding(.trailing, 4)
                 }
-                .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-
-                actionButton
             }
+            .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
             .padding(.horizontal, 14)
             .padding(.bottom, 8)
             .padding(.top, 6)
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: draft.isEmpty)
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: store.isGenerating)
+            .animation(.easeOut(duration: 0.2), value: net.mode)
+            .animation(.easeOut(duration: 0.2), value: store.thinkMode)
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: draft.isEmpty)
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: store.isGenerating)
+        .alert("بيتم الوصول للإنترنت", isPresented: Binding(get: { webPending != nil }, set: { if !$0 { webPending = nil } })) {
+            Button("متابعة") { netWarned = true; if let m = webPending { applyWeb(m) }; webPending = nil }
+            Button("إلغاء", role: .cancel) { webPending = nil }
+        } message: {
+            Text("سؤالك بيروح لمحرك بحث (DuckDuckGo، أو ويكيبيديا كبديل) عشان يجيب صفحات، والباقي يظل على جوالك. لما تطفي البحث ينقطع التطبيق عن الإنترنت.")
         }
     }
 
+    /// الزر الأزرق داخل الخانة: إيقاف وقت التوليد، إرسال لو فيه نص، وإلا مكالمة صوتية
     @ViewBuilder private var actionButton: some View {
         if store.isGenerating {
             Button { store.stop() } label: {
-                Image(systemName: "stop.fill").font(.body.weight(.bold)).frame(width: 48, height: 48)
+                Image(systemName: "stop.fill").font(.body.weight(.bold)).frame(width: 36, height: 36)
             }
             .buttonStyle(.glassProminent)
             .buttonBorderShape(.circle)
             .transition(.scale.combined(with: .opacity))
         } else if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pending.isEmpty {
             Button(action: send) {
-                Image(systemName: "arrow.up").font(.body.weight(.bold)).frame(width: 48, height: 48)
+                Image(systemName: "arrow.up").font(.body.weight(.bold)).frame(width: 36, height: 36)
             }
             .buttonStyle(.glassProminent)
             .buttonBorderShape(.circle)
-            .disabled(store.isGenerating)
+            .accessibilityLabel("إرسال")
             .transition(.scale.combined(with: .opacity))
         } else {
             Button(action: startVoice) {
-                Image(systemName: "waveform").font(.title3.weight(.semibold)).frame(width: 48, height: 48)
+                Image(systemName: "waveform").font(.body.weight(.semibold)).frame(width: 36, height: 36)
                     .symbolEffect(.variableColor.iterative, options: .repeating, isActive: true)
             }
             .buttonStyle(.glassProminent)
             .buttonBorderShape(.circle)
+            .accessibilityLabel("مكالمة صوتية")
             .transition(.scale.combined(with: .opacity))
         }
     }

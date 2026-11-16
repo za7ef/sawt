@@ -200,6 +200,13 @@ final class ChatStore: ObservableObject {
     }
     var deepThink: Bool { thinkMode == .on }
 
+    func setThinkMode(_ m: ThinkMode) {
+        let i = ensureCurrent()
+        conversations[i].thinkMode = m.rawValue
+        conversations[i].deepThink = nil
+        save()
+    }
+
     func cycleThinkMode() {
         let next = thinkMode.next
         let i = ensureCurrent()
