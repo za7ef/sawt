@@ -712,9 +712,11 @@ final class ChatStore: ObservableObject {
     /// يطلب من نموذج المحادثة JSON فيه وصف إنجليزي: {"prompt": "...", "negative": "..."}
     static func imagePrompt(for request: String) async -> (String, String)? {
         let sys = """
-        You write prompts for an image generator. Turn the user's request (any language) into JSON only: \
-        {"prompt": "<detailed English description: subject, setting, style, lighting, colors; max 60 words>", \
-        "negative": "<short English list of things to avoid>"}. No other text.
+        You write prompts for an image generator. Turn the user's request (any language) into an enriched, detailed English prompt. \
+        Keep the user's subject and intent exactly, then add: art style or medium, setting and background, composition and camera angle, \
+        lighting, colors and mood, and quality tags (e.g. highly detailed, sharp focus, masterpiece). \
+        Reply with JSON only: {"prompt": "<comma-separated English prompt, max 70 words>", \
+        "negative": "<comma-separated English list of things to avoid: e.g. blurry, low quality, deformed, extra fingers, watermark, text>"}. No other text.
         """
         guard let s = try? await LLMService.shared.stream(system: sys, history: [], user: String(request.prefix(600)), maxTokens: 220) else { return nil }
         var out = ""
@@ -761,8 +763,8 @@ enum ImageIntent {
     /// أشياء على الجوال نفسه (لقطة شاشة، الصور في الاستوديو) مو رسم
     static let phoneWords = ["لقطة", "سكرين", "الاستوديو", "الألبوم", "البوم", "الكاميرا", "صورة الشاشة", "صوري", "ارسل", "أرسل"]
 
-    /// «حسّن الوصف بالنموذج» (افتراضيًا طافي): لو شغّال حتى الوصف الإنجليزي يمر على نموذج المحادثة ويتوسّع
-    static var enhance: Bool { UserDefaults.standard.bool(forKey: "imageEnhance") }
+    /// «حسّن الوصف بالنموذج» (افتراضيًا شغّال): كل وصف يمر على نموذج المحادثة ويتوسّع بالتفاصيل
+    static var enhance: Bool { UserDefaults.standard.object(forKey: "imageEnhance") as? Bool ?? true }
 
     /// هل نحتاج نموذج المحادثة يكتب الوصف؟ العربي دايمًا لـSD وImage Playground (ما يفهمونه)، وGemini ياخذه مباشرة
     static func needsModel(_ request: String, engine: ImageEngine?) -> Bool {

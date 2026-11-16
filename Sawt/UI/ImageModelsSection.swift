@@ -10,7 +10,7 @@ struct ImageModelsSection: View {
     @State private var probeNote: String?
     @State private var probing = false
     @State private var confirmDelete: ImageEngine?
-    @AppStorage("imageEnhance") private var enhance = false
+    @AppStorage("imageEnhance") private var enhance = true
 
     var body: some View {
         Section {
@@ -21,7 +21,7 @@ struct ImageModelsSection: View {
             VStack(alignment: .leading, spacing: 4) {
                 Toggle("حسّن الوصف بالنموذج", isOn: $enhance)
                 Text(enhance
-                     ? "كل وصف (عربي أو إنجليزي) يمر على نموذج المحادثة ويكتبه بتفاصيل أكثر قبل الرسم. أبطأ شوي ويحمّل النموذج."
+                     ? "كل وصف (عربي أو إنجليزي) يكتبه نموذج المحادثة وصف إنجليزي مفصّل: الأسلوب والإضاءة والتكوين وكلمات الجودة، مع قائمة أشياء نتجنبها."
                      : "الوصف الإنجليزي يروح مباشرة (أسرع وبدون تحميل النموذج). العربي يترجمه نموذج المحادثة لـStable Diffusion وImage Playground لأنهم ما يفهمون عربي، وGemini ياخذه زي ما هو.")
                     .font(.caption).foregroundStyle(.secondary)
             }
