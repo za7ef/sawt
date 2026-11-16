@@ -50,7 +50,13 @@ final class ScreenShare: @unchecked Sendable {
         } catch { slog("share: listen failed \(error)") }
     }
 
+    private var current: NWConnection?
     private func accept(_ c: NWConnection) {
+        // اتصال واحد بس (الأحدث)، ومن الجهاز نفسه فقط
+        if case let .hostPort(host, _) = c.endpoint, "\(host)" != "127.0.0.1" && "\(host)" != "::1" {
+            slog("share: rejected non-loopback \(host)"); c.cancel(); return
+        }
+        current?.cancel(); current = c
         slog("share: extension connected")
         c.start(queue: q)
         readFrame(c)
@@ -63,6 +69,8 @@ final class ScreenShare: @unchecked Sendable {
             guard n > 0, n < 4_000_000 else { c.cancel(); return }
             c.receive(minimumIncompleteLength: n, maximumLength: n) { d, _, _, e in
                 guard let d, d.count == n, e == nil else { c.cancel(); return }
+                // لازم يكون JPEG (FF D8 … FF D9)؛ غيره نقفل الاتصال
+                guard d.count > 4, d[d.startIndex] == 0xFF, d[d.startIndex + 1] == 0xD8 else { slog("share: rejected non-JPEG frame"); c.cancel(); return }
                 self.lock.lock(); self._frame = d; self._at = Date(); self.frames += 1; self.lock.unlock()
                 if !done { self.readFrame(c) }
             }

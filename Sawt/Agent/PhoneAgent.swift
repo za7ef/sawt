@@ -179,6 +179,9 @@ final class PhoneAgent: ObservableObject {
         slog("agent: finish \(r)")
     }
 
+    /// من داخل الحلقة: بس لو هي المهمة الحالية
+    private func sayLoop(_ id: Int, _ s: String) { if id == runID { say(s) } }
+
     private func say(_ s: String) {
         log.append(Step(text: s)); slog("agent: \(s.prefix(300))")
         if running { surface(s); updateBubble() }
@@ -195,16 +198,16 @@ final class PhoneAgent: ObservableObject {
         // الطريقة المختارة بس، بدون رجوع لطريقة ثانية. XCTest: نشغّل وضع الأتمتة تلقائيًا وننتظره
         if Self.see == .xct {
             if SawtXCTPhoneLocked() {
-                say("✗ الجوال مقفل")
+                sayLoop(myID, "✗ الجوال مقفل")
                 finishLoop(myID, "وقفت: الجوال مقفل — افتح القفل وأرسل المهمة مرة ثانية"); return
             }
-            if !XCTBackend.runnerReady || !Runner.isOn { say("الطريقة: XCTest — أشغّل المشغّل… (دخّل رمز الجوال لو طلبه)") }
+            if !XCTBackend.runnerReady || !Runner.isOn { sayLoop(myID, "الطريقة: XCTest — أشغّل المشغّل… (دخّل رمز الجوال لو طلبه)") }
             if let e = await Runner.set(true) {
-                say("✗ XCTest ما اشتغل: \(e.prefix(200))")
+                sayLoop(myID, "✗ XCTest ما اشتغل: \(e.prefix(200))")
                 finishLoop(myID, "وقفت: المشغّل ما اشتغل — \(e.prefix(160))"); return
             }
             if let e = await XCTBackend.beginTask() {
-                say("✗ \(e.prefix(200))")
+                sayLoop(myID, "✗ \(e.prefix(200))")
                 if XCTBackend.sessionDead {
                     finishLoop(myID, "وقفت: \(e.prefix(120)) — صوت بيعيد التشغيل ويرجع المشغّل لحاله، بعدها أرسل المهمة مرة ثانية")
                     Runner.relaunch(title: "صوت أعاد التشغيل عشان يقرأ الشاشة", body: "افتح صوت ويشتغل المشغّل لحاله، وأرسل المهمة مرة ثانية", turnOnNext: true)
@@ -212,9 +215,9 @@ final class PhoneAgent: ObservableObject {
                 }
                 finishLoop(myID, "وقفت: \(e.prefix(160))"); return
             }
-            say("✓ الطريقة: XCTest — \(XCTBackend.sessionState)؛ وضع الأتمتة مفعّل")
+            sayLoop(myID, "✓ الطريقة: XCTest — \(XCTBackend.sessionState)؛ وضع الأتمتة مفعّل")
         } else {
-            say("الطريقة: \(Self.see.title)")
+            sayLoop(myID, "الطريقة: \(Self.see.title)")
         }
         if Task.isCancelled { return }
         let tl = Date()
@@ -242,7 +245,7 @@ final class PhoneAgent: ObservableObject {
             guard let scr = await readScreen() else {
                 fails += 1
                 if Self.see == .xct && fails >= 2 {
-                    say("✗ \(lastReadError)")
+                    sayLoop(myID, "✗ \(lastReadError)")
                     finishLoop(myID, "وقفت: \(lastReadError)"); return
                 }
                 if fails >= 3 { finishLoop(myID, "ما قدرت أقرأ الشاشة"); return }
@@ -254,7 +257,7 @@ final class PhoneAgent: ObservableObject {
             var (app, els) = scr
             if isSelf {
                 // ما نلمس واجهة صوت نفسها أبدًا: نطلع للرئيسية ونعيد القراءة
-                say("صوت قدّام — أطلع للشاشة الرئيسية")
+                sayLoop(myID, "صوت قدّام — أطلع للشاشة الرئيسية")
                 let hr = await Self.exec(.keys("home"))
                 // الانتقال ياخذ وقت: نعيد القراءة لين ثانيتين ونص بدل ما نحكم من أول قراءة
                 var s2: (String, [Element])?
@@ -314,7 +317,7 @@ final class PhoneAgent: ObservableObject {
             slog("agent: raw step=\(n) «\(raw.prefix(300))»")
             log.append(Step(text: "🤖 النموذج (\(llmMs)ms\(img == nil ? "" : "، مع صورة")): \(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))"))
             guard action?["action"] is String else {
-                say("⚠️ رد غير مفهوم: \(raw.prefix(120))"); finishLoop(myID, "النموذج ما رد بخطوة صالحة"); return
+                sayLoop(myID, "⚠️ رد غير مفهوم: \(raw.prefix(120))"); finishLoop(myID, "النموذج ما رد بخطوة صالحة"); return
             }
             let acts = Self.actions(raw)
             var actMs = 0
@@ -326,17 +329,17 @@ final class PhoneAgent: ObservableObject {
                     slog("agent: batch stopped (stale ids after screen change)"); break
                 }
                 if kind == "tap" || kind == "longpress" || action["id"] != nil, !((action["id"] as? Int).map { els.indices.contains($0) } ?? false) {
-                    say("⚠️ رقم عنصر غير موجود: \(action["id"] ?? "؟")")
+                    sayLoop(myID, "⚠️ رقم عنصر غير موجود: \(action["id"] ?? "؟")")
                     history.append("رقم غلط \(action["id"] ?? "؟") — اختر رقم من القائمة"); lastFailed = true; break
                 }
                 let desc = Self.describeAction(action, els)
-                say("\(n). 🤖 \(desc)")
+                sayLoop(myID, "\(n). 🤖 \(desc)")
                 if kind == "done" {
                     let sum = (action["summary"] as? String) ?? "خلصت"
                     // لازم نتأكد من الشاشة: أول done نعيد القراءة ونسأله يتحقق
                     if !verifying && n < maxSteps {
                         verifying = true
-                        say("🔎 أتأكد من الشاشة قبل ما أقول خلصت")
+                        sayLoop(myID, "🔎 أتأكد من الشاشة قبل ما أقول خلصت")
                         history.append("قال خلص (\(sum)) — يتحقق")
                         break
                     }
@@ -346,14 +349,14 @@ final class PhoneAgent: ObservableObject {
                 if let why = Self.sensitive(action, els) {
                     let ok = await askConfirm("\(why)\n\(desc)\nأكمل؟")
                     if Task.isCancelled { return }
-                    if !ok { say("رفضت — وقفت"); finishLoop(myID, "انلغى قبل خطوة حساسة"); return }
+                    if !ok { sayLoop(myID, "رفضت — وقفت"); finishLoop(myID, "انلغى قبل خطوة حساسة"); return }
                 }
                 let tA = Date()
                 let r = await perform(kind, action, els)
                 actMs += Int(Date().timeIntervalSince(tA) * 1000)
                 history.append(desc + (r.ok ? "" : " (فشل: \(r.info.prefix(60)))"))
                 lastFailed = !r.ok
-                if !r.ok { say("⚠️ \(r.info.prefix(160))"); break }
+                if !r.ok { sayLoop(myID, "⚠️ \(r.info.prefix(160))"); break }
                 if Task.isCancelled { return }
                 if ["tap", "longpress", "open", "back", "home", "swipe", "url", "search", "enter"].contains(kind) || (kind == "type" && action["id"] != nil) {
                     screenChanged = true
@@ -543,9 +546,16 @@ final class PhoneAgent: ObservableObject {
     static func firstJSONArray(_ s: String) -> String {
         guard let a = s.firstIndex(of: "[") else { return "[]" }
         var depth = 0
+        var inStr = false, esc = false
         for i in s[a...].indices {
-            if s[i] == "[" { depth += 1 }
-            if s[i] == "]" { depth -= 1; if depth == 0 { return String(s[a...i]) } }
+            let c = s[i]
+            if inStr {
+                if esc { esc = false } else if c == "\\" { esc = true } else if c == "\"" { inStr = false }
+                continue
+            }
+            if c == "\"" { inStr = true; continue }
+            if c == "[" { depth += 1 }
+            if c == "]" { depth -= 1; if depth == 0 { return String(s[a...i]) } }
         }
         return "[]"
     }
@@ -696,7 +706,7 @@ final class PhoneAgent: ObservableObject {
         func prio(_ e: Element) -> Int {
             if e.kind == "field" || e.kind == "search" { return 0 }
             let bar = e.frame.minY > b.height * 0.85 || e.frame.maxY < b.height * 0.15
-            if e.kind == "tabbar" || (bar && ["button", "link", "other", "image"].contains(e.kind)) { return 1 }
+            if (bar && ["button", "link", "other", "image"].contains(e.kind)) { return 1 }
             if ["button", "switch", "link"].contains(e.kind) { return 2 }
             return 3
         }
@@ -782,7 +792,11 @@ final class PhoneAgent: ObservableObject {
                 // «رد» قصيرة: بس كلمة كاملة (رد/الرد/ورد)، الباقي جذر داخل الكلمة
                 if ["رد", "الرد", "ورد"].contains(t) { return true }
                 // المصدر «إرسال» كلمة كاملة بس (مو «رسالة»)
-                if ["ارسال", "الارسال", "وارسال", "للارسال", "بارسال"].contains(t) { return true }
+                for base in ["ارسال", "الارسال", "وارسال", "للارسال", "بارسال"] {
+                    if t == base { return true }
+                    // مع ضمير: ارساله/ارسالها/ارسالهم/ارسالك/ارسالكم/ارسالنا
+                    if t.hasPrefix(base), ["ه", "ها", "هم", "هما", "هن", "ك", "كم", "كي", "نا"].contains(String(t.dropFirst(base.count))) { return true }
+                }
                 if riskyAR.contains(where: { $0.count >= 3 && !$0.contains(" ") && t.contains($0) }) { return true }
             }
         }
@@ -882,7 +896,11 @@ final class PhoneAgent: ObservableObject {
             if kind == "search", let q = (a["q"] as? String)?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed), !q.isEmpty {
                 u = URL(string: "https://www.google.com/search?q=\(q)")
             } else if let t = a["url"] as? String {
-                u = URL(string: t.lowercased().hasPrefix("http") ? t : "https://\(t)")
+                // https بس للنطاق المجرد (example.com)؛ tel:/sms:/mailto: وغيرها تبقى كما هي (وتمر على التأكيد)
+                let tt = t.trimmingCharacters(in: .whitespaces)
+                let hasScheme = tt.range(of: "^[a-zA-Z][a-zA-Z0-9+.-]*:", options: .regularExpression) != nil && !tt.contains(where: { $0 == " " })
+                    && tt.range(of: "^[^/]+\\.[^/:]+:[0-9]+", options: .regularExpression) == nil
+                u = URL(string: hasScheme ? tt : "https://\(tt)")
             }
             guard let u else { return (false, "رابط غير صالح") }
             return await openURL(u)

@@ -656,11 +656,11 @@ enum XCTBackend {
     private static func result(_ err: String?, _ what: String, _ t: Date) -> String {
         let ms = Int(Date().timeIntervalSince(t) * 1000)
         slog("xct: \(what) \(err == nil ? "ok" : "failed: \(err!)") \(ms)ms")
-        if let err {
-            let e = err.replacingOccurrences(of: "\"", with: "'")
-            return "{\"ok\":false,\"via\":\"xct\",\"error\":\"\(e.prefix(200))\"}"
+        let obj: [String: Any] = err.map { ["ok": false, "via": "xct", "error": String($0.prefix(200))] } ?? ["ok": true, "via": "xct", "ms": ms]
+        guard let d = try? JSONSerialization.data(withJSONObject: obj), let j = String(data: d, encoding: .utf8) else {
+            return err == nil ? "{\"ok\":true,\"via\":\"xct\"}" : "{\"ok\":false,\"via\":\"xct\",\"error\":\"?\"}"
         }
-        return "{\"ok\":true,\"via\":\"xct\",\"ms\":\(ms)}"
+        return j
     }
 
     /// يرسل حدث لمس مركّب عبر daemonProxy من خيط خلفي (بدون الخيط الرئيسي وبدون انتظار الهدوء). nil = انقبل
