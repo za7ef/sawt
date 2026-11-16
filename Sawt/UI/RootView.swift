@@ -58,7 +58,7 @@ struct RootView: View {
                         }
                     }
             }
-            .background(Theme.bg.ignoresSafeArea())
+            .background(Color.black.ignoresSafeArea())
             .alert("التطبيق انقفل المرة اللي فاتت", isPresented: $crashNotice) {
                 Button("صدّر السجل") { shareURL = Log.shared.export() }
                 Button("خلاص", role: .cancel) {}
@@ -99,8 +99,17 @@ struct DrawerView: View {
     @EnvironmentObject var store: ChatStore
     var close: () -> Void
     @State private var search = ""
+    @State private var searching = false
+    @State private var showAll = false
     @State private var showSettings = false
     @State private var showModels = false
+    @State private var showAgent = false
+    @State private var showVoice = false
+    @State private var renaming: UUID?
+    @State private var newTitle = ""
+    @FocusState private var searchFocused: Bool
+
+    private let recentLimit = 7
 
     var filtered: [Conversation] {
         search.isEmpty ? store.conversations
@@ -110,75 +119,170 @@ struct DrawerView: View {
             }
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("بحث", text: $search)
-            }
-            .padding(.horizontal, 14).padding(.vertical, 11)
-            .glassEffect(.regular, in: .capsule)
+    /// غير فاضية بس (المحادثة الجديدة الفاضية ما تطلع بالقائمة إلا لو هي الحالية)
+    private var shown: [Conversation] {
+        let all = filtered.filter { !$0.messages.isEmpty || $0.id == store.currentID }
+        return (showAll || searching) ? all : Array(all.prefix(recentLimit))
+    }
 
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if !searching {
+                        nav
+                        RunnerPill().padding(.top, 14)
+                        Divider().overlay(Color.white.opacity(0.12)).padding(.vertical, 18)
+                    }
+                    recents
+                }
+                .padding(.bottom, 12)
+            }
+            .scrollIndicators(.hidden)
+            footer
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+        .background(Color.black)
+        .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showModels) { ModelsView() }
+        .sheet(isPresented: $showAgent) {
+            NavigationStack { PhoneAgentView() }.environment(\.layoutDirection, .rightToLeft)
+        }
+        .fullScreenCover(isPresented: $showVoice) {
+            VoiceModeView().environment(\.layoutDirection, .rightToLeft)
+        }
+        .alert("إعادة تسمية", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("اسم المحادثة", text: $newTitle)
+            Button("حفظ") { if let id = renaming { store.rename(id, to: newTitle) }; renaming = nil }
+            Button("إلغاء", role: .cancel) { renaming = nil }
+        }
+    }
+
+    // MARK: الرأس: «صوت» كبير + زر بحث دائري
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            if searching {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("دوّر في المحادثات", text: $search).focused($searchFocused)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 11)
+                .glassEffect(.regular, in: .capsule)
+                Button("إلغاء") { search = ""; searching = false; searchFocused = false }
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("صوت").font(.largeTitle.weight(.bold))
+                Spacer()
+                Button {
+                    searching = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { searchFocused = true }
+                } label: {
+                    Image(systemName: "magnifyingglass").font(.title3.weight(.medium)).frame(width: 46, height: 46)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .accessibilityLabel("بحث في المحادثات")
+            }
+        }
+        .padding(.bottom, 18)
+        .animation(.easeOut(duration: 0.2), value: searching)
+    }
+
+    // MARK: الوصول السريع
+
+    private var nav: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            navRow("wand.and.stars", "الوكيل") { showAgent = true }
+            navRow("waveform", "مكالمة صوتية") { store.stop(); showVoice = true }
+            navRow("cpu", "النماذج") { showModels = true }
+        }
+    }
+
+    private func navRow(_ icon: String, _ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 16) {
+                Image(systemName: icon).font(.title3).frame(width: 28)
+                Text(title).font(.title3)
+                Spacer()
+            }
+            .padding(.vertical, 11)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: المحادثات الأخيرة
+
+    private var recents: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(shown) { c in
+                let isCurrent = c.id == store.currentID
+                HStack(spacing: 8) {
+                    Button {
+                        store.select(c.id); close()
+                    } label: {
+                        Text(c.title).font(.body).lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if isCurrent {
+                        Button { newTitle = c.title; renaming = c.id } label: {
+                            Image(systemName: "pencil").font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("إعادة تسمية")
+                    }
+                }
+                .padding(.vertical, 12).padding(.horizontal, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(isCurrent ? Color.white.opacity(0.1) : .clear))
+                .contextMenu {
+                    Button { newTitle = c.title; renaming = c.id } label: { Label("إعادة تسمية", systemImage: "pencil") }
+                    Button(role: .destructive) { store.delete(c.id) } label: { Label("حذف", systemImage: "trash") }
+                }
+            }
+            if shown.isEmpty {
+                Text(searching ? "ما لقيت شي" : "ما فيه محادثات للحين").foregroundStyle(.secondary).padding(14)
+            }
+            let total = filtered.filter { !$0.messages.isEmpty || $0.id == store.currentID }.count
+            if !searching, !showAll, total > recentLimit {
+                Button { withAnimation { showAll = true } } label: {
+                    Text("عرض الكل…").foregroundStyle(.secondary).padding(.vertical, 12).padding(.horizontal, 14)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    // MARK: الأسفل: محادثة جديدة + الإعدادات
+
+    private var footer: some View {
+        HStack(spacing: 12) {
             Button {
                 store.newConversation(); close()
             } label: {
                 Label("محادثة جديدة", systemImage: "square.and.pencil")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 6)
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 22).padding(.vertical, 14)
+                    .background(Color(red: 0.16, green: 0.42, blue: 1.0), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            Button { showSettings = true } label: {
+                Image(systemName: "gearshape").font(.title3.weight(.medium)).frame(width: 50, height: 50)
             }
             .buttonStyle(.glass)
-
-            Text("المحادثات").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-                .padding(.top, 6)
-
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(filtered) { c in
-                        Button {
-                            store.select(c.id); close()
-                        } label: {
-                            Text(c.title)
-                                .lineLimit(1)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, 10).padding(.horizontal, 12)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(c.id == store.currentID ? Color.white.opacity(0.09) : .clear))
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button(role: .destructive) { store.delete(c.id) } label: {
-                                Label("حذف", systemImage: "trash")
-                            }
-                        }
-                    }
-                    if filtered.isEmpty {
-                        Text("ما فيه محادثات للحين").foregroundStyle(.secondary).padding(12)
-                    }
-                }
-            }
-            .scrollIndicators(.hidden)
-
-            RunnerPill().padding(.bottom, 8)
-
-            GlassEffectContainer(spacing: 10) {
-                HStack(spacing: 10) {
-                    Button { showModels = true } label: {
-                        Label("النماذج", systemImage: "cpu").frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.glass)
-                    Button { showSettings = true } label: {
-                        Label("الإعدادات", systemImage: "gearshape").frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.glass)
-                }
-            }
+            .buttonBorderShape(.circle)
+            .accessibilityLabel("الإعدادات")
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
-        .sheet(isPresented: $showSettings) { SettingsView() }
-        .sheet(isPresented: $showModels) { ModelsView() }
+        .padding(.top, 8)
     }
 }
 

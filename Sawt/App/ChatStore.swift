@@ -115,6 +115,13 @@ final class ChatStore: ObservableObject {
         save()
     }
 
+    func rename(_ id: UUID, to title: String) {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, let i = conversations.firstIndex(where: { $0.id == id }) else { return }
+        conversations[i].title = String(t.prefix(80))
+        save()
+    }
+
     func select(_ id: UUID) {
         stop()
         currentID = id
