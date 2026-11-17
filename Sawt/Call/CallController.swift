@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import MLXLMCommon
 import SwiftUI
@@ -302,12 +303,20 @@ final class CallController: ObservableObject {
         }
         cameraBusy = true
         defer { cameraBusy = false }
+        // مراحل الكاميرا تنحفظ فورًا عشان لو انقفل التطبيق نعرف وين بالضبط
+        let prevStage = UserDefaults.standard.string(forKey: "log.lastStage") ?? "idle"
+        slog.stage("call:camera-start")
+        slog("call: camera tap (auth=\(AVCaptureDevice.authorizationStatus(for: .video).rawValue) avail=\(RAM.availableMB)MB)")
+        defer { if UserDefaults.standard.string(forKey: "log.lastStage")?.hasPrefix("call:camera") == true { slog.stage(prevStage) } }
         guard await CallCamera.shared.start() else {
             error = L("تعذّر تشغيل الكاميرا. تأكد من السماح للتطبيق باستخدامها من الإعدادات.")
             return
         }
         cancelReply(recordPartial: true)
+        slog.stage("call:camera-vision")
+        slog("call: camera started, loading vision")
         let ok = await ModelManager.shared.ensureVision(cloudOK: CloudLLM.useInCalls)
+        slog.stage("call:camera-reset")
         await LLMService.shared.resetCallSession()   // النموذج تغيّر: الجلسة القديمة ما تصلح
         lastMemBlock = ""
         guard ok, state != .idle else {
@@ -738,7 +747,14 @@ final class CallController: ObservableObject {
                     // مخزون بداية متكيّف: إذا أودار أبطأ من الوقت الحقيقي (الجهاز حار أو كرت الشاشة مشغول)
                     // نجمع صوت كافي قبل التشغيل عشان الجملة تطلع متصلة بدل ما تتقطع بين الدفعات
                     let estDur = Double(sentence.count) * self.audarSecPerChar
-                    let need = max(0.0, estDur * (1 - min(1.0, self.audarSpeed * 0.95))) + (self.audarSpeed < 1.05 ? 0.25 : 0)
+                    var need = max(0.0, estDur * (1 - min(1.0, self.audarSpeed * 0.95))) + (self.audarSpeed < 1.05 ? 0.25 : 0)
+                    if spoke == 0 {
+                        // أول جملة في الرد: أول الدفعات أبطأ (النموذج يسخن ونموذج الدردشة لسا ماسك كرت الشاشة)،
+                        // والسرعة المقاسة متوسط الجمل السابقة فتطلع متفائلة. نخزّن أكثر هنا بس (بحد أقصى 0.9 ث)
+                        // عشان أول كلمات الرد ما تتقطع، والجمل اللي بعدها تمشي زي قبل.
+                        let firstNeed = max(0.0, estDur * (1 - min(1.0, self.audarSpeed * 0.8))) + 0.35
+                        need = max(need, min(0.9, max(firstNeed, estDur * 0.4)))
+                    }
                     var held: [[Float]] = []
                     var heldSec = 0.0
                     var started = false
@@ -906,6 +922,7 @@ final class CallController: ObservableObject {
                 Placement.chatNow = cloudInUse ? L("سحابي") : dev.uppercased()
                 if !cloudInUse, dev != ComputeMode.current || Placement.chatChoice == "auto" { slog("placement: chat on \(dev) (choice \(Placement.chatChoice))") }
                 if dev != self.lastChatDevice { await LLMService.shared.resetCallSession(); self.lastChatDevice = dev }
+                userText += ReplyLanguage.hint(for: text)   // يرد بلغة كلام المستخدم
                 slog.stage("call:llm")
                 let stream = try await CloudLLM.$inCall.withValue(true) {
                     try await ComputeMode.$forced.withValue(forced) {

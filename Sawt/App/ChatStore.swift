@@ -523,6 +523,7 @@ final class ChatStore: ObservableObject {
                         system += "\n\nحاولت تبحث في الويب وفشل البحث؛ جاوب من معرفتك ونبّه إن المعلومة ممكن ما تكون محدّثة."
                     }
                 }
+                prompt += ReplyLanguage.hint(for: t)   // يرد بلغة رسالة المستخدم
                 let stream = try await LLMService.shared.stream(
                     system: system, history: Array(history), user: prompt,
                     maxTokens: think ? 3000 : 1500, images: images, think: think,

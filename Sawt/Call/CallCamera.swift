@@ -46,7 +46,9 @@ final class CallCamera: NSObject, ObservableObject, AVCaptureVideoDataOutputSamp
         for attempt in 0..<2 {
             ok = await withCheckedContinuation { c in
                 queue.async {
+                    slog("camera: configure (attempt \(attempt + 1))")
                     let configured = self.configure(front: useFront)
+                    slog("camera: configured=\(configured), startRunning")
                     if configured, !self.session.isRunning { self.session.startRunning() }
                     c.resume(returning: configured && self.session.isRunning)
                 }

@@ -468,3 +468,30 @@ enum Relevance {
         return hits >= min(2, kw.count)
     }
 }
+
+/// لغة الرد: النماذج الصغيرة تلتزم بلهجة التعليمات (السعودية) حتى لو كلمها المستخدم بالإنجليزي،
+/// فنضيف في آخر رسالة المستخدم تذكير قصير بلغة رسالته. العربي ما يحتاج تذكير (هو الافتراضي).
+enum ReplyLanguage {
+    enum Lang: Equatable { case arabic, english, unknown }
+
+    static func detect(_ text: String) -> Lang {
+        var arabic = 0, latin = 0
+        for u in text.unicodeScalars {
+            switch u.value {
+            case 0x0600...0x06FF, 0x0750...0x077F, 0x08A0...0x08FF, 0xFB50...0xFDFF, 0xFE70...0xFEFF: arabic += 1
+            case 0x41...0x5A, 0x61...0x7A: latin += 1
+            default: break
+            }
+        }
+        if arabic == 0 && latin == 0 { return .unknown }
+        // أغلب الحروف لاتينية = إنجليزي (كلمة إنجليزية وسط جملة عربية ما تغيّر اللغة)
+        return latin > arabic * 2 ? .english : (arabic > 0 ? .arabic : .unknown)
+    }
+
+    /// النص اللي ينضاف بعد رسالة المستخدم مباشرة ("" إذا ما يحتاج).
+    static func hint(for text: String) -> String {
+        detect(text) == .english
+            ? "\n\n(The user wrote in English. Reply in English only, not Arabic.)"
+            : ""
+    }
+}

@@ -27,6 +27,8 @@ final class Log: @unchecked Sendable {
     /// سجل التشغيلة السابقة (اللي ممكن انتهت بكراش).
     let prevURL = Log.dir.appendingPathComponent("previous.txt")
     let crashURL = Log.dir.appendingPathComponent("crash-reports.txt")
+    /// سجل آخر تشغيلة انقفلت فجأة في نص شغل (مو عند الفتح): ما ينمسح لو فتحت التطبيق كذا مرة بعدها.
+    let lastCrashRunURL = Log.dir.appendingPathComponent("last-crash-run.txt")
     let fileURL: URL = FileManager.default.temporaryDirectory.appendingPathComponent("sawt-log.txt")
     private var handle: FileHandle?
     private var unsynced = 0
@@ -46,6 +48,16 @@ final class Log: @unchecked Sendable {
         if let s = d.string(forKey: stageKey), !s.isEmpty, s != "idle" {
             previousRunCrashed = true
             previousStage = s
+            if s != "launch", fm.fileExists(atPath: prevURL.path) {
+                try? fm.removeItem(at: lastCrashRunURL)
+                try? fm.copyItem(at: prevURL, to: lastCrashRunURL)
+                if let h = try? FileHandle(forWritingTo: lastCrashRunURL),
+                   let data = "\n(انتهت فجأة عند: \(s))\n".data(using: .utf8) {
+                    _ = try? h.seekToEnd()
+                    try? h.write(contentsOf: data)
+                    try? h.close()
+                }
+            }
         }
         d.set("launch", forKey: stageKey)
     }
@@ -91,6 +103,10 @@ final class Log: @unchecked Sendable {
         if let prev = try? String(contentsOf: prevURL, encoding: .utf8), !prev.isEmpty {
             text += "\n\n==== التشغيلة السابقة\(previousRunCrashed ? " (انتهت فجأة عند: \(previousStage))" : "") ====\n"
             text += String(prev.suffix(200_000))
+        }
+        if !(previousRunCrashed && previousStage != "launch"),
+           let last = try? String(contentsOf: lastCrashRunURL, encoding: .utf8), !last.isEmpty {
+            text += "\n\n==== آخر تشغيلة انقفلت فجأة ====\n" + String(last.suffix(200_000))
         }
         if let crash = try? String(contentsOf: crashURL, encoding: .utf8), !crash.isEmpty {
             // نقص من بداية تقرير كامل (ما نقطع راس التقرير اللي فيه نوع الكراش)
