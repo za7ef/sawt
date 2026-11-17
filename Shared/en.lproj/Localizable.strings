@@ -903,7 +903,6 @@
 "تم حفظ ملف الاقتران — %@" = "Pairing file saved — %@";
 "لا يوجد ملف" = "No file";
 "فشلت القراءة: %@" = "Read failed: %@";
-"مرحبًا من Sowtly" = "Hello from Sowtly";
 "الأداة" = "Tool";
 "مبنية" = "Built";
 "غير مبنية" = "Not built";
@@ -921,17 +920,6 @@
 "شغّل LocalDevVPN، واضغط الزر، ثم اذهب إلى الإعدادات واختر «Sawt» من الأجهزة القريبة. سيظهر لك رمز من ٦ أرقام هنا وفي إشعار، اكتبه في الجهاز. يبقى Sowtly يعمل في الخلفية ٥ دقائق." = "Turn on LocalDevVPN, tap the button, then go to Settings and choose “Sawt” from nearby devices. A 6-digit code will appear here and in a notification; enter it on the device. Sowtly keeps running in the background for 5 minutes.";
 "فحص الاتصال" = "Test Connection";
 "اختبارات" = "Tests";
-"هدف اللمس — ضُغط %@ مرة" = "Tap Target — tapped %@ times";
-"خانة الاختبار" = "Test field";
-"اختبار داخل Sowtly" = "Test Inside Sowtly";
-"ابقَ داخل Sowtly. أزرار الكتابة تفتح الخانة تلقائيًا وتكتب بعد ٣ ثوانٍ." = "Stay inside Sowtly. The typing buttons focus the field automatically and type after 3 seconds.";
-"المس الهدف (بعد ٣ ثوانٍ)" = "Tap the Target (in 3 seconds)";
-"العداد: %1$@ → %2$@ " = "Counter: %1$@ → %2$@ ";
-"✅ وصلت اللمسة" = "✅ Tap landed";
-"❌ لم تصل" = "❌ Missed";
-"اكتب hello في الخانة (بعد ٣ ثوانٍ)" = "Type hello in the Field (in 3 seconds)";
-"الخانة: «%@»" = "Field: “%@”";
-"الصق النص في الخانة (بعد ٣ ثوانٍ)" = "Paste Text in the Field (in 3 seconds)";
 "يبدأ بعد %@…" = "Starting in %@…";
 "جارٍ التنفيذ…" = "Running…";
 "التحكم بالجهاز (تجريبي)" = "Device Control (Beta)";

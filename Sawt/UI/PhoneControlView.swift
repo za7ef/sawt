@@ -282,13 +282,7 @@ struct PhoneControlView: View {
     @ObservedObject private var hostPair = HostPairing.shared
     @State private var countdown = 0
     @State private var output = ""
-    /// نص زر «الصق النص في الخانة» في «اختبار داخل Sowtly»
-    private let typeText = L("مرحبًا من Sowtly")
-    @State private var targetHits = 0
-    @State private var targetFrame: CGRect = .zero
-    @State private var inAppText = ""
     @State private var repairing = false
-    @FocusState private var inAppFocused: Bool
 
     var body: some View {
         Form {
@@ -337,56 +331,6 @@ struct PhoneControlView: View {
                 Button("فحص الاتصال") { go(.probe, delay: false, label: "probe") }
             } header: {
                 Text("اختبارات")
-            }
-            .disabled(busy || !PhoneControl.available || !hasPairing)
-
-            Section {
-                // الهدف والخانة ما ينطفون أثناء العد، عشان اللمسة الاصطناعية توصل
-                Button(L("هدف اللمس — ضُغط %@ مرة", String(targetHits))) {
-                    targetHits += 1
-                    Log.shared("phonectl target: hit \(targetHits)")
-                }
-                    .background(GeometryReader { g in
-                        Color.clear
-                            .onAppear { targetFrame = g.frame(in: .global) }
-                            .onChange(of: g.frame(in: .global)) { _, f in targetFrame = f }
-                    })
-                TextField("خانة الاختبار", text: $inAppText)
-                    .focused($inAppFocused)
-            } header: {
-                Text("اختبار داخل Sowtly")
-            } footer: {
-                Text("ابقَ داخل Sowtly. أزرار الكتابة تفتح الخانة تلقائيًا وتكتب بعد ٣ ثوانٍ.")
-            }
-
-            Section {
-                Button("المس الهدف (بعد ٣ ثوانٍ)") {
-                    let b = UIScreen.main.bounds
-                    let nx = UInt16(max(0, min(65535, targetFrame.midX / b.width * 65535)))
-                    let ny = UInt16(max(0, min(65535, targetFrame.midY / b.height * 65535)))
-                    let before = targetHits
-                    go(.tap(nx, ny), delay: true, label: "tap-inapp", stay: true) {
-                        let ok = targetHits > before
-                        Log.shared("phonectl tap-inapp: counter \(before) -> \(targetHits) \(ok ? "HIT" : "MISS")")
-                        return "\n" + L("العداد: %1$@ → %2$@ ", String(before), String(targetHits)) + (ok ? L("✅ وصلت اللمسة") : L("❌ لم تصل"))
-                    }
-                }
-                Button("اكتب hello في الخانة (بعد ٣ ثوانٍ)") {
-                    inAppText = ""
-                    inAppFocused = true
-                    go(.keys("hello"), delay: true, label: "type-inapp", stay: true) {
-                        Log.shared("phonectl type-inapp: field=\(inAppText)")
-                        return "\n" + L("الخانة: «%@»", inAppText)
-                    }
-                }
-                Button("الصق النص في الخانة (بعد ٣ ثوانٍ)") {
-                    inAppText = ""
-                    inAppFocused = true
-                    go(.keys("paste:" + typeText), delay: true, label: "paste-inapp", stay: true) {
-                        Log.shared("phonectl paste-inapp: field=\(inAppText)")
-                        return "\n" + L("الخانة: «%@»", inAppText)
-                    }
-                }
             }
             .disabled(busy || !PhoneControl.available || !hasPairing)
 
