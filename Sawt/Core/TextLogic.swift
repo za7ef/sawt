@@ -237,6 +237,22 @@ enum FillerPicker {
                             "كم ", "ابحث", "دور", "قارن", "الفرق", "وش رأيك", "ايش رأيك", "why", "how", "explain",
                             "calculate", "compare", "search"]
 
+    /// كلمات انتظار أودار (تتجهّز مسبقًا بصوت المكالمة): تفكير/تشييك، وبحث في النت
+    static let audarThink = ["خليني أفكر", "دقيقة أفكر فيها", "خليني أشيك", "لحظة خليني أشوف", "ثانية بس", "خليني أركّز فيها"]
+    static let audarSearch = ["دقيقة خليني أبحث", "خليني أدوّر لك", "لحظة أشيك على النت", "ثانية أبحث لك عنها", "خليني أشوف وش لقيت"]
+    /// وحدة من كل نوع أول عشان تكون جاهزة بسرعة، بعدين الباقي
+    static let audarRenderOrder = ["خليني أفكر", "دقيقة خليني أبحث", "خليني أشيك", "خليني أدوّر لك",
+                                   "لحظة خليني أشوف", "لحظة أشيك على النت", "دقيقة أفكر فيها", "ثانية أبحث لك عنها",
+                                   "ثانية بس", "خليني أشوف وش لقيت", "خليني أركّز فيها"]
+
+    /// اختيار عشوائي من قائمة بدون تكرار آخر وحدة
+    static func pickFrom(_ list: [String], last: String?, random: (Int) -> Int = { Int.random(in: 0 ..< max($0, 1)) }) -> String? {
+        var pool = list
+        if pool.count > 1, let last { pool.removeAll { $0 == last } }
+        guard !pool.isEmpty else { return nil }
+        return pool[random(pool.count)]
+    }
+
     static func needsThought(_ text: String) -> Bool {
         let t = " " + text.lowercased() + " "
         if text.split(separator: " ").count >= 12 { return true }

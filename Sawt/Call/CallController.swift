@@ -170,6 +170,7 @@ final class CallController: ObservableObject {
             slog.stage("call:tts-load")
             await ModelManager.shared.prepareVoice()
             slog.stage("call:listening")
+            self.prepareAudarFillers()
             let avail = RAM.availableMB
             let persona = AppSettings.shared.systemPrompt(chat: false, query: "", memory: false)
             Task { await LLMService.shared.warmup(system: persona) }
@@ -540,6 +541,101 @@ final class CallController: ObservableObject {
     /// آخر جهاز اشتغل عليه نموذج الدردشة في المكالمة (لو تغيّر نبدأ جلسة جديدة)
     private var lastChatDevice = ""
     private var lastFiller: String?
+    /// طول نص الرد لين الحين (يحدد إذا الرد قصير)
+    private var replyChars = 0
+    /// انقالت كلمة انتظار في هذا الدور؟
+    private var fillerPlayed = false
+    /// كلمات انتظار أودار جاهزة مسبقًا (تشتغل فورًا): النص → الصوت، ولأي صوت تجهّزت
+    private var audarFillers: [String: [Float]] = [:]
+    private var audarFillersVoice = ""
+    private var audarFillersTask: Task<Void, Never>?
+    /// تقريبًا سطرين في فقاعة الدردشة على آيفون 16 برو (~45 حرف للسطر بالخط العادي)
+    static let shortReplyChars = 90
+    /// أقصى صوت نمسكه قبل التشغيل في الرد الطويل (ثواني): بعده نشغّل والتوليد يكمل قدّام
+    static let audarHoldCap = 8.0
+
+    enum AudarPiece { case audio([Float]), mark(String) }
+
+    /// يشغّل دفعة صوت من الرد (أول دفعة تحوّل الحالة لـ"يتكلم")
+    private func playAudarChunk(_ chunk: [Float], myID: Int) {
+        guard myID == replyID else { return }
+        let now = Date()
+        if state == .thinking {
+            state = .speaking
+            slog.stage("call:speaking")
+            debug.firstAudioMs = Int(now.timeIntervalSince(turnStart) * 1000)
+            slog("tts: first audio after \(debug.firstAudioMs)ms")
+        } else if now > playUntil.addingTimeInterval(0.05), playUntil != .distantPast {
+            slog("tts: audar gap \(Int(now.timeIntervalSince(playUntil) * 1000))ms")
+        }
+        playUntil = max(playUntil, now).addingTimeInterval(Double(chunk.count) / 24_000)
+        audio.enqueue(samples: chunk, sampleRate: 24_000)
+    }
+
+    /// علامة نهاية جملة: سكتة قصيرة، ومعها نحسب إن الجملة انقالت
+    private func playAudarMark(_ sentence: String, myID: Int) {
+        guard myID == replyID else { return }
+        let pause = [Float](repeating: 0, count: 2_880)
+        playUntil = max(playUntil, Date()).addingTimeInterval(0.12)
+        audio.enqueue(samples: pause, sampleRate: 24_000) { [weak self] in
+            Task { @MainActor in
+                guard let self, myID == self.replyID else { return }
+                self.played += 1
+                self.spokenSoFar += (self.spokenSoFar.isEmpty ? "" : " ") + sentence
+                self.checkReplyFinished()
+            }
+        }
+    }
+
+    /// يشغّل كل اللي ماسكينه بالترتيب ويفضّي المخزون
+    private func releaseAudar(_ held: inout [AudarPiece], myID: Int) {
+        for p in held {
+            switch p {
+            case .audio(let c): playAudarChunk(c, myID: myID)
+            case .mark(let s): playAudarMark(s, myID: myID)
+            }
+        }
+        held = []
+    }
+
+    /// يجهّز كلمات الانتظار بصوت أودار الحالي مرة وحدة (وقت ما المكالمة ساكتة)، عشان تشتغل فورًا
+    private func prepareAudarFillers() {
+        let voice = AppSettings.shared.voice
+        guard voice.isAudar, audarFillersVoice != voice.id || audarFillers.isEmpty else { return }
+        if audarFillersVoice != voice.id { audarFillers = [:]; audarFillersVoice = voice.id }
+        audarFillersTask?.cancel()
+        let rate = AppSettings.shared.speechRate
+        audarFillersTask = Task { @MainActor [weak self] in
+            for f in FillerPicker.audarRenderOrder {
+                guard let self, !Task.isCancelled, self.state != .idle else { return }
+                if self.audarFillers[f] != nil { continue }
+                // ما نزاحم الرد: نجهّز بس والمكالمة تسمع
+                while self.state != .listening {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    if Task.isCancelled || self.state == .idle { return }
+                }
+                let o = await SpeechSynth.shared.synthesize(f, voice: voice, rate: rate)
+                if !o.samples.isEmpty, o.rate == 24_000, AppSettings.shared.voice.id == voice.id {
+                    self.audarFillers[f] = o.samples
+                }
+            }
+            slog("call: audar fillers ready \(self?.audarFillers.count ?? 0)")
+        }
+    }
+
+    /// كلمة انتظار أودار جاهزة (بحث أو تفكير)، بدون تكرار آخر وحدة. ترجع false لو ما فيه جاهز.
+    @discardableResult
+    private func playAudarFiller(search: Bool, myID: Int) -> Bool {
+        guard myID == replyID, state == .thinking, !bargePending else { return false }
+        let pool = (search ? FillerPicker.audarSearch : FillerPicker.audarThink).filter { audarFillers[$0] != nil }
+        guard let said = FillerPicker.pickFrom(pool, last: lastFiller), let samples = audarFillers[said] else { return false }
+        lastFiller = said
+        fillerPlayed = true
+        slog("call: filler \"\(said)\"")
+        playUntil = max(playUntil, Date()).addingTimeInterval(Double(samples.count) / 24_000 + 0.15)
+        audio.enqueue(samples: samples, sampleRate: 24_000)
+        return true
+    }
 
     private func userStarted(bargeIn: Bool) {
         slog("vad: user started speaking\(bargeIn ? " (barge-in)" : "")")
@@ -666,6 +762,9 @@ final class CallController: ObservableObject {
         spokenSoFar = ""
         sentenceQueue = []
         playUntil = .distantPast
+        replyChars = 0
+        // كلمات الانتظار سعودية: في الأدوار الإنجليزية ما نقولها
+        fillerPlayed = ReplyLanguage.detect(text) == .english
         proc.async { self.aiActive = true }
 
         let settings = AppSettings.shared
@@ -695,7 +794,23 @@ final class CallController: ObservableObject {
 
         // كلمة انتظار إذا الرد تأخر 1.3 ثانية: نماء دايمًا (أبطأ من الوقت الحقيقي)،
         // والأصوات السريعة بس للأسئلة اللي تحتاج تفكير. ما نكرر نفس الكلمة مرتين ورا بعض.
-        let wantsFiller = voice.kind == .namaa || FillerPicker.needsThought(text)
+        if voice.isAudar {
+            // أودار: كلمة انتظار بس للرد الطويل (أكثر من سطرين تقريبًا) اللي ننتظر صوته، والبحث له كلمته عند البحث.
+            // الرد القصير يشتغل على طول بدون كلمة انتظار. لو طوّل الانتظار كثير، وحدة ثانية مختلفة بعد ٧ ثواني.
+            Task { @MainActor [weak self] in
+                var playedAt: Date?
+                while let self, myID == self.replyID, self.state == .thinking, !Task.isCancelled {
+                    if !self.fillerPlayed, self.replyChars > Self.shortReplyChars {
+                        if self.playAudarFiller(search: false, myID: myID) { playedAt = Date() }
+                    } else if let t = playedAt, Date().timeIntervalSince(t) > 7, Date() > self.playUntil {
+                        self.playAudarFiller(search: false, myID: myID)
+                        return
+                    }
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                }
+            }
+        }
+        let wantsFiller = !voice.isAudar && (voice.kind == .namaa || FillerPicker.needsThought(text))
         if wantsFiller {
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 1_300_000_000)
@@ -722,6 +837,9 @@ final class CallController: ObservableObject {
         // مستهلك الجمل: يحوّل كل جملة لصوت بالترتيب ويجدولها
         speakTask = Task { @MainActor in
             var spoke = 0
+            var audarStarted = false
+            var audarHeld: [AudarPiece] = []
+            var audarHeldSec = 0.0
             for await _ in sentences {
               // كل جملة تنضاف للطابور قبل الإشارة. نماء: كل توليد يعيد معالجة المرجع،
               // فنجمع الجمل اللي تراكمت وقت التوليد السابق في قطعة وحدة (أول قطعة تبقى لحالها عشان تبدأ بسرعة)
@@ -744,53 +862,36 @@ final class CallController: ObservableObject {
                         await SpeechSynth.shared.synthesizeStream(sentence, voice: voice, rate: rate) { s, _ in c2!.yield(s) }
                         c2!.finish()
                     }
-                    // مخزون بداية متكيّف: إذا أودار أبطأ من الوقت الحقيقي (الجهاز حار أو كرت الشاشة مشغول)
-                    // نجمع صوت كافي قبل التشغيل عشان الجملة تطلع متصلة بدل ما تتقطع بين الدفعات
+                    // مخزون أودار على مستوى الرد كله (بناء 208):
+                    // • الرد القصير (≤ سطرين تقريبًا): يمشي زي قبل، مخزون بداية متكيّف لكل جملة.
+                    // • الرد الأطول: ما نشغّل شي لين يجهز صوت الرد كامل، أو يتجمّع مخزون كافي يسبق التوليد
+                    //   (بحد أقصى audarHoldCap ثانية) عشان الردود الطويلة جدًا ما تنتظر للأبد. وقت الانتظار تنقال كلمة انتظار.
                     let estDur = Double(sentence.count) * self.audarSecPerChar
                     var need = max(0.0, estDur * (1 - min(1.0, self.audarSpeed * 0.95))) + (self.audarSpeed < 1.05 ? 0.25 : 0)
                     if spoke == 0 {
-                        // أول جملة في الرد: أول الدفعات أبطأ (النموذج يسخن ونموذج الدردشة لسا ماسك كرت الشاشة)،
-                        // والسرعة المقاسة متوسط الجمل السابقة فتطلع متفائلة. نخزّن أكثر هنا بس (بحد أقصى 0.9 ث)
-                        // عشان أول كلمات الرد ما تتقطع، والجمل اللي بعدها تمشي زي قبل.
+                        // أول جملة في الرد: أول الدفعات أبطأ (النموذج يسخن ونموذج الدردشة لسا ماسك كرت الشاشة)
                         let firstNeed = max(0.0, estDur * (1 - min(1.0, self.audarSpeed * 0.8))) + 0.35
                         need = max(need, min(0.9, max(firstNeed, estDur * 0.4)))
                     }
-                    var held: [[Float]] = []
                     var heldSec = 0.0
-                    var started = false
                     var producedSec = 0.0
                     let genStart = Date()
-                    var any = false
-                    func flush(_ list: [[Float]]) {
-                        for chunk in list {
-                            let now = Date()
-                            if self.state == .thinking {
-                                self.state = .speaking
-                                slog.stage("call:speaking")
-                                self.debug.firstAudioMs = Int(now.timeIntervalSince(self.turnStart) * 1000)
-                                slog("tts: first audio after \(self.debug.firstAudioMs)ms")
-                            } else if any || spoke > 0, now > self.playUntil.addingTimeInterval(0.05) {
-                                slog("tts: audar gap \(Int(now.timeIntervalSince(self.playUntil) * 1000))ms")
-                            }
-                            any = true
-                            self.playUntil = max(self.playUntil, now).addingTimeInterval(Double(chunk.count) / 24_000)
-                            self.audio.enqueue(samples: chunk, sampleRate: 24_000)
-                        }
-                    }
+                    var produced = false
                     for await chunk in chunks {
                         if Task.isCancelled || myID != self.replyID { break }
                         let sec = Double(chunk.count) / 24_000
                         producedSec += sec
-                        if started { flush([chunk]); continue }
-                        held.append(chunk); heldSec += sec
-                        // الصوت اللي باقي يشتغل من الجملة السابقة يحسب من المخزون
-                        let ahead = max(0, self.playUntil.timeIntervalSinceNow)
-                        if heldSec + ahead >= need {
-                            started = true
-                            flush(held); held = []
+                        produced = true
+                        if audarStarted { self.playAudarChunk(chunk, myID: myID); continue }
+                        audarHeld.append(.audio(chunk)); audarHeldSec += sec; heldSec += sec
+                        let short = self.llmDone && self.replyChars <= Self.shortReplyChars
+                        if audarHeldSec >= Self.audarHoldCap
+                            || (short && heldSec + max(0, self.playUntil.timeIntervalSinceNow) >= need) {
+                            audarStarted = true
+                            slog("tts: audar start (\(short ? "short" : "held \(String(format: "%.1f", audarHeldSec))s"))")
+                            self.releaseAudar(&audarHeld, myID: myID)
                         }
                     }
-                    if !Task.isCancelled, myID == self.replyID, !held.isEmpty { flush(held) }
                     gen.cancel()
                     let wall = Date().timeIntervalSince(genStart)
                     if producedSec > 0.5, wall > 0.2, !sentence.isEmpty {
@@ -800,18 +901,14 @@ final class CallController: ObservableObject {
                     }
                     spoke += 1
                     if Task.isCancelled || myID != self.replyID { break }
-                    guard any else { continue }
+                    guard produced else { continue }
                     self.enqueued += 1
-                    // علامة نهاية الجملة: سكتة قصيرة (0.12 ث) بعد آخر دفعة، ومعها نحسب إن الجملة انقالت
-                    let pause = [Float](repeating: 0, count: 2_880)
-                    self.playUntil = max(self.playUntil, Date()).addingTimeInterval(0.12)
-                    self.audio.enqueue(samples: pause, sampleRate: 24_000) { [weak self] in
-                        Task { @MainActor in
-                            guard let self, myID == self.replyID else { return }
-                            self.played += 1
-                            self.spokenSoFar += (self.spokenSoFar.isEmpty ? "" : " ") + sentence
-                            self.checkReplyFinished()
-                        }
+                    // علامة نهاية الجملة (سكتة 0.12 ث) بنفس ترتيب الصوت: لو لسا ماسكين، تنضاف للمخزون
+                    if audarStarted { self.playAudarMark(sentence, myID: myID) } else { audarHeld.append(.mark(sentence)) }
+                    // الرد القصير خلص كتابة وجملته الأولى جاهزة: نشغّل على طول
+                    if !audarStarted, self.llmDone, self.sentenceQueue.isEmpty, self.replyChars <= Self.shortReplyChars {
+                        audarStarted = true
+                        self.releaseAudar(&audarHeld, myID: myID)
                     }
                     continue
                 }
@@ -843,6 +940,11 @@ final class CallController: ObservableObject {
                 }
               }
               if Task.isCancelled || myID != self.replyID { break }
+            }
+            // الرد كله جاهز (أو قصير وخلص): نشغّل اللي ماسكينه دفعة وحدة
+            if !audarHeld.isEmpty, !Task.isCancelled, myID == self.replyID {
+                slog("tts: audar full reply ready \(String(format: "%.1f", audarHeldSec))s")
+                self.releaseAudar(&audarHeld, myID: myID)
             }
         }
 
@@ -886,6 +988,7 @@ final class CallController: ObservableObject {
                 // بحث في المكالمة: بالقواعد بس (بدون مصنّف عشان السرعة)، إذا الإنترنت مو طافي
                 let prevU = self.turns.dropLast().last(where: { $0.role == .user })?.text
                 if frame == nil, NetworkGate.shared.on, SearchHeuristic.verdict(text) == .yes || LiveIntent.isWeather(text.lowercased()) {
+                    if voice.isAudar, !self.fillerPlayed { self.playAudarFiller(search: true, myID: myID) }
                     let q = WebSearch.query(from: text, previous: prevU)
                     if case let (ctx, srcs)? = await LiveData.context(for: text, previous: prevU) {
                         slog("call: live data \(srcs.count)")
@@ -939,6 +1042,7 @@ final class CallController: ObservableObject {
                         slog("llm: first token after \(self.debug.firstTokenMs)ms")
                     }
                     full += chunk
+                    self.replyChars = full.count
                     pending += chunk
                     self.liveAI = full
                     let (ready, rest) = TextCleaner.splitSentences(pending, first: first, firstWords: voice.kind == .namaa ? 3 : (voice.isAudar ? 4 : 7))
