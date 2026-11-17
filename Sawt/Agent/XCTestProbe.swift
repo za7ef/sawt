@@ -17,16 +17,22 @@ enum XCTestProbe {
 
     /// المسارات المحتملة لكل إطار بالترتيب (المكان يختلف بين الإصدارات)
     private static let frameworks: [(String, [String])] = [
+        // XCTestSupport أول مثل Poki (اختياري)
+        ("XCTestSupport", ["/System/Developer/Library/PrivateFrameworks/XCTestSupport.framework/XCTestSupport"]),
         // الأطر تطلب @rpath/lib_TestingInterop.dylib: نحمّله أول بمساره الكامل (وفيه كمان LC_RPATH للتطبيق)
         ("lib_TestingInterop", ["/System/Developer/usr/lib/lib_TestingInterop.dylib"]),
         ("XCTAutomationSupport", ["/System/Developer/Library/PrivateFrameworks/XCTAutomationSupport.framework/XCTAutomationSupport"]),
         ("XCTestCore", ["/System/Developer/Library/PrivateFrameworks/XCTestCore.framework/XCTestCore"]),
+        // XCUnit انحذف من iOS 27 وما يحتاجه المسار داخل التطبيق (Poki ما يحمّله)؛ اختياري
         ("XCUnit", ["/System/Developer/Library/PrivateFrameworks/XCUnit.framework/XCUnit"]),
         ("XCTest", ["/System/Developer/Library/Frameworks/XCTest.framework/XCTest"]),
         ("XCUIAutomation", ["/System/Developer/Library/Frameworks/XCUIAutomation.framework/XCUIAutomation",
                             "/System/Developer/Library/PrivateFrameworks/XCUIAutomation.framework/XCUIAutomation"]),
         ("libXCTestSwiftSupport", ["/System/Developer/usr/lib/libXCTestSwiftSupport.dylib"]),
     ]
+
+    /// أطر غيابها ما يوقف شيء (تختلف بين إصدارات iOS)
+    static let optional: Set<String> = ["usr/lib", "XCUnit", "XCTestSupport"]
 
     /// محتويات /System/Developer/usr/lib (عشان نعرف وش المكتبات الموجودة)
     static func listDevLib() -> Step {
@@ -303,9 +309,14 @@ enum XCTestProbe {
                 let waiting = DispatchWorkItem { slog("xct: snapshot slow → probably waiting for passcode"); onWaiting() }
                 DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: waiting)
                 t = Date()
+                // من iOS 27: اللقطة ترفض (XCTDaemonErrorDomain 41) لين يتفعّل وضع الأتمتة، وهو اللي يطلب الرمز
+                let en = SawtXCTEnableAutomation()
+                add(Step(name: "automation", ok: en == nil, detail: en ?? L("مفعّل")), Int(Date().timeIntervalSince(t) * 1000))
+                t = Date()
                 let s: Step = DispatchQueue.main.sync { snapshotSpringboard() }
                 waiting.cancel()
                 add(s, Int(Date().timeIntervalSince(t) * 1000))
+                if en == nil, !XCTBackend.automationEnabled { slog("xct: probe automation off: \(SawtXCTDisableAutomation())") }
                 cont.resume(returning: lines)
             }
         }

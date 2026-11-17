@@ -208,7 +208,7 @@ enum XCTBackend {
             DispatchQueue.global(qos: .userInitiated).async {
                 let loaded = XCTestProbe.loadFrameworks()
                 slog("runner: step frameworks \(Int(Date().timeIntervalSince(t) * 1000))ms")
-                if let bad = loaded.first(where: { !$0.ok && $0.name != "usr/lib" }) {
+                if let bad = loaded.first(where: { !$0.ok && !XCTestProbe.optional.contains($0.name) }) {
                     cont.resume(returning: "\(bad.name): \(bad.detail.prefix(200))"); return
                 }
                 let cs = XCTestProbe.classesStep()
@@ -347,7 +347,7 @@ enum XCTBackend {
         let err: String? = await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 let loaded = XCTestProbe.loadFrameworks()
-                if let bad = loaded.first(where: { !$0.ok && $0.name != "usr/lib" }) {
+                if let bad = loaded.first(where: { !$0.ok && !XCTestProbe.optional.contains($0.name) }) {
                     cont.resume(returning: "\(bad.name): \(bad.detail.prefix(200))"); return
                 }
                 let cs = XCTestProbe.classesStep()
