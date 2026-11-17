@@ -3,6 +3,7 @@
 // مبني على مكتبة idevice (MIT). كتابة مستقلة؛ ما فيه كود منسوخ من Poki.
 
 mod ax;
+mod ddi;
 mod stream;
 mod tlog;
 mod xct;
@@ -840,4 +841,40 @@ pub extern "C" fn sawtctl_xct_authorize(cfg: *const c_char, pid: u32) -> *mut c_
 pub extern "C" fn sawtctl_xct_release() {
     let h = xct::HOLD.lock().unwrap().take();
     if let Some(h) = h { runtime().block_on(async move { drop(h) }) }
+}
+
+/// حالة صورة المطوّر: مركّبة؟ والخدمات اللي تركّبها موجودة؟
+#[unsafe(no_mangle)]
+pub extern "C" fn sawtctl_ddi_status(cfg: *const c_char) -> *mut c_char {
+    run(cfg, async |cfg, steps| {
+        let s = connect(&cfg, steps).await?;
+        Ok(ddi::status_json(&s))
+    })
+}
+
+/// يركّب صورة المطوّر من المجلد `dir` إذا ما كانت مركّبة (`ios` = نسخة iOS مثل "27.3")،
+/// ثم يفتح جلسة جديدة ويتأكد إن خدماتها ظهرت.
+#[unsafe(no_mangle)]
+pub extern "C" fn sawtctl_ddi_mount(cfg: *const c_char, dir: *const c_char, ios: *const c_char) -> *mut c_char {
+    let dir = cstr(dir);
+    let ios = cstr(ios);
+    run(cfg, async move |cfg, steps| {
+        let mut s = connect(&cfg, steps).await?;
+        if ddi::mounted(&s) {
+            return Ok(json!({"result": "already", "mounted": true}));
+        }
+        let method = ddi::mount(&mut s, &dir, &ios, steps).await?;
+        drop(s);
+        // الخدمات تظهر في الجلسات الجديدة بس
+        let mut last = json!({});
+        for i in 0..3 {
+            if i > 0 { tokio::time::sleep(Duration::from_millis(1500)).await }
+            let s2 = connect(&cfg, steps).await?;
+            if ddi::mounted(&s2) {
+                return Ok(json!({"result": "mounted", "mounted": true, "method": format!("{method:?}").to_lowercase()}));
+            }
+            last = ddi::status_json(&s2);
+        }
+        Err(format!("ddi:not_visible: تم التركيب لكن الخدمات لم تظهر بعد: {last}"))
+    })
 }

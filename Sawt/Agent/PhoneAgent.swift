@@ -286,7 +286,7 @@ final class PhoneAgent: ObservableObject {
             if !XCTBackend.runnerReady || !Runner.isOn { sayLoop(myID, L("الطريقة: XCTest — جارٍ تشغيل المشغّل… (أدخل رمز الجهاز إن طُلب)")) }
             if let e = await Runner.set(true) {
                 sayLoop(myID, L("✗ لم يعمل XCTest: %@", String(e.prefix(200))))
-                finishLoop(myID, L("توقّف: لم يعمل المشغّل — %@", String(e.prefix(160)))); return
+                finishLoop(myID, L("توقّف: لم يعمل XCTest — %@ يمكن اختيار «قراءة النصوص» يدويًا من طريقة رؤية الشاشة.", String(e.prefix(160)))); return
             }
             if let e = await XCTBackend.beginTask() {
                 sayLoop(myID, "✗ \(e.prefix(200))")
@@ -295,11 +295,16 @@ final class PhoneAgent: ObservableObject {
                     Runner.relaunch(title: L("أعاد Sowtly التشغيل ليتمكّن من قراءة الشاشة"), body: L("افتح Sowtly وسيعمل المشغّل تلقائيًا، ثم أرسل المهمة مرة أخرى"), turnOnNext: true)
                     return
                 }
-                finishLoop(myID, L("توقّف: %@", String(e.prefix(160)))); return
+                finishLoop(myID, L("توقّف: لم يعمل XCTest — %@ يمكن اختيار «قراءة النصوص» يدويًا من طريقة رؤية الشاشة.", String(e.prefix(160)))); return
             }
             sayLoop(myID, L("✓ الطريقة: XCTest — %@؛ وضع الأتمتة مفعّل", XCTBackend.sessionState))
         } else {
             sayLoop(myID, L("الطريقة: %@", Self.see.title))
+            // قراءة النصوص كذلك تحتاج صورة المطوّر (خدمة remoteAXService ولقطة الشاشة)
+            if let d = await DDIStore.shared.ensureMounted() {
+                sayLoop(myID, "✗ \(d.prefix(200))")
+                finishLoop(myID, L("توقّف: %@", String(d.prefix(200)))); return
+            }
         }
         if Task.isCancelled { return }
         let tl = Date()
@@ -328,7 +333,7 @@ final class PhoneAgent: ObservableObject {
                 fails += 1
                 if Self.see == .xct && fails >= 2 {
                     sayLoop(myID, "✗ \(lastReadError)")
-                    finishLoop(myID, L("توقّف: %@", lastReadError)); return
+                    finishLoop(myID, L("توقّف: لم يعمل XCTest — %@ يمكن اختيار «قراءة النصوص» يدويًا من طريقة رؤية الشاشة.", lastReadError)); return
                 }
                 if fails >= 3 { finishLoop(myID, L("تعذّرت قراءة الشاشة")); return }
                 try? await Task.sleep(nanoseconds: 800_000_000); continue
@@ -1508,7 +1513,7 @@ struct PhoneAgentView: View {
                 }
                 .onChange(of: see) { _, v in PhoneAgent.see = v }
             } footer: {
-                Text("«XCTest»: يقرأ شجرة التطبيق الظاهر ويلمس عبر أدوات الاختبار دون بث (يحتاج إلى LocalDevVPN، وقد يطلب رمز الجهاز في المرة الأولى). إذا فشل يعود إلى «قراءة النصوص» تلقائيًا.\nيقرأ الشاشة ويختار خطوة واحدة في كل مرة (الحد حسب الإعداد). أي إرسال أو حذف أو دفع أو كلمة مرور يوقفه ويسألك. يمكنك إيقافه في أي وقت.")
+                Text("«XCTest»: يقرأ شجرة التطبيق الظاهر ويلمس عبر أدوات الاختبار دون بث (يحتاج إلى LocalDevVPN، وقد يطلب رمز الجهاز في المرة الأولى بعد كل تشغيل للجهاز). إذا تعذّر يتوقف الوكيل ويوضح السبب، دون انتقال تلقائي إلى طريقة أخرى؛ ويمكن اختيار «قراءة النصوص» يدويًا.\nتُركَّب صورة المطوّر تلقائيًا عند الحاجة (نحو 18 ميغابايت تُنزَّل مرة واحدة).\nيقرأ الشاشة ويختار خطوة واحدة في كل مرة (الحد حسب الإعداد). أي إرسال أو حذف أو دفع أو كلمة مرور يوقفه ويسألك. يمكنك إيقافه في أي وقت.")
             }
             if let q = agent.confirm {
                 Section("يحتاج إلى تأكيد") {
@@ -1753,6 +1758,12 @@ enum Runner {
             if !alive { alive = true; HostPairing.shared.keepAlive(true) }
             let busy = PhoneAgent.shared.running
             if !busy && !XCTBackend.runnerReady { RunnerActivity.show(RunnerActivity.state("prep", L("جارٍ تجهيز جلسة XCTest")), goal: L("المشغّل")) }
+            // أطر XCTest وخدمة testmanagerd ما تظهر إلا وصورة المطوّر مركّبة: نركّبها أول لو لزم
+            if !XCTBackend.runnerReady, let d = await DDIStore.shared.ensureMounted() {
+                slog("runner: ddi failed: \(d)")
+                if !busy { RunnerActivity.show(RunnerActivity.state("sleep", L("لم يعمل: %@", String(d.prefix(60)))), goal: L("المشغّل")) }
+                return d
+            }
             let e = await XCTBackend.startAutomation()
             if !busy {
                 if let e { RunnerActivity.show(RunnerActivity.state("sleep", L("لم يعمل: %@", String(e.prefix(60)))), goal: L("المشغّل")) }
@@ -1898,7 +1909,7 @@ struct RunnerInfoSheet: View {
                     item("bolt.horizontal", L("لماذا يجب أن يعمل؟"),
                          L("يتم التحكم عبر جلسة XCTest (أداة الاختبار من Apple). يفتح المشغّل هذه الجلسة ويبقيها جاهزة، ومن دونها لا يمكن التحكم بالجهاز."))
                     item("network", L("ماذا يحتاج؟"),
-                         L("أن يكون LocalDevVPN متصلًا، وأن تكون صورة المطوّر (DDI) محمّلة عبر StikDebug. إذا كان أحدهما متوقفًا فلن يعمل المشغّل."))
+                         L("أن يكون LocalDevVPN متصلًا ووضع المطوّر مفعّلًا. تُركَّب صورة المطوّر (DDI) تلقائيًا، ويلزم اتصال بالإنترنت عند أول تركيب بعد كل تشغيل للجهاز. إذا تعذّر شيء من ذلك فلن يعمل المشغّل."))
                     item("sun.min", L("أثناء المهمة"),
                          L("تُعتم الشاشة وتظهر علامة أثناء المهمة، وهذا من النظام. اترك الجهاز ولا تلمس الشاشة حتى تنتهي المهمة."))
                     item("stop.circle", L("كيف أوقفه؟"),

@@ -39,6 +39,7 @@ The message field has an **Internet** button (the globe icon). It's the only swi
 - **When you turn it on:** You see a notice first. After that, for each text message you send, the app sends **only the text of your question** to the **DuckDuckGo** search engine (or **Wikipedia** if nothing comes back), and opens the first 3–4 result pages to read them. Requests have no cookies, account, or key, and don't include your previous chats, memory, or attachments. Reading the pages and writing the answer all happen on your device, and the sources appear below the reply.
 - **Downloads:** Models come from **Hugging Face**, and the NAMAA voice and its reference from Hugging Face and GitHub. These sites, the search engine, and the pages that are opened see the normal request (such as your IP address) under their own policies.
 - **Updates:** The check reads a small public file from GitHub, without sending any data about you.
+- **Developer Disk Image (Device Control only):** When needed, Apple's Developer Disk Image (about 18 MB) is downloaded once from a public copy on GitHub (doronz88/DeveloperDiskImage), and a signing request containing the device's chip identifiers is sent to Apple's signing server (gs.apple.com), the same request Xcode sends. None of your content is sent.
 
 Voice calls never use search.
 

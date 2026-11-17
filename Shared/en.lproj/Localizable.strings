@@ -633,7 +633,6 @@
 "توقّف: الجهاز مقفل — افتح القفل وأرسل المهمة مرة أخرى" = "Stopped: the device is locked — unlock it and send the task again";
 "الطريقة: XCTest — جارٍ تشغيل المشغّل… (أدخل رمز الجهاز إن طُلب)" = "Method: XCTest — starting the runner… (enter your passcode if asked)";
 "✗ لم يعمل XCTest: %@" = "✗ XCTest didn't start: %@";
-"توقّف: لم يعمل المشغّل — %@" = "Stopped: the runner didn't start — %@";
 "توقّف: %@ — سيعيد Sowtly التشغيل ويُعيد تشغيل المشغّل تلقائيًا، ثم أرسل المهمة مرة أخرى" = "Stopped: %@ — Sowtly will relaunch and restart the runner automatically; then send the task again";
 "أعاد Sowtly التشغيل ليتمكّن من قراءة الشاشة" = "Sowtly relaunched to read the screen";
 "افتح Sowtly وسيعمل المشغّل تلقائيًا، ثم أرسل المهمة مرة أخرى" = "Open Sowtly and the runner will start automatically, then send the task again";
@@ -735,7 +734,7 @@
 "لماذا يجب أن يعمل؟" = "Why Does It Need to Be On?";
 "يتم التحكم عبر جلسة XCTest (أداة الاختبار من Apple). يفتح المشغّل هذه الجلسة ويبقيها جاهزة، ومن دونها لا يمكن التحكم بالجهاز." = "Control runs through an XCTest session (Apple's testing tool). The runner opens this session and keeps it ready; without it, the device can't be controlled.";
 "ماذا يحتاج؟" = "What Does It Need?";
-"أن يكون LocalDevVPN متصلًا، وأن تكون صورة المطوّر (DDI) محمّلة عبر StikDebug. إذا كان أحدهما متوقفًا فلن يعمل المشغّل." = "LocalDevVPN must be connected and the Developer Disk Image (DDI) mounted via StikDebug. If either is off, the runner won't start.";
+"أن يكون LocalDevVPN متصلًا ووضع المطوّر مفعّلًا. تُركَّب صورة المطوّر (DDI) تلقائيًا، ويلزم اتصال بالإنترنت عند أول تركيب بعد كل تشغيل للجهاز. إذا تعذّر شيء من ذلك فلن يعمل المشغّل." = "LocalDevVPN must be connected and Developer Mode on. The Developer Disk Image (DDI) is mounted automatically; internet is needed for the first mount after each restart. If any of this fails, the runner won't start.";
 "أثناء المهمة" = "During a Task";
 "تُعتم الشاشة وتظهر علامة أثناء المهمة، وهذا من النظام. اترك الجهاز ولا تلمس الشاشة حتى تنتهي المهمة." = "The screen dims and shows an indicator during a task; that's from the system. Leave the device and don't touch the screen until the task is done.";
 "كيف أوقفه؟" = "How Do I Stop It?";
@@ -906,7 +905,7 @@
 "استيراد ملف الاقتران" = "Import Pairing File";
 "الصق محتوى الملف" = "Paste File Contents";
 "العنوان" = "Address";
-"يجب أن يكون LocalDevVPN قيد التشغيل، وصورة المطوّر (DDI) مركّبة (مثلًا من StikDebug). يمكنك استيراد ملف StikDebug، أو إنشاء ملف جديد من الجهاز (وافق إذا ظهر لك طلب ثقة، وتُحفظ نسخة من الملف القديم)." = "LocalDevVPN must be running and the Developer Disk Image (DDI) mounted (e.g. from StikDebug). You can import a StikDebug file, or create a new one from the device (accept any trust prompt; the old file is kept as a backup).";
+"يجب أن يكون LocalDevVPN قيد التشغيل. تُنزَّل صورة المطوّر (DDI) وتُركَّب تلقائيًا عند الحاجة، ويلزم وضع المطوّر واتصال بالإنترنت عند أول تركيب بعد كل تشغيل للجهاز. يمكنك استيراد ملف اقتران من StikDebug، أو إنشاء ملف جديد من الجهاز (وافق إذا ظهر لك طلب ثقة، وتُحفظ نسخة من الملف القديم)." = "LocalDevVPN must be running. The Developer Disk Image (DDI) is downloaded and mounted automatically when needed; Developer Mode is required, plus internet for the first mount after each restart. You can import a StikDebug pairing file, or create a new one from the device (accept any trust prompt; the old file is kept as a backup).";
 "الحالة" = "Status";
 "مقترن ✅" = "Paired ✅";
 "إعادة الاقتران" = "Re-pair";
@@ -968,4 +967,28 @@
 "أهلًا، أنا لمى. هدّي بالك، وقل لي كيف أقدر أساعدك." = "Hi, I'm Lama. Relax, and tell me how I can help.";
 "اختيار الصوت" = "Choose a Voice";
 "يُسمع تعريف قصير عند اختيار صوت من أصوات أودار أو نبرة. يمكنك تحميل أصوات أخرى من الإعدادات ← الصوت." = "Choosing an Audar or Nabra voice plays a short introduction. You can download more voices in Settings → Voice.";
-"«XCTest»: يقرأ شجرة التطبيق الظاهر ويلمس عبر أدوات الاختبار دون بث (يحتاج إلى LocalDevVPN، وقد يطلب رمز الجهاز في المرة الأولى). إذا فشل يعود إلى «قراءة النصوص» تلقائيًا.\nيقرأ الشاشة ويختار خطوة واحدة في كل مرة (الحد حسب الإعداد). أي إرسال أو حذف أو دفع أو كلمة مرور يوقفه ويسألك. يمكنك إيقافه في أي وقت." = "“XCTest”: reads the front app's tree and taps through testing tools without broadcasting (needs LocalDevVPN; may ask for your passcode the first time). If it fails, it falls back to “Text Reading” automatically.\nIt reads the screen and picks one step at a time (limit per setting). Any send, delete, payment, or password pauses it to ask you. You can stop it anytime.";
+"«XCTest»: يقرأ شجرة التطبيق الظاهر ويلمس عبر أدوات الاختبار دون بث (يحتاج إلى LocalDevVPN، وقد يطلب رمز الجهاز في المرة الأولى بعد كل تشغيل للجهاز). إذا تعذّر يتوقف الوكيل ويوضح السبب، دون انتقال تلقائي إلى طريقة أخرى؛ ويمكن اختيار «قراءة النصوص» يدويًا.\nتُركَّب صورة المطوّر تلقائيًا عند الحاجة (نحو 18 ميغابايت تُنزَّل مرة واحدة).\nيقرأ الشاشة ويختار خطوة واحدة في كل مرة (الحد حسب الإعداد). أي إرسال أو حذف أو دفع أو كلمة مرور يوقفه ويسألك. يمكنك إيقافه في أي وقت." = "“XCTest”: reads the front app's tree and taps through testing tools without broadcasting (needs LocalDevVPN; may ask for your passcode the first time after each restart). If it fails, the agent stops and shows why, with no automatic switch to another method; “Text Reading” can be selected manually.\nThe Developer Disk Image is mounted automatically when needed (about 18 MB, downloaded once).\nIt reads the screen and picks one step at a time (limit per setting). Any send, delete, payment, or password pauses it to ask you. You can stop it anytime.";
+
+/* صورة المطوّر (DDI) */
+"توقّف: لم يعمل XCTest — %@ يمكن اختيار «قراءة النصوص» يدويًا من طريقة رؤية الشاشة." = "Stopped: XCTest didn't work — %@ “Text Reading” can be selected manually under screen reading method.";
+"تركيب صورة المطوّر" = "Mount Developer Disk Image";
+"إعادة تنزيل صورة المطوّر" = "Re-download Developer Disk Image";
+"✓ صورة المطوّر مركّبة" = "✓ Developer Disk Image mounted";
+"iOS %1$@ (%2$@) — صورة المطوّر: %3$@ (%4$@)" = "iOS %1$@ (%2$@) — Developer Disk Image: %3$@ (%4$@)";
+"غير محمّلة" = "not downloaded";
+"تنزيل صورة المطوّر (%1$@ من %2$@)…" = "Downloading Developer Disk Image (%1$@ of %2$@)…";
+"تعذّر تنزيل صورة المطوّر: %@" = "Couldn't download the Developer Disk Image: %@";
+"ملف صورة المطوّر غير سليم (%@)؛ حُذف ويمكن تنزيله مرة أخرى." = "The Developer Disk Image file is invalid (%@); it was deleted and can be downloaded again.";
+"التحقق من صورة المطوّر…" = "Checking Developer Disk Image…";
+"تعذّر الاتصال بالجهاز (يجب أن يكون LocalDevVPN قيد التشغيل): %@" = "Couldn't connect to the device (LocalDevVPN must be running): %@";
+"تركيب صورة المطوّر… (قد يستغرق دقيقة)" = "Mounting Developer Disk Image… (may take a minute)";
+"وضع المطوّر غير مفعّل على الجهاز، أو أن خدمة تركيب صورة المطوّر غير متاحة." = "Developer Mode is off on this device, or the disk image mounting service is unavailable.";
+"الجهاز مقفل؛ يلزم فتح القفل ثم المحاولة مرة أخرى." = "The device is locked; unlock it and try again.";
+"تعذّر توقيع صورة المطوّر من خادم Apple؛ يلزم اتصال بالإنترنت لا يمر عبر وكيل أو فلتر يحجب gs.apple.com. (%@)" = "Apple's server couldn't sign the Developer Disk Image; an internet connection without a proxy or filter blocking gs.apple.com is required. (%@)";
+"صورة المطوّر المحمّلة لا تناسب هذا الإصدار من iOS؛ حُذفت وسيُعاد تنزيلها في المحاولة التالية. (%@)" = "The downloaded Developer Disk Image doesn't fit this iOS version; it was deleted and will be downloaded again on the next try. (%@)";
+"صورة المطوّر غير محمّلة." = "The Developer Disk Image isn't downloaded.";
+"رُكّبت صورة المطوّر لكن خدماتها لم تظهر بعد؛ يمكن المحاولة مرة أخرى بعد لحظات." = "The Developer Disk Image was mounted, but its services haven't appeared yet; try again in a moment.";
+"تعذّر تركيب صورة المطوّر: %@" = "Couldn't mount the Developer Disk Image: %@";
+
+"تنزيل صورة المطوّر" = "Download Developer Disk Image";
+"الإنترنت مغلق؛ يلزم السماح به لتنزيل صورة المطوّر وتوقيعها من Apple." = "Internet is off; it must be allowed to download the Developer Disk Image and have Apple sign it.";

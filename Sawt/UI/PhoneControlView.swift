@@ -20,6 +20,8 @@ import Security
 @_silgen_name("sawtctl_live_close") private func c_live_close() -> UnsafeMutablePointer<CChar>?
 @_silgen_name("sawtctl_live") private func c_live(_ cfg: UnsafePointer<CChar>, _ op: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("sawtctl_free") private func c_free(_ p: UnsafeMutablePointer<CChar>?)
+@_silgen_name("sawtctl_ddi_status") private func c_ddi_status(_ cfg: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
+@_silgen_name("sawtctl_ddi_mount") private func c_ddi_mount(_ cfg: UnsafePointer<CChar>, _ dir: UnsafePointer<CChar>, _ ios: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
 #endif
 
 enum PhoneControl {
@@ -189,7 +191,7 @@ enum PhoneControl {
         return String(decoding: data, as: UTF8.self)
     }
 
-    enum Op: Sendable { case probe, pair, ax(UInt32), tap(UInt16, UInt16), keys(String), screen(UInt32), drag(UInt16, UInt16, UInt16, UInt16), launch(String), shot(String), liveOpen, liveClose, live(String) }
+    enum Op: Sendable { case probe, pair, ax(UInt32), tap(UInt16, UInt16), keys(String), screen(UInt32), drag(UInt16, UInt16, UInt16, UInt16), launch(String), shot(String), liveOpen, liveClose, live(String), ddiStatus, ddiMount(String, String) }
 
     nonisolated(unsafe) static var lastRPHost = ""
 
@@ -259,6 +261,8 @@ enum PhoneControl {
                 case .liveOpen: return c_live_open(c)
                 case .liveClose: return c_live_close()
                 case .live(let j): return j.withCString { c_live(c, $0) }
+                case .ddiStatus: return c_ddi_status(c)
+                case .ddiMount(let dir, let ios): return dir.withCString { d in ios.withCString { c_ddi_mount(c, d, $0) } }
                 }
             }
             guard let p else { return "{\"ok\":false,\"error\":\"null\"}" }
@@ -283,6 +287,7 @@ struct PhoneControlView: View {
     @State private var countdown = 0
     @State private var output = ""
     @State private var repairing = false
+    @ObservedObject private var ddi = DDIStore.shared
 
     var body: some View {
         Form {
@@ -300,7 +305,7 @@ struct PhoneControlView: View {
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
             } footer: {
-                Text("يجب أن يكون LocalDevVPN قيد التشغيل، وصورة المطوّر (DDI) مركّبة (مثلًا من StikDebug). يمكنك استيراد ملف StikDebug، أو إنشاء ملف جديد من الجهاز (وافق إذا ظهر لك طلب ثقة، وتُحفظ نسخة من الملف القديم).")
+                Text("يجب أن يكون LocalDevVPN قيد التشغيل. تُنزَّل صورة المطوّر (DDI) وتُركَّب تلقائيًا عند الحاجة، ويلزم وضع المطوّر واتصال بالإنترنت عند أول تركيب بعد كل تشغيل للجهاز. يمكنك استيراد ملف اقتران من StikDebug، أو إنشاء ملف جديد من الجهاز (وافق إذا ظهر لك طلب ثقة، وتُحفظ نسخة من الملف القديم).")
             }
 
             Section {
@@ -328,11 +333,16 @@ struct PhoneControlView: View {
             }
 
             Section {
-                Button("فحص الاتصال") { go(.probe, delay: false, label: "probe") }
+                Button("فحص الاتصال") { go(.probe, delay: false, label: "probe", mountFirst: true) }
+                Button("تركيب صورة المطوّر") { mountDDI(redownload: false) }
+                Button("إعادة تنزيل صورة المطوّر") { mountDDI(redownload: true) }.font(.footnote)
+                if ddi.busy, !ddi.status.isEmpty { HStack { ProgressView(); Text(ddi.status).font(.footnote) } }
             } header: {
                 Text("اختبارات")
+            } footer: {
+                Text(DDIStore.versionLine)
             }
-            .disabled(busy || !PhoneControl.available || !hasPairing)
+            .disabled(busy || ddi.busy || !PhoneControl.available || !hasPairing)
 
             if countdown > 0 {
                 Section { Text(L("يبدأ بعد %@…", String(countdown))) }
@@ -391,11 +401,37 @@ struct PhoneControlView: View {
         }
     }
 
-    private func go(_ op: PhoneControl.Op, delay: Bool, label: String, stay: Bool = false, after: (@MainActor () -> String)? = nil) {
+    /// تركيب يدوي لصورة المطوّر (مع إعادة التنزيل إن طُلب)
+    private func mountDDI(redownload: Bool) {
+        busy = true
+        output = ""
+        Task { @MainActor in
+            var lines = [DDIStore.versionLine]
+            if redownload, let e = await ddi.download(force: true) {
+                lines.append("✗ " + e)
+            } else if let e = await ddi.ensureMounted(force: true, permitted: redownload) {
+                lines.append("✗ " + e)
+            } else {
+                lines.append(L("✓ صورة المطوّر مركّبة"))
+            }
+            lines[0] = DDIStore.versionLine
+            output = lines.joined(separator: "\n")
+            Log.shared("phonectl ddi: \(output)")
+            busy = false
+        }
+    }
+
+    private func go(_ op: PhoneControl.Op, delay: Bool, label: String, stay: Bool = false, mountFirst: Bool = false, after: (@MainActor () -> String)? = nil) {
         busy = true
         output = ""
         let h = host
         Task { @MainActor in
+            // فحص الاتصال: نتأكد من صورة المطوّر أول ونكتب سطرها في النتيجة
+            var ddiLine = ""
+            if mountFirst {
+                let e = await DDIStore.shared.ensureMounted(force: true)
+                ddiLine = DDIStore.versionLine + "\n" + (e.map { "✗ " + $0 } ?? L("✓ صورة المطوّر مركّبة")) + "\n"
+            }
             // لما تطلع من التطبيق iOS يوقفه، فالأوامر ما توصل لين ترجع؛ نخليه صاحي بصوت صامت + وقت خلفية
             var bg: BGTask?
             if delay {
@@ -425,7 +461,7 @@ struct PhoneControlView: View {
                 if r.contains("\"paired\":true") { PhoneControl.pairingWritten() }
                 r = "new pairing: \(PhoneControl.storedInfo())\n" + r
             }
-            r = "pairing: \(info)\nrp: \(rp.port) \(rp.info)\n" + r
+            r = ddiLine + "pairing: \(info)\nrp: \(rp.port) \(rp.info)\n" + r
             if let after {
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 r += after()
