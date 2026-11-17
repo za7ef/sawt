@@ -199,12 +199,6 @@ struct VoiceModeView: View {
         GlassEffectContainer(spacing: 12) {
             HStack(spacing: 12) {
                 HStack(spacing: 8) {
-                    Button { showSettings = true } label: {
-                        Image(systemName: "plus").font(.system(size: 20, weight: .regular))
-                            .frame(width: 36, height: 36)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("المزيد")
                     TextField("اكتب…", text: $typed)
                         .focused($typing)
                         .submitLabel(.send)
@@ -237,6 +231,20 @@ struct VoiceModeView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(call.muted ? "شغّل المايك" : "اكتم المايك")
+
+                // الكاميرا: زر دائري بين المايك والإنهاء
+                Button { toggleCamera() } label: {
+                    Image(systemName: call.cameraOn ? "video.fill" : "video")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(Color.primary)
+                        .frame(width: 56, height: 56)
+                        .contentShape(Circle())
+                        .contentTransition(.symbolEffect(.replace))
+                        .glassEffect(.regular.interactive(), in: .circle)
+                }
+                .buttonStyle(.plain)
+                .disabled(call.cameraBusy || call.state == .idle || call.state == .starting)
+                .accessibilityLabel(call.cameraOn ? "اطفِ الكاميرا" : "شغّل الكاميرا")
 
                 Button { dismiss() } label: {
                     Image(systemName: "xmark")
