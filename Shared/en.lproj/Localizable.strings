@@ -920,15 +920,7 @@
 "الاقتران من الجهاز (iOS 27)" = "Pair from Device (iOS 27)";
 "شغّل LocalDevVPN، واضغط الزر، ثم اذهب إلى الإعدادات واختر «Sawt» من الأجهزة القريبة. سيظهر لك رمز من ٦ أرقام هنا وفي إشعار، اكتبه في الجهاز. يبقى Sowtly يعمل في الخلفية ٥ دقائق." = "Turn on LocalDevVPN, tap the button, then go to Settings and choose “Sawt” from nearby devices. A 6-digit code will appear here and in a notification; enter it on the device. Sowtly keeps running in the background for 5 minutes.";
 "فحص الاتصال" = "Test Connection";
-"قراءة الشاشة (بعد ٥ ثوانٍ)" = "Read Screen (in 5 seconds)";
-"لمسة في وسط الشاشة (بعد ٥ ثوانٍ)" = "Tap Screen Center (in 5 seconds)";
-"زر الشاشة الرئيسية" = "Home Button";
-"نص للكتابة" = "Text to type";
-"كتابة النص (بعد ٥ ثوانٍ)" = "Type Text (in 5 seconds)";
-"اكتب hello حرفًا حرفًا (بعد ٥ ثوانٍ)" = "Type hello Letter by Letter (in 5 seconds)";
-"زر الشاشة الرئيسية (بعد ٥ ثوانٍ)" = "Home Button (in 5 seconds)";
 "اختبارات" = "Tests";
-"بعد الضغط، اذهب إلى التطبيق الذي تريد التجربة عليه خلال ٥ ثوانٍ. تُحفظ النتيجة في السجل." = "After tapping, go to the app you want to test within 5 seconds. The result is saved to the log.";
 "هدف اللمس — ضُغط %@ مرة" = "Tap Target — tapped %@ times";
 "خانة الاختبار" = "Test field";
 "اختبار داخل Sowtly" = "Test Inside Sowtly";

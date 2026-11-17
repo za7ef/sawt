@@ -282,7 +282,8 @@ struct PhoneControlView: View {
     @ObservedObject private var hostPair = HostPairing.shared
     @State private var countdown = 0
     @State private var output = ""
-    @State private var typeText = L("مرحبًا من Sowtly")
+    /// نص زر «الصق النص في الخانة» في «اختبار داخل Sowtly»
+    private let typeText = L("مرحبًا من Sowtly")
     @State private var targetHits = 0
     @State private var targetFrame: CGRect = .zero
     @State private var inAppText = ""
@@ -334,19 +335,8 @@ struct PhoneControlView: View {
 
             Section {
                 Button("فحص الاتصال") { go(.probe, delay: false, label: "probe") }
-                Button("قراءة الشاشة (بعد ٥ ثوانٍ)") { go(.ax(4000), delay: true, label: "ax") }
-                Button("لمسة في وسط الشاشة (بعد ٥ ثوانٍ)") { go(.tap(32768, 32768), delay: true, label: "tap") }
-                Button("زر الشاشة الرئيسية") { go(.keys("home"), delay: false, label: "home") }
-                TextField("نص للكتابة", text: $typeText)
-                Button("كتابة النص (بعد ٥ ثوانٍ)") {
-                    go(.keys("paste:" + typeText), delay: true, label: "paste")
-                }
-                Button("اكتب hello حرفًا حرفًا (بعد ٥ ثوانٍ)") { go(.keys("hello"), delay: true, label: "type") }
-                Button("زر الشاشة الرئيسية (بعد ٥ ثوانٍ)") { go(.keys("home"), delay: true, label: "home-delayed") }
             } header: {
                 Text("اختبارات")
-            } footer: {
-                Text("بعد الضغط، اذهب إلى التطبيق الذي تريد التجربة عليه خلال ٥ ثوانٍ. تُحفظ النتيجة في السجل.")
             }
             .disabled(busy || !PhoneControl.available || !hasPairing)
 
