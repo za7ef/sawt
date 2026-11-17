@@ -49,7 +49,7 @@ struct ChatView: View {
         .background(Color.black.ignoresSafeArea())
         .fullScreenCover(isPresented: $voiceMode) {
             VoiceModeView(openDrawer: openDrawer)
-                .environment(\.layoutDirection, .rightToLeft)
+                .environment(\.layoutDirection, AppLang.layout)
         }
         .sheet(isPresented: $showModels) { ModelsView() }
         // Image Playground: النافذة تنفتح بالبرومبت لما المحرك يطلبها

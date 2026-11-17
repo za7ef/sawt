@@ -156,7 +156,7 @@ struct ModelsView: View {
                 Label(m.speed, systemImage: "bolt")
             }
             .font(.caption).foregroundStyle(.secondary)
-            .environment(\.layoutDirection, .rightToLeft)
+            .environment(\.layoutDirection, AppLang.layout)
             if m.ramGB > 0 { fitChips(m) }
             Text("العربي: \(m.arabic)" + (tooBig ? " • قد يكون ثقيل على جهازك" : ""))
                 .font(.caption).foregroundStyle(tooBig ? .orange : .secondary)
@@ -290,7 +290,7 @@ struct CPUModelRow: View {
                 Label(spec.speed, systemImage: "bolt")
             }
             .font(.caption).foregroundStyle(.secondary)
-            .environment(\.layoutDirection, .rightToLeft)
+            .environment(\.layoutDirection, AppLang.layout)
             Group {
                 if fits {
                     Label("يناسب جوالك", systemImage: "checkmark.seal.fill").foregroundStyle(.green)

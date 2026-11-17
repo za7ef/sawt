@@ -90,7 +90,7 @@ targets:
     info:
       path: SawtWidgets/Info.plist
       properties:
-        CFBundleDisplayName: صوت
+        CFBundleDisplayName: Sowtly
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
@@ -115,7 +115,7 @@ targets:
     info:
       path: SawtBroadcast/Info.plist
       properties:
-        CFBundleDisplayName: صوت
+        CFBundleDisplayName: Sowtly
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:

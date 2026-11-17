@@ -61,8 +61,8 @@ struct SawtApp: App {
                 .environmentObject(settings)
                 .environmentObject(store)
                 .environmentObject(call)
-                .environment(\.layoutDirection, .rightToLeft)
-                .environment(\.locale, Locale(identifier: "ar"))
+                .environment(\.layoutDirection, AppLang.layout)
+                .environment(\.locale, AppLang.locale)
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
                 .task {
@@ -81,7 +81,7 @@ struct SawtApp: App {
                     slog("phonectl openURL \(url.lastPathComponent): \(r)")
                     updater.lastMessage = r
                 }
-                .sheet(item: $updater.available) { UpdateSheet(info: $0).environment(\.layoutDirection, .rightToLeft) }
+                .sheet(item: $updater.available) { UpdateSheet(info: $0).environment(\.layoutDirection, AppLang.layout) }
                 .alert("التحديثات", isPresented: Binding(get: { updater.lastMessage != nil },
                                                         set: { if !$0 { updater.lastMessage = nil } })) {
                     Button("تمام", role: .cancel) {}

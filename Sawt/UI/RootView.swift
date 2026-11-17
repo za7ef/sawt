@@ -149,10 +149,10 @@ struct DrawerView: View {
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showModels) { ModelsView() }
         .sheet(isPresented: $showAgent) {
-            NavigationStack { PhoneAgentView() }.environment(\.layoutDirection, .rightToLeft)
+            NavigationStack { PhoneAgentView() }.environment(\.layoutDirection, AppLang.layout)
         }
         .fullScreenCover(isPresented: $showVoice) {
-            VoiceModeView().environment(\.layoutDirection, .rightToLeft)
+            VoiceModeView().environment(\.layoutDirection, AppLang.layout)
         }
         .alert("إعادة تسمية", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("اسم المحادثة", text: $newTitle)

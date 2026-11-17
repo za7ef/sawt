@@ -95,7 +95,7 @@ struct VoiceModeView: View {
                 showSettings = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { toggleCamera() }
             })
-            .environment(\.layoutDirection, .rightToLeft)
+            .environment(\.layoutDirection, AppLang.layout)
             .presentationDetents([.medium, .large])
         }
         .statusBarHidden(false)

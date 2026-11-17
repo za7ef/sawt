@@ -19,7 +19,7 @@ final class VoiceDownloads: ObservableObject {
         // فننزّل نسختنا المحوّلة لـONNX من إصدار الأصوات العام
         Item(id: "nabra-saudi", folder: "nabra-saudi",
              bases: ["https://github.com/za7ef/sawt-releases/releases/download/voices/",
-                     "https://github.com/za7ef/sawt/releases/download/voices/"],
+                     "https://github.com/za7ef/sowtly/releases/download/voices/"],
              files: [((0..<9).map { String(format: "nabra-saudi-model.int8.onnx.part%02d", $0) }, "model.int8.onnx"),
                      (["nabra-saudi-tokens.txt"], "tokens.txt"),
                      (["nabra-saudi-voices.bin"], "voices.bin")],

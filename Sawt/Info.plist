@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>NSCameraUsageDescription</key>
-	<string>عشان تصوّر شي وترفقه في المحادثة. الصورة تبقى على جوالك.</string>
+	<string>لالتقاط صورة وإرفاقها في المحادثة. تبقى الصورة على جهازك.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>عشان يعرف مدينتك لما تسأل عن الطقس بدون ما تذكرها. ما يُحفظ إلا اسم المدينة.</string>
+	<string>لمعرفة مدينتك عند السؤال عن الطقس دون ذكرها. لا يُحفظ إلا اسم المدينة.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>عشان تحفظ الصور اللي يرسمها صوت في الاستوديو.</string>
+	<string>لحفظ الصور التي يرسمها Sowtly في مكتبة الصور.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>عشان تختار صورة وترفقها في المحادثة. الصورة تبقى على جوالك.</string>
+	<string>لاختيار صورة وإرفاقها في المحادثة. تبقى الصورة على جهازك.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
@@ -20,7 +20,7 @@
 		<string>en</string>
 	</array>
 	<key>CFBundleDisplayName</key>
-	<string>صوت</string>
+	<string>Sowtly</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -41,7 +41,7 @@
 		<string>_remotepairing-pairable-host._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>يحتاجه «تحكم بالجوال» للوصول لخدمة الاقتران في جوالك نفسه.</string>
+	<string>تحتاجه ميزة «التحكم بالجهاز» للوصول إلى خدمة الاقتران على جهازك نفسه.</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
@@ -84,9 +84,9 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>يحوّل كلامك لنص على الجهاز عشان يفهمك.</string>
+	<string>لتحويل كلامك إلى نص على الجهاز حتى يفهمك.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>يحتاج صوت المايك عشان تكلّمه مباشرة. صوتك يتعالج على جوالك وما ينحفظ.</string>
+	<string>يحتاج Sowtly إلى الميكروفون لتتحدث معه مباشرة. يُعالَج صوتك على جهازك ولا يُحفظ.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UIBackgroundModes</key>

@@ -1,0 +1,8 @@
+"CFBundleDisplayName" = "Sowtly";
+"NSCameraUsageDescription" = "لالتقاط صورة وإرفاقها في المحادثة. تبقى الصورة على جهازك.";
+"NSLocationWhenInUseUsageDescription" = "لمعرفة مدينتك عند السؤال عن الطقس دون ذكرها. لا يُحفظ إلا اسم المدينة.";
+"NSPhotoLibraryAddUsageDescription" = "لحفظ الصور التي يرسمها Sowtly في مكتبة الصور.";
+"NSPhotoLibraryUsageDescription" = "لاختيار صورة وإرفاقها في المحادثة. تبقى الصورة على جهازك.";
+"NSLocalNetworkUsageDescription" = "تحتاجه ميزة «التحكم بالجهاز» للوصول إلى خدمة الاقتران على جهازك نفسه.";
+"NSSpeechRecognitionUsageDescription" = "لتحويل كلامك إلى نص على الجهاز حتى يفهمك.";
+"NSMicrophoneUsageDescription" = "يحتاج Sowtly إلى الميكروفون لتتحدث معه مباشرة. يُعالَج صوتك على جهازك ولا يُحفظ.";

@@ -8,7 +8,7 @@ import SwiftUI
 final class UpdateChecker: ObservableObject {
     static let shared = UpdateChecker()
     static let feed = URL(string: "https://raw.githubusercontent.com/za7ef/sawt-releases/main/update.json")!
-    static let releasesAPI = URL(string: "https://api.github.com/repos/za7ef/sawt/releases?per_page=30")!
+    static let releasesAPI = URL(string: "https://api.github.com/repos/za7ef/sowtly/releases?per_page=30")!
 
     private struct GHRelease: Decodable {
         let tag_name: String

@@ -1932,7 +1932,7 @@ struct RunnerInfoSheet: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("تمام") { dismiss() } } }
         }
         .presentationDetents([.medium, .large])
-        .environment(\.layoutDirection, .rightToLeft)
+        .environment(\.layoutDirection, AppLang.layout)
     }
 
     private func item(_ icon: String, _ title: String, _ body: String) -> some View {

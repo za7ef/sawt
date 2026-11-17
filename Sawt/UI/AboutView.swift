@@ -9,6 +9,10 @@ enum AppVersion {
 /// يقرأ ملف Markdown من مجلد About داخل التطبيق.
 enum AboutText {
     static func load(_ name: String) -> String {
+        // النسخة الإنجليزية (about.en.md…) حين تكون الواجهة بالإنجليزية
+        if !AppLang.isArabic, let u = Bundle.main.url(forResource: name + ".en", withExtension: "md")
+            ?? Bundle.main.url(forResource: name + ".en", withExtension: "md", subdirectory: "About"),
+           let s = try? String(contentsOf: u, encoding: .utf8) { return s }
         guard let url = Bundle.main.url(forResource: name, withExtension: "md")
             ?? Bundle.main.url(forResource: name, withExtension: "md", subdirectory: "About"),
               let s = try? String(contentsOf: url, encoding: .utf8) else { return "ما لقيت النص." }
