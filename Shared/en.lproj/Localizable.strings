@@ -554,12 +554,12 @@
 "%@ غير جاهز. حمِّله من شاشة النماذج." = "%@ isn't ready. Download it from the Models screen.";
 "(لم يُفهم شيء)" = "(Nothing understood)";
 "أصوات أودار (حمِّلها أولًا)" = "Audar voices (download them first)";
-"أودار: سلطان" = "Audar: Sultan";
-"أودار: فيصل" = "Audar: Faisal";
-"أودار: يزن" = "Audar: Yazan";
-"أودار: ريم" = "Audar: Reem";
-"أودار: جود" = "Audar: Joud";
-"أودار: لمى" = "Audar: Lama";
+"أودار: سلطان (دافئ وواثق)" = "Audar: Sultan (warm and confident)";
+"أودار: فيصل (ناعم وقريب)" = "Audar: Faisal (soft and close)";
+"أودار: يزن (مشرق وفضولي)" = "Audar: Yazan (bright and curious)";
+"أودار: ريم (حيوي ومبهج)" = "Audar: Reem (lively and cheerful)";
+"أودار: جود (مخملي ومرح)" = "Audar: Joud (velvety and playful)";
+"أودار: لمى (خفيف وحالم)" = "Audar: Lama (light and dreamy)";
 "أودار: فشل الاستئناف (%@)" = "Audar: Failed to resume (%@)";
 "أودار: فشلت معالجة الطلب (%@)" = "Audar: Failed to process the request (%@)";
 "استغرق %@ وقتًا طويلًا ولم يعمل. حاول مرة أخرى أو اختر نموذجًا أصغر." = "%@ took too long and didn't run. Try again or choose a smaller model.";
@@ -591,12 +591,6 @@
 "جهازك لا يدعم سمع آبل للكلام العربي على الجهاز. اسمح له باستخدام الإنترنت من الإعدادات." = "Your device doesn't support Apple Speech for Arabic on-device. Allow it to use the internet in Settings.";
 "حجم %1$@ غير متوقع (%2$@)" = "Unexpected size for %1$@ (%2$@)";
 "حدث خطأ غير معروف." = "An unknown error occurred.";
-"رجالي، دافئ وواثق • يتحدث باللهجة التي تكتبها" = "Male, warm and confident • Speaks in the dialect you write";
-"رجالي، مشرق وفضولي • يتحدث باللهجة التي تكتبها" = "Male, bright and curious • Speaks in the dialect you write";
-"رجالي، ناعم وقريب • يتحدث باللهجة التي تكتبها" = "Male, soft and close • Speaks in the dialect you write";
-"نسائي، حيوي ومبهج • يتحدث باللهجة التي تكتبها" = "Female, lively and cheerful • Speaks in the dialect you write";
-"نسائي، خفيف وحالم • يتحدث باللهجة التي تكتبها" = "Female, light and dreamy • Speaks in the dialect you write";
-"نسائي، مخملي ومرح • يتحدث باللهجة التي تكتبها" = "Female, velvety and playful • Speaks in the dialect you write";
 "سمع آبل" = "Apple Speech";
 "صوت أودار غير معروف" = "Unknown Audar voice";
 "فشل التحميل (رمز %@)" = "Download failed (code %@)";
@@ -997,3 +991,5 @@
 "ننصح بأودار للمكالمات. مع هذا الصوت يُقرأ النص الإنجليزي بصوت Apple." = "Audar is recommended for calls. With this voice, English text is read with an Apple voice.";
 "أدق، لكن بطيء وثقيل" = "More accurate, but slow and heavy";
 "متوازن ومفضّل" = "Balanced · Recommended";
+"رجالي • يتحدث باللهجة التي تكتبها" = "Male • Speaks in the dialect you write";
+"نسائي • يتحدث باللهجة التي تكتبها" = "Female • Speaks in the dialect you write";
