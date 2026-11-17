@@ -546,7 +546,8 @@ final class CallController: ObservableObject {
     /// انقالت كلمة انتظار في هذا الدور؟
     private var fillerPlayed = false
     private var lastHum: String?
-    private var fillersOff = false
+    /// الدور الحالي بالإنجليزي: كلمات الانتظار تنقال بالإنجليزي
+    private var fillersEnglish = false
     /// كلمات انتظار أودار جاهزة مسبقًا (تشتغل فورًا): النص → الصوت، ولأي صوت تجهّزت
     private var audarFillers: [String: [Float]] = [:]
     private var audarFillersVoice = ""
@@ -628,8 +629,11 @@ final class CallController: ObservableObject {
     /// كلمة انتظار أودار جاهزة (بحث أو تفكير)، بدون تكرار آخر وحدة. ترجع false لو ما فيه جاهز.
     @discardableResult
     private func playAudarFiller(search: Bool, hum: Bool = false, myID: Int) -> Bool {
-        guard myID == replyID, state == .thinking, !bargePending, !fillersOff else { return false }
-        let list = hum ? FillerPicker.audarHum : (search ? FillerPicker.audarSearch : FillerPicker.audarThink)
+        guard myID == replyID, state == .thinking, !bargePending else { return false }
+        let en = fillersEnglish
+        let list = hum ? (en ? FillerPicker.audarHumEn : FillerPicker.audarHum)
+            : search ? (en ? FillerPicker.audarSearchEn : FillerPicker.audarSearch)
+            : (en ? FillerPicker.audarThinkEn : FillerPicker.audarThink)
         let pool = list.filter { audarFillers[$0] != nil }
         guard let said = FillerPicker.pickFrom(pool, last: hum ? lastHum : lastFiller), var samples = audarFillers[said] else { return false }
         // سكتة طبيعية (0.4 ث) بعد الكلمة عشان ما تلتصق ببداية الرد؛ الكلمة صوت بس، ما تنكتب في النص ولا تنحفظ في المحادثة
@@ -768,9 +772,8 @@ final class CallController: ObservableObject {
         sentenceQueue = []
         playUntil = .distantPast
         replyChars = 0
-        // كلمات الانتظار سعودية: في الأدوار الإنجليزية ما نقولها
         fillerPlayed = false
-        fillersOff = ReplyLanguage.detect(text) == .english
+        fillersEnglish = ReplyLanguage.detect(text) == .english
         proc.async { self.aiActive = true }
 
         let settings = AppSettings.shared

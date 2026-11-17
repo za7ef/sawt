@@ -242,10 +242,16 @@ enum FillerPicker {
     static let audarSearch = ["دقيقة خليني أبحث", "خليني أدوّر لك", "لحظة أشيك على النت", "ثانية أبحث لك عنها", "خليني أشوف وش لقيت"]
     /// كلمة قصيرة لو طال السكوت بعد كلمة الانتظار
     static let audarHum = ["دقيقة", "ثواني بس", "لحظات"]
-    /// وحدة من كل نوع أول عشان تكون جاهزة بسرعة، بعدين الباقي
+    /// نفس الكلمات للأدوار الإنجليزية (أودار يتكلم إنجليزي بنفس الصوت)
+    static let audarThinkEn = ["Let me think", "Give me a moment", "Let me check", "Let me see"]
+    static let audarSearchEn = ["One moment, let me look it up", "Let me search that", "Let me look that up", "Checking online"]
+    static let audarHumEn = ["One sec", "Just a moment", "Hang on"]
+    /// وحدة من كل نوع أول عشان تكون جاهزة بسرعة، بعدين الباقي (العربي أول، بعده الإنجليزي)
     static let audarRenderOrder = ["خليني أفكر", "دقيقة خليني أبحث", "دقيقة", "ثواني بس", "خليني أشيك", "خليني أدوّر لك", "لحظات",
                                    "لحظة خليني أشوف", "لحظة أشيك على النت", "دقيقة أفكر فيها", "ثانية أبحث لك عنها",
-                                   "ثانية بس", "خليني أشوف وش لقيت", "خليني أركّز فيها"]
+                                   "ثانية بس", "خليني أشوف وش لقيت", "خليني أركّز فيها",
+                                   "Let me think", "One moment, let me look it up", "One sec", "Let me check", "Let me search that",
+                                   "Just a moment", "Give me a moment", "Let me look that up", "Hang on", "Let me see", "Checking online"]
 
     /// اختيار عشوائي من قائمة بدون تكرار آخر وحدة
     static func pickFrom(_ list: [String], last: String?, random: (Int) -> Int = { Int.random(in: 0 ..< max($0, 1)) }) -> String? {
