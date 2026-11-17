@@ -46,10 +46,6 @@
 "يحتاج جهازك إلى الإنترنت للتعرّف على الكلام العربي عبر Apple." = "Your device needs the internet for Apple to recognize Arabic speech.";
 "المكالمة" = "Call";
 "معلومات التشخيص في المكالمة" = "Show Diagnostics in Call";
-"متقدم: أودار" = "Advanced: Audar";
-"ستة أصوات من نموذج واحد، وأفضلها في اللهجة الخليجية. «جرّب» يستخدم صوت أودار المختار، أو الأول إن كان المختار صوتًا آخر." = "Six voices from one model, best with the Gulf dialect. “Try” uses the selected Audar voice, or the first one if another voice is selected.";
-"متقدم: نماء (تجريبي)" = "Advanced: Namaa (Beta)";
-"أبطأ ويرفع حرارة الجهاز. خطوات أقل = أسرع، وأكثر = أوضح." = "Slower and heats up the device. Fewer steps = faster, more = clearer.";
 "نماء ثقيل على المكالمات" = "Namaa Is Heavy for Calls";
 "حسنًا" = "OK";
 "يتأخر الرد لأنه يولّد كل جملة كاملة قبل أن يتكلم، ويرفع حرارة الجهاز." = "Replies are delayed because it generates each full sentence before speaking, and it heats up the device.";
@@ -65,12 +61,7 @@
 "إلغاء" = "Cancel";
 "أودار (٦ أصوات)" = "Audar (6 voices)";
 "~840 MB • عربي (فصحى وخليجي) وإنجليزي" = "~840 MB • Arabic (MSA and Gulf) and English";
-"جرّب" = "Try";
-"حمِّله من «أصوات للتحميل» في الأعلى." = "Download it from “Downloadable Voices” above.";
 "الخطوات" = "Steps";
-"6 (أسرع)" = "6 (faster)";
-"7 (مقترح)" = "7 (recommended)";
-"16 (أعلى جودة، أبطأ)" = "16 (best quality, slower)";
 "اختبر المعالج" = "Test CPU";
 "جارٍ اختبار المعالج…" = "Testing CPU…";
 "المعالج يعمل (%@)" = "CPU works (%@)";

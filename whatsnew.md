@@ -1,6 +1,7 @@
 - **صياغة محايدة في نصوص التطبيق:** أُعيدت صياغة نصوص الإعدادات والتنبيهات ورسائل الحالة وصفحات «حول» والخصوصية والشروط بأسلوب غير شخصي، دون ضمير المتكلم (مثل: «يُنصح بأودار»، و«لا يتم التبديل بين المحركات تلقائيًا»، و«تجهيز الصورة…»). ولم تتغير ردود المساعد ولا جمل تعريف الأصوات.
+- **إعدادات «الصوت والمكالمة»:** أُزيل قسما «متقدم: أودار» و«متقدم: نماء (تجريبي)» (زر «جرّب» وإحصاءات التوليد واختيار خطوات نماء)، مع بقاء الأصوات وتحميلها واختيارها كما هي، وبقاء عدد خطوات نماء على قيمته الحالية.
 - **إعدادات الصور:** حُذفت أسعار Gemini التقريبية من الملاحظة.
-- **App text now uses neutral wording (no "I/we") across settings, alerts, status messages, About, Privacy, and Terms; Gemini prices removed from the image settings note.**
+- **App text now uses neutral wording (no "I/we") across settings, alerts, status messages, About, Privacy, and Terms; Gemini prices removed from the image settings note; the advanced Audar and Namaa sections were removed from Voice settings.**
 - **إصلاح كلمات الانتظار في أودار:** صارت الكلمات القصيرة («دقيقة»، «ثواني بس»، «لحظات») تُجهَّز أولًا فتكون جاهزة من بداية المكالمة، ولا تتكرر أي عبارة انتظار في الدور نفسه؛ فإن لم تكن الكلمة المطلوبة جاهزة يسكت التطبيق بدل تكرار «خليني أفكر».
 - **Audar waiting words: short words now get ready first, and no waiting phrase repeats within the same reply.**
 - **أسماء أصوات نبرة:** صار صوت نبرة السعودي «نورة (هادئة وودودة)» وصوت نبرة الفصيح «هند (رزينة وواضحة)»، وتحت كلٍّ منهما «نسائي».

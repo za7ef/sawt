@@ -112,8 +112,6 @@ struct VoiceSettingsPage: View {
     @ObservedObject private var namaa = NamaaVoice.shared
     @ObservedObject private var audar = AudarVoice.shared
     @State private var confirmAudarDelete = false
-    /// خطوات توليد نماء: أقل = أسرع وجودة أقل. "جرّب" يستخدم نفس الاختيار عشان تقارن بأذنك
-    @AppStorage("namaaSteps") private var namaaSteps = 7
     @ObservedObject private var voiceDL = VoiceDownloads.shared
     @State private var namaaWarn = false
     @State private var confirmNamaaDelete = false
@@ -202,22 +200,6 @@ struct VoiceSettingsPage: View {
 
                 Section("المكالمة") {
                     Toggle("معلومات التشخيص في المكالمة", isOn: $showCallDebug)
-                }
-
-                Section {
-                    audarRow
-                } header: {
-                    Text("متقدم: أودار")
-                } footer: {
-                    Text("ستة أصوات من نموذج واحد، وأفضلها في اللهجة الخليجية. «جرّب» يستخدم صوت أودار المختار، أو الأول إن كان المختار صوتًا آخر.")
-                }
-
-                Section {
-                    namaaRow
-                } header: {
-                    Text("متقدم: نماء (تجريبي)")
-                } footer: {
-                    Text("أبطأ ويرفع حرارة الجهاز. خطوات أقل = أسرع، وأكثر = أوضح.")
                 }
 
         }
@@ -333,54 +315,6 @@ struct VoiceSettingsPage: View {
             case .notDownloaded, .failed:
                 Button("تحميل") { audar.download() }.buttonStyle(.borderless)
             }
-        }
-    }
-
-    /// متقدم: تجربة أودار مع الوقت والسرعة
-    @ViewBuilder private var audarRow: some View {
-        if case .ready = audar.state {
-            Button {
-                audar.test()
-            } label: {
-                HStack {
-                    Label("جرّب", systemImage: "play.circle")
-                    Spacer()
-                    if audar.testing { ProgressView() }
-                }
-            }
-            .disabled(audar.testing)
-            if let r = audar.lastTest {
-                Text(r).font(.caption).foregroundStyle(.secondary)
-            }
-        } else {
-            Text("حمِّله من «أصوات للتحميل» في الأعلى.").foregroundStyle(.secondary)
-        }
-    }
-
-    /// متقدم: تجربة نماء وخطواته (التنزيل والحذف في «أصوات للتنزيل»)
-    @ViewBuilder private var namaaRow: some View {
-        if case .ready = namaa.state {
-            Button {
-                namaa.test()
-            } label: {
-                HStack {
-                    Label("جرّب", systemImage: "play.circle")
-                    Spacer()
-                    if namaa.testing { ProgressView() }
-                }
-            }
-            .disabled(namaa.testing)
-            Picker("الخطوات", selection: $namaaSteps) {
-                Text("6 (أسرع)").tag(6)
-                Text("7 (مقترح)").tag(7)
-                Text("8").tag(8)
-                Text("16 (أعلى جودة، أبطأ)").tag(16)
-            }
-            if let r = namaa.lastTest {
-                Text(r).font(.caption).foregroundStyle(.secondary)
-            }
-        } else {
-            Text("حمِّله من «أصوات للتحميل» في الأعلى.").foregroundStyle(.secondary)
         }
     }
 
