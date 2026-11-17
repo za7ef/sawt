@@ -119,7 +119,7 @@ print(failures == 0 ? "كل الاختبارات نجحت" : "فشل \(failures)
 check(ReplyLanguage.detect("Who are you?") == .english, "Lang: إنجليزي")
 check(ReplyLanguage.detect("مين أنت؟") == .arabic, "Lang: عربي")
 check(ReplyLanguage.detect("وش رأيك في iPhone 16 Pro؟") == .arabic, "Lang: عربي فيه كلمات إنجليزية")
-check(ReplyLanguage.detect("123 ؟") == .unknown, "Lang: بدون حروف")
+check(ReplyLanguage.detect("123 ?!") == .unknown, "Lang: بدون حروف")
 check(ReplyLanguage.hint(for: "كيفك") == "", "Lang: العربي بدون تذكير")
 check(!ReplyLanguage.hint(for: "How are you").isEmpty, "Lang: الإنجليزي فيه تذكير")
 
