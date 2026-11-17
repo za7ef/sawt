@@ -38,7 +38,7 @@ enum LaMa {
     static func model() async throws -> MLModel {
         lock.lock(); let c = cached; lock.unlock()
         if let c { return c }
-        guard installed else { throw SawtError.notReady }
+        guard installed else { throw SawtError.notReady("أداة الإزالة") }
         if !FileManager.default.fileExists(atPath: compiledURL.path) {
             let tmp = try await MLModel.compileModel(at: dir.appendingPathComponent("LaMa.mlpackage"))
             try? FileManager.default.removeItem(at: compiledURL)
