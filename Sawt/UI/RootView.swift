@@ -63,7 +63,7 @@ struct RootView: View {
                 Button("صدِّر السجل") { shareURL = Log.shared.export() }
                 Button("حسنًا", role: .cancel) {}
             } message: {
-                Text(L("كان حينها في: %@. السجل محفوظ؛ صدِّره وأرسله لنعرف السبب.", Log.shared.previousStage))
+                Text(L("كان حينها في: %@. السجل محفوظ؛ صدِّره وأرسله لمعرفة السبب.", Log.shared.previousStage))
             }
             .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) {
                 if let u = shareURL { ActivityView(items: [u]) }
@@ -310,7 +310,7 @@ struct CrashRecoveryView: View {
             Text("أُغلق التطبيق فجأة في المرة السابقة").font(.title3.weight(.semibold))
             Text(L("كان حينها في: %@", Log.shared.previousStage.isEmpty ? L("غير معروف") : Log.shared.previousStage))
                 .font(.footnote).foregroundStyle(.secondary)
-            Text("صدِّر السجل وأرسله لنعرف السبب. بعدها يمكنك المتابعة كالمعتاد، أو الفتح دون تحميل النموذج إذا تكرر الإغلاق.")
+            Text("صدِّر السجل وأرسله لمعرفة السبب. بعدها يمكنك المتابعة كالمعتاد، أو الفتح دون تحميل النموذج إذا تكرر الإغلاق.")
                 .font(.callout).multilineTextAlignment(.center).foregroundStyle(.secondary)
                 .padding(.horizontal, 24)
             Button {

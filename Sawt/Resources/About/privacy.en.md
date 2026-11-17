@@ -2,13 +2,13 @@
 
 Last updated: November 2026
 
-In short: **your data stays on your device.** We have no servers, and we don't collect anything about you. The only exception is optional: cloud models (for chat or the agent) if you turn them on yourself with your own key (see below).
+In short: **your data stays on your device.** The app has no servers of its own and doesn't collect anything about you. The only exception is optional: cloud models (for chat or the agent) if you turn them on yourself with your own key (see below).
 
-## What We Don't Do
+## What the App Doesn't Do
 
 - No accounts and no sign-in.
 - No ads, no trackers, and no usage analytics.
-- We don't send your chats, voice, or files to us or to anyone else, except to a cloud provider you turned on yourself.
+- Your chats, voice, and files aren't sent to the app's developer or to anyone else, except to a cloud provider you turned on yourself.
 
 ## What's Stored on Your Device
 
@@ -48,7 +48,7 @@ In Models → "Cloud Models" you can use a cloud model (free Gemini, free OpenRo
 
 - Every message you send in chat goes to the provider's servers along with **the previous conversation**, the app's instructions (including your memory and name if enabled), **attached images and files**, and search results if it searched. Background tasks such as memory extraction go to it as well.
 - **Calls** stay local unless you turn on "Use in Calls Too"; then the transcribed text of what you say (not the audio) and the camera frame, if the camera is on, go to the provider.
-- Data goes from your device straight to the provider (it doesn't pass through us) and is subject to the provider's policy. Free tiers may use it to improve their services.
+- Data goes from your device straight to the provider (it doesn't pass through the app's developer) and is subject to the provider's policy. Free tiers may use it to improve their services.
 - Keys are stored only in the keychain on your device, shared between chat and the agent, and you can delete them. Tap "Back to Local" to return to the on-device model, and then nothing leaves the device.
 
 ## Cloud Agent (Optional)
@@ -56,7 +56,7 @@ In Models → "Cloud Models" you can use a cloud model (free Gemini, free OpenRo
 The agent (phone control) runs on your device by default. **If you choose** a cloud model on the agent screen yourself (Gemini, OpenRouter, ChatGPT, or Claude) and enter your key:
 
 - At each step, the app sends the provider you chose: the goal you wrote, the previous steps, the screen text (button and element names), and **a small screenshot**. You see a notice about this once before the first use.
-- Data goes from your device straight to the provider (it doesn't pass through us) and is subject to the provider's privacy policy. Some free tiers (such as free Gemini) may use the data to improve their services.
+- Data goes from your device straight to the provider (it doesn't pass through the app's developer) and is subject to the provider's privacy policy. Some free tiers (such as free Gemini) may use the data to improve their services.
 - **Keys** are stored only in the keychain on your device, are never written to the log or settings, and can be deleted in "Service Keys".
 - Don't use the cloud agent on screens with sensitive information. At password fields and sensitive steps (sending, paying, deleting), the agent stops and asks you first, as usual.
 - If you switch back to an on-device model, nothing leaves the device.

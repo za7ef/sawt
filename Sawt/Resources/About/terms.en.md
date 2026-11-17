@@ -36,4 +36,4 @@ Running models on your device uses memory and battery and makes the device warm,
 
 ## 7. Changes
 
-We may update these terms with app updates, and the current version is always available inside the app.
+These terms may be updated with app updates, and the current version is always available inside the app.

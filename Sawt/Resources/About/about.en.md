@@ -1,6 +1,6 @@
 # Sowtly
 
-**Sowtly** is a smart assistant you can talk to with your voice or type to, in Arabic or English. Everything runs on your device: the language model, speech-to-text, and text-to-speech. We have no servers, and there are no accounts.
+**Sowtly** is a smart assistant you can talk to with your voice or type to, in Arabic or English. Everything runs on your device: the language model, speech-to-text, and text-to-speech. The app has no servers of its own, and there are no accounts.
 
 ## What It Can Do
 
@@ -36,8 +36,8 @@ Sowtly is built on open-source projects, and each model has its own license that
 - **Miro Arabic voice** (OpenVoiceOS, Piper/VITS architecture): CC BY-NC-ND 4.0 License, for non-commercial use with attribution. It isn't shipped inside the app; it downloads from its source on Hugging Face to your device if you request it in Settings.
 - **Nabra (Nabra-82M) and Nabra Saudi (Nabra-Saudi-82M)** by oddadmix, built on Kokoro and StyleTTS2: Apache 2.0 License. The Nabra Saudi version used is converted to ONNX and quantized (int8), with no change to the original weights other than quantization.
 - **Audar voices — Audar-TTS-V1-Flash** (AudarAI): A Q4_K_M version running with llama.cpp on the GPU while the app is in the foreground, and on the CPU in the background. Licensed under the **AudarAI Open License v1.0**; the full license text ships with the app (AudarAI-Open-License-v1.0.txt) along with the modification notice, and the model itself downloads unmodified from its official page: huggingface.co/audarai/Audar-TTS-V1-Flash. The six voices come from the model's official samples. Sowtly is an independent app, and this does not mean AudarAI endorses or recommends it. There is no voice cloning; any cloning of a person's voice must have their consent and must not impersonate them.
-- **LaMa** (Samsung AI / advimman): The "Remove" tool in "Precise". Apache 2.0 License. We use the Core ML conversion from mlboydaisuke/LaMa-CoreML (Apache 2.0, pinned revision 5ed76e3), downloaded with "Precise" and deleted with it, unmodified.
-- **NeuCodec** (Neuphonic): Turns Audar codes into audio. Apache 2.0 License. We use only the decoder, converted to float16 and to MLX format, published with the license and notice file.
+- **LaMa** (Samsung AI / advimman): The "Remove" tool in "Precise". Apache 2.0 License. It uses the Core ML conversion from mlboydaisuke/LaMa-CoreML (Apache 2.0, pinned revision 5ed76e3), downloaded with "Precise" and deleted with it, unmodified.
+- **NeuCodec** (Neuphonic): Turns Audar codes into audio. Apache 2.0 License. Only the decoder is used, converted to float16 and to MLX format, published with the license and notice file.
 - **eSpeak NG:** Grapheme-to-phoneme conversion. GPL 3.0 License.
 - **NAMAA-Saudi-TTS-V2** (NAMAA Space), built on F5-TTS: CC BY-NC-SA 4.0 License, meaning non-commercial use only, with attribution, and any modification must be shared under the same license. The reference voice is from the Habibi-TTS project.
 - **Vocos:** Spectrogram-to-audio conversion. MIT License.

@@ -311,7 +311,7 @@ final class ChatStore: ObservableObject {
         Task { @MainActor in
             // لو الوكيل مشغول ما نسرق فقاعة المهمة الحالية
             if PhoneAgent.shared.running {
-                self.updateText(bubble.id, in: conv, "🤖 " + L("لم أبدأ: الوكيل يعمل على مهمة أخرى — قل «وقف» أولًا"), save: true)
+                self.updateText(bubble.id, in: conv, "🤖 " + L("لم تبدأ المهمة: الوكيل يعمل على مهمة أخرى — قل «وقف» أولًا"), save: true)
                 return
             }
             PhoneAgent.shared.chatTarget = (conv, bubble.id)
@@ -519,7 +519,7 @@ final class ChatStore: ObservableObject {
                         // البحث فشل: نكمل الجواب بدونه مع تنبيه
                         slog("web: failed \(error)")
                         live.status = nil
-                        notice = SawtError.friendly(error).localizedDescription + " " + L("أجبت من معرفتي.")
+                        notice = SawtError.friendly(error).localizedDescription + " " + L("الإجابة من معرفة النموذج دون بحث.")
                         system += "\n\nحاولت تبحث في الويب وفشل البحث؛ جاوب من معرفتك ونبّه إن المعلومة ممكن ما تكون محدّثة."
                     }
                 }
@@ -734,7 +734,7 @@ final class ChatStore: ObservableObject {
         guard let engine = ImageEngine.selected else {
             fail(L("اختر محرك الصور أولًا: من زر + ← محرك الصور، أو من الإعدادات ← الصور.")); return
         }
-        if PhoneAgent.shared.running { fail(L("الوكيل يعمل على مهمة — أوقفه أولًا ثم أرسم.")); return }
+        if PhoneAgent.shared.running { fail(L("الوكيل يعمل على مهمة — أوقفه أولًا ثم اطلب الرسم.")); return }
         if engine.isLocal, !SDModels.installed(engine) {
             fail(L("نموذج %@ غير محمَّل. حمِّله من الإعدادات ← الصور.", engine.title)); return
         }
@@ -784,7 +784,7 @@ final class ChatStore: ObservableObject {
                     if ImageIntent.isEnglish(request) {
                         spec = (request, "")
                     } else {
-                        status(L("أكتب التعليمة…"))
+                        status(L("كتابة التعليمة…"))
                         if let r = await Self.editPrompt(for: request) {
                             spec = (r.prompt, "")
                             localEdit = !r.global
@@ -799,7 +799,7 @@ final class ChatStore: ObservableObject {
                     spec = (request, ImageIntent.defaultNegative)
                     slog("image: prompt direct (english=\(ImageIntent.isEnglish(request)))")
                 } else {
-                    status(L("أكتب الوصف…"))
+                    status(L("كتابة الوصف…"))
                     spec = await Self.imagePrompt(for: request, short: engine.isLocalSD)
                     if spec == nil, engine.isGemini { spec = (request, "") }   // Gemini يفهم العربي
                 }
@@ -818,7 +818,7 @@ final class ChatStore: ObservableObject {
                 self.editMessage(bid, in: conv) { m in
                     m.genPrompt = prompt
                     m.genNegative = shownNeg.isEmpty ? nil : shownNeg
-                    m.text = L("أبدأ الرسم…")
+                    m.text = L("بدء الرسم…")
                 }
                 slog("image: prompt=\(prompt.prefix(200)) negative=\(negative.prefix(120))")
                 // ٢) المحلي يحتاج ذاكرة: نفك النموذج اللغوي وقت الرسم ونرجعه بعدين

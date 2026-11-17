@@ -393,7 +393,7 @@ actor ImageGenerator {
         // الإزالة في «دقيق»: LaMa (Core ML) بدل الانتشار
         if engine == .klein, let source, let plan, plan.kind == .remove, let m = plan.mask {
             guard LaMa.installed else { throw SawtError.failed(L("أداة الإزالة غير محمَّلة. حمِّلها من شاشة «إزالة».")) }
-            status(L("أمسح المنطقة…"))
+            status(L("مسح المنطقة…"))
             let t0 = Date()
             let img = try await LaMa.inpaint(source: source, mask: m)
             LaMa.unload()
@@ -461,7 +461,7 @@ actor ImageGenerator {
         if pipelineEngine != e {
             unloadSD()
             // أول تحميل يجهّز النموذج للمحرك العصبي (ممكن ياخذ دقيقة أو أكثر)، وبعدها النظام يحفظه
-            status(L("أحمّل نموذج الصور… (قد يستغرق دقيقة في المرة الأولى)"))
+            status(L("تحميل نموذج الصور… (قد يستغرق دقيقة في المرة الأولى)"))
             ImageProgress.post(.loading)
             let cfg = MLModelConfiguration()
             cfg.computeUnits = .cpuAndNeuralEngine
@@ -488,7 +488,7 @@ actor ImageGenerator {
         // المعاينة الحية من تقدير الصورة النهائية في كل خطوة (مو الـlatent المزعج)
         c.useDenoisedIntermediates = true
         let steps = c.stepCount
-        status(L("أرسم… %1$@/%2$@", "0", String(steps)))
+        status(L("الرسم… %1$@/%2$@", "0", String(steps)))
         ImageProgress.post(.drawing(0, steps))
         let t0 = Date()
         let images = try p.generateImages(configuration: c) { prog in
@@ -501,16 +501,16 @@ actor ImageGenerator {
                 box = PreviewBox(cg)
             }
             if done >= prog.stepCount {
-                status(L("أجهّز الصورة…"))
+                status(L("تجهيز الصورة…"))
                 ImageProgress.post(.decoding, preview: box)
             } else {
-                status(L("أرسم… %1$@/%2$@", String(done), String(prog.stepCount)))
+                status(L("الرسم… %1$@/%2$@", String(done), String(prog.stepCount)))
                 ImageProgress.post(.drawing(done, prog.stepCount), preview: box)
             }
             return !Task.isCancelled
         }
         if Task.isCancelled { throw CancellationError() }
-        status(L("أحفظ الصورة…"))
+        status(L("حفظ الصورة…"))
         slog("image: sd \(e.rawValue) \(steps) steps in \(Int(Date().timeIntervalSince(t0) * 1000))ms footprint=\(RAM.footprintMB)MB")
         guard let img = images.compactMap({ $0 }).first else { throw SawtError.failed(L("لم يُرجع النموذج صورة")) }
         return img
@@ -555,14 +555,14 @@ actor ImageGenerator {
         let seed = UInt64.random(in: 0 ... UInt64(UInt32.max))
         let onPhase: (String) -> Void = { phase in
             switch phase {
-            case "source": status(L("أقرأ صورتك…")); ImageProgress.post(.loading)
-            case "encode": status(L("أقرأ الوصف…")); ImageProgress.post(.loading)
-            case "load": status(L("أحمّل نموذج الصور…")); ImageProgress.post(.loading)
-            default: status(L("أجهّز الصورة…")); ImageProgress.post(.decoding)
+            case "source": status(L("قراءة صورتك…")); ImageProgress.post(.loading)
+            case "encode": status(L("قراءة الوصف…")); ImageProgress.post(.loading)
+            case "load": status(L("تحميل نموذج الصور…")); ImageProgress.post(.loading)
+            default: status(L("تجهيز الصورة…")); ImageProgress.post(.decoding)
             }
         }
         let onStep: (Int, Int) -> Void = { k, n in
-            status(L("أرسم… %1$@/%2$@", String(k), String(n)))
+            status(L("الرسم… %1$@/%2$@", String(k), String(n)))
             ImageProgress.post(.drawing(k, n))
         }
         let img: CGImage
@@ -572,7 +572,7 @@ actor ImageGenerator {
             img = try await ZImagePipeline.generate(dir: SDModels.dir(e), prompt: prompt, seed: seed, source: source, plan: plan, onPhase: onPhase, onStep: onStep)
         }
         if Task.isCancelled { throw CancellationError() }
-        status(L("أحفظ الصورة…"))
+        status(L("حفظ الصورة…"))
         slog("image: \(e.rawValue) steps in \(Int(Date().timeIntervalSince(t0) * 1000))ms footprint=\(RAM.footprintMB)MB")
         return img
     }
@@ -584,7 +584,7 @@ actor ImageGenerator {
         guard await NetworkGate.shared.permit(L("رسم صورة بـImage Playground (سحابة آبل الخاصة)")) else {
             throw SawtError.failed(L("الإنترنت مغلق"))
         }
-        status(L("أكمل في Image Playground…"))
+        status(L("المتابعة في Image Playground…"))
         ImageProgress.post(.waiting)
         let url = await withTaskCancellationHandler {
             await PlaygroundBridge.shared.request(prompt)

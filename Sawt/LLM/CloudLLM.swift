@@ -106,7 +106,7 @@ enum CloudLLM {
                 }
                 try? await Task.sleep(nanoseconds: (overallTimeout - firstByteTimeout) * 1_000_000_000)
                 if Task.isCancelled { return }
-                watch.timeout(L("استغرق %@ وقتًا أطول من اللازم في الرد — أوقفته", p.short))
+                watch.timeout(L("استغرق %@ وقتًا أطول من اللازم في الرد — تم إيقافه", p.short))
                 task.cancel()
             }
             cont.onTermination = { _ in task.cancel(); watchdog.cancel() }

@@ -175,7 +175,7 @@ final class PhoneAgent: ObservableObject {
         if let why {
             slog("agent: start refused: \(why)")
             // لو شغّال ما نلمس فقاعة المهمة الحالية
-            if !running, let t = chatTarget { ChatStore.shared.updateText(t.msg, in: t.conv, L("🤖 لم أبدأ: %@", why), save: true); chatTarget = nil }
+            if !running, let t = chatTarget { ChatStore.shared.updateText(t.msg, in: t.conv, L("🤖 لم تبدأ المهمة: %@", why), save: true); chatTarget = nil }
             return why
         }
         runID &+= 1
@@ -433,7 +433,7 @@ final class PhoneAgent: ObservableObject {
                 }
                 verifying = false
                 if let why = Self.sensitive(action, els) {
-                    let ok = await askConfirm(L("%1$@\n%2$@\nهل أكمل؟", why, desc))
+                    let ok = await askConfirm(L("%1$@\n%2$@\nهل تريد المتابعة؟", why, desc))
                     if Task.isCancelled { return }
                     if !ok { sayLoop(myID, L("رُفضت — توقّف الوكيل")); finishLoop(myID, L("أُلغيت المهمة قبل خطوة حساسة")); return }
                 }
@@ -1460,7 +1460,7 @@ struct PhoneAgentView: View {
     var body: some View {
         Form {
             Section {
-                TextField("ماذا تريد أن أفعل؟ مثال: افتح الملاحظات واكتب مرحبًا", text: $goal, axis: .vertical)
+                TextField("ما المهمة المطلوبة؟ مثال: افتح الملاحظات واكتب مرحبًا", text: $goal, axis: .vertical)
                     .focused($goalFocused)
                 if agent.running {
                     Button(role: .destructive) { agent.stop() } label: {
@@ -1856,7 +1856,7 @@ struct RunnerPill: View {
         VStack(alignment: .leading, spacing: 4) {
             pill
             HStack(spacing: 6) {
-                Text(on ? L("جاهز لتنفيذ مهام الجهاز") : L("شغّله لأتمكّن من التحكم بالجهاز وتنفيذ المهام"))
+                Text(on ? L("جاهز لتنفيذ مهام الجهاز") : L("قم بتشغيله لتمكين التحكم بالجهاز وتنفيذ المهام"))
                     .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 Spacer(minLength: 0)
                 Button { showInfo = true } label: {
@@ -1918,11 +1918,11 @@ struct RunnerInfoSheet: View {
                     item("power", L("ما هو المشغّل؟"),
                          L("هو ما يتيح لـSowtly رؤية الشاشة والضغط والكتابة نيابةً عنك في أي تطبيق."))
                     item("bolt.horizontal", L("لماذا يجب أن يعمل؟"),
-                         L("يتم التحكم عبر جلسة XCTest (أداة الاختبار من Apple). يفتح المشغّل هذه الجلسة ويبقيها جاهزة، ومن دونها لا أستطيع لمس الجهاز."))
+                         L("يتم التحكم عبر جلسة XCTest (أداة الاختبار من Apple). يفتح المشغّل هذه الجلسة ويبقيها جاهزة، ومن دونها لا يمكن التحكم بالجهاز."))
                     item("network", L("ماذا يحتاج؟"),
                          L("أن يكون LocalDevVPN متصلًا، وأن تكون صورة المطوّر (DDI) محمّلة عبر StikDebug. إذا كان أحدهما متوقفًا فلن يعمل المشغّل."))
                     item("sun.min", L("أثناء المهمة"),
-                         L("تُعتم الشاشة وتظهر علامة أثناء المهمة، وهذا من النظام. اترك الجهاز ولا تلمس الشاشة حتى أنتهي."))
+                         L("تُعتم الشاشة وتظهر علامة أثناء المهمة، وهذا من النظام. اترك الجهاز ولا تلمس الشاشة حتى تنتهي المهمة."))
                     item("stop.circle", L("كيف أوقفه؟"),
                          L("أوقفه بزر الإيقاف في الجزيرة الديناميكية، أو بضغطة طويلة على زرَّي الصوت معًا. ويمكنك أيضًا كتابة «توقف» في المحادثة."))
                 }

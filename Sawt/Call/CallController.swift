@@ -322,7 +322,7 @@ final class CallController: ObservableObject {
         lastMemBlock = ""
         guard ok, state != .idle else {
             CallCamera.shared.stop()
-            if state != .idle { error = L("تعذّر تجهيز وضع الرؤية (ربما لا تكفي الذاكرة). أكمل المكالمة بدون كاميرا.") }
+            if state != .idle { error = L("تعذّر تجهيز وضع الرؤية (ربما لا تكفي الذاكرة). تستمر المكالمة بدون كاميرا.") }
             return
         }
         cameraOn = true
@@ -1126,7 +1126,7 @@ final class CallController: ObservableObject {
                 slog("call: paused in background")
                 self.pausedBG = true
                 if myID == self.replyID {
-                    let msg = L("افتح التطبيق لأكمل")
+                    let msg = L("افتح التطبيق للمتابعة")
                     self.error = msg
                     if full.isEmpty { self.sentenceQueue.append(msg); cont.yield(msg) }
                 }

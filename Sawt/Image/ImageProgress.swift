@@ -67,19 +67,19 @@ final class ImageProgress: ObservableObject {
         func ease(_ tau: Double) -> Double { 1 - exp(-dt / tau) }
         switch phase {
         case .prompt:
-            return (L("أفهم الوصف"), 0.08 * ease(4))
+            return (L("فهم الوصف"), 0.08 * ease(4))
         case .loading:
-            return (L("أجهّز المشهد"), 0.08 + 0.07 * ease(8))
+            return (L("تجهيز المشهد"), 0.08 + 0.07 * ease(8))
         case .drawing(let k, let n):
             let f = n > 0 ? Double(k) / Double(n) : 0
-            let label = f < 0.35 ? L("أرسم المسودة الأولى") : f < 0.7 ? L("أرسم الملامح") : L("أحسّن التفاصيل")
+            let label = f < 0.35 ? L("رسم المسودة الأولى") : f < 0.7 ? L("رسم الملامح") : L("أحسّن التفاصيل")
             return (label, 0.15 + 0.8 * f)
         case .waiting:
             // ما فيه تقدم حقيقي: مراحل بالوقت ونسبة تقرب من ٩٥٪ بدون ما توصلها
-            let label = dt < 3 ? L("أجهّز المشهد") : dt < 9 ? L("أرسم المسودة الأولى") : dt < 16 ? L("أرسم الملامح") : L("أحسّن التفاصيل")
+            let label = dt < 3 ? L("تجهيز المشهد") : dt < 9 ? L("رسم المسودة الأولى") : dt < 16 ? L("رسم الملامح") : L("أحسّن التفاصيل")
             return (label, 0.1 + 0.85 * ease(14))
         case .decoding:
-            return (L("أجهّز الصورة"), 0.97)
+            return (L("تجهيز الصورة"), 0.97)
         }
     }
 
@@ -159,7 +159,7 @@ struct GenProgressView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let n = message.genNegative, !n.isEmpty {
                 Button { withAnimation { showNeg.toggle() } } label: {
-                    Label(showNeg ? L("إخفاء ما نتجنبه") : L("ما نتجنبه"), systemImage: showNeg ? "chevron.up" : "chevron.down")
+                    Label(showNeg ? L("إخفاء المستبعَد") : L("المستبعَد"), systemImage: showNeg ? "chevron.up" : "chevron.down")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
@@ -210,7 +210,7 @@ struct GenProgressView: View {
         .aspectRatio(1, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("أرسم الصورة")
+        .accessibilityLabel("رسم الصورة")
         .accessibilityValue(L("%@ بالمئة", String(Int((progress * 100).rounded()))))
     }
 }

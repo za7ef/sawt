@@ -47,7 +47,7 @@ struct GenImageView: View {
                             .environment(\.layoutDirection, .leftToRight)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         if let n = negative, !n.isEmpty {
-                            Text(L("نتجنب: %@", n)).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+                            Text(L("مستبعَد: %@", n)).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
                                 .environment(\.layoutDirection, .leftToRight)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }

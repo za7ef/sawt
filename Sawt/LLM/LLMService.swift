@@ -476,7 +476,7 @@ enum AppPhase {
 }
 
 struct BackgroundPause: LocalizedError {
-    var errorDescription: String? { L("افتح التطبيق لأكمل") }
+    var errorDescription: String? { L("افتح التطبيق للمتابعة") }
 }
 
 final class MLXErrBox: @unchecked Sendable {

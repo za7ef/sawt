@@ -956,7 +956,7 @@ enum XCTBackend {
             case .some(.none): add(false, "read-ax\(i)", t, L("فشلت: %@", String(lastAXError.prefix(200))))
             case .some(.some(let sc)):
                 let sample = sc.nodes.prefix(5).map { "\($0.kind):\($0.label.prefix(18))" }.joined(separator: "، ")
-                add(true, "read-ax\(i)", t, sc.isSelf ? L("Sowtly نفسه في الواجهة (لا نقرؤه)") : L("%1$@؛ %2$@ عقدة، %3$@ عنصر؛ %4$@", sc.name, String(sc.raw), String(sc.nodes.count), sample))
+                add(true, "read-ax\(i)", t, sc.isSelf ? L("Sowtly نفسه في الواجهة (لا تتم قراءته)") : L("%1$@؛ %2$@ عقدة، %3$@ عنصر؛ %4$@", sc.name, String(sc.raw), String(sc.nodes.count), sample))
             }
         }
 

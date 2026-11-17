@@ -59,7 +59,7 @@ final class Dictation: ObservableObject {
             defer { isBusy = false }
             do {
                 let r = try await SpeechRecognizer.shared.transcribe(audio, language: l == "auto" ? nil : l)
-                if !r.text.isEmpty { done(r.text) } else { error = L("لم أسمع شيئًا واضحًا، حاول مرة أخرى.") }
+                if !r.text.isEmpty { done(r.text) } else { error = L("لم يُسمع كلام واضح، حاول مرة أخرى.") }
             } catch {
                 slog("dictation transcribe failed \(error)")
                 self.error = L("تعذّر تحويل الصوت إلى نص: %@", error.localizedDescription)

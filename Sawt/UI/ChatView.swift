@@ -64,7 +64,7 @@ struct ChatView: View {
             Button("شغّل ونفّذ") { store.answerRunnerAsk(run: true) }
             Button("لا، محادثة عادية", role: .cancel) { store.answerRunnerAsk(run: false) }
         } message: {
-            Text("المشغّل هو ما يتيح لي رؤية الشاشة والضغط نيابةً عنك، وبدونه لا أستطيع التنفيذ.")
+            Text("المشغّل هو ما يتيح رؤية الشاشة والضغط نيابةً عنك، وبدونه لا يمكن التنفيذ.")
         }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { img in addImage(img) }.ignoresSafeArea()
@@ -526,7 +526,7 @@ struct ChatView: View {
                 stateChips
                 HStack(alignment: .bottom, spacing: 4) {
                     attachMenu
-                    ComposerField(text: $draft, placeholder: dictation.isRecording ? L("أستمع إليك…") : (imageMode ? L("صِف الصورة") : L("اسأل Sowtly")),
+                    ComposerField(text: $draft, placeholder: dictation.isRecording ? L("جارٍ الاستماع…") : (imageMode ? L("صِف الصورة") : L("اسأل Sowtly")),
                                   focused: $focused, clearToken: sendGen)
                     micButton
                     actionButton.padding(.trailing, 4)
