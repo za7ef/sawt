@@ -40,7 +40,11 @@ actor LLMService {
     /// النموذج محمّل بوضع النظر (يقبل صور)
     private(set) var visionLoaded = false
 
+    /// يزيد مع كل تفريغ: تحميل بدأ قبله ما يركّب نموذجه بعده (سباق التحميل مع الخلفية)
+    private var loadGen = 0
+
     func unload() {
+        loadGen += 1
         container = nil
         loadedID = nil
         warmedID = nil
@@ -157,11 +161,21 @@ actor LLMService {
         }
     }
 
+    /// يتأكد إن نسخة MLX هذي محمّلة (نصي أو نظر، أيهما موجود) — للمكالمة لما تختار كرت الشاشة والتطبيق على المعالج
+    func ensureLoaded(_ option: LLMOption) async throws {
+        if loadedID == option.id, container != nil { return }
+        try await load(option) { _ in }
+    }
+
     /// يُستدعى لما النظام يحذّر من الذاكرة.
     func trim() { MLX.Memory.clearCache() }
 
     func load(_ option: LLMOption, vision: Bool = false, progress: @escaping @Sendable (Double) -> Void) async throws {
         if loadedID == option.id, container != nil, visionLoaded == vision { return }
+        // كرت الشاشة ممنوع في الخلفية: ما نبدأ تحميل MLX والتطبيق مو قدّام
+        guard AppPhase.active else { slog("llm: load refused (background)"); throw LoadInterrupted() }
+        loadGen += 1
+        let gen = loadGen
         container = nil
         visionLoaded = false
         MLX.Memory.clearCache()
@@ -184,6 +198,12 @@ actor LLMService {
             c = try await LLMModelFactory.shared.loadContainer(
                 from: #hubDownloader(), using: #huggingFaceTokenizerLoader(), configuration: cfg,
                 progressHandler: { p in progress(p.fractionCompleted) })
+        }
+        // انفك النموذج أو راح التطبيق للخلفية وقت التحميل: نرمي النتيجة بدل ما نركّبها
+        guard gen == loadGen, AppPhase.active else {
+            slog("llm: load discarded (unloaded or backgrounded meanwhile)")
+            MLX.Memory.clearCache()
+            throw LoadInterrupted()
         }
         container = c
         visionLoaded = vision
@@ -413,6 +433,9 @@ actor LLMService {
     }
 }
 
+
+/// التحميل انقطع لأن التطبيق راح للخلفية أو انفك النموذج وقتها (يعاد التحميل لما يرجع)
+struct LoadInterrupted: Error {}
 
 /// طريقة تشغيل النموذج تتبع النموذج المختار: "gpu" نموذج MLX على كرت الشاشة، "cpu" نموذج GGUF على المعالج.
 /// ما فيه «تلقائي» (ما نبدّل بين الأجهزة من نفسنا).

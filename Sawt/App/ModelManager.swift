@@ -177,7 +177,7 @@ final class ModelManager: ObservableObject {
             } catch {
                 guard llmToken == token else { return }
                 downloadingID = nil
-                llm = Task.isCancelled ? .idle : .failed(SawtError.friendly(error).localizedDescription)
+                llm = (Task.isCancelled || error is LoadInterrupted) ? .idle : .failed(SawtError.friendly(error).localizedDescription)
                 slog("llm load failed: \(error)")
             }
         }

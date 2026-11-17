@@ -231,14 +231,15 @@ actor AudarEngine {
     private func load() throws {
         #if LLAMA
         // الجهاز المطلوب تغيّر (قدّام ↔ خلفية): نعيد تحميل llama بس (المفكك يبقى)
-        let wantGPU = AppPhase.active
+        // كرت الشاشة أو المعالج حسب اختيار المكالمة (Placement)، والخلفية دايمًا المعالج
+        let wantGPU = Placement.voiceGPU
         if ctx != nil, onGPU != wantGPU {
             slog("audar: switch llama to \(wantGPU ? "gpu" : "cpu")")
             if let ctx { llama_free(ctx) }
             if let model { llama_model_free(model) }
             ctx = nil; model = nil; vocab = nil; cached = []
         }
-        if ctx != nil, decoder != nil { return }
+        if ctx != nil, decoder != nil { Placement.voiceNow = onGPU ? "GPU" : "CPU"; return }
         guard AudarVoice.isInstalled else { throw SawtError.notReady(L("أصوات أودار (حمِّلها أولًا)")) }
         let t0 = Date()
         if ctx == nil {
@@ -276,6 +277,7 @@ actor AudarEngine {
                 throw SawtError.failed(L("تعذّر تجهيز سياق أودار"))
             }
             model = m; ctx = c; vocab = llama_model_get_vocab(m); cached = []; onGPU = wantGPU
+            Placement.voiceNow = wantGPU ? "GPU" : "CPU"
             // تحقق: رموز الصوت في مكانها المتوقع
             let check = tokenize("<|speech_0|><|TARGET_CODES_END|>")
             guard check == [Self.speechBase, Self.codesEnd] else {
@@ -448,7 +450,7 @@ actor AudarEngine {
                 guard end > emitted else { return }
                 let s = max(0, emitted - Self.left)
                 let td = Date()
-                let gpu = AppPhase.active
+                let gpu = AppPhase.active && onGPU
                 let box = MLXErrBox()
                 let y: [Float]
                 do {

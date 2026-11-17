@@ -91,10 +91,7 @@ struct VoiceModeView: View {
             Text("مع كل ما تقوله تُلتقط صورة واحدة من الكاميرا ويراها النموذج على جهازك. هذا ينقل النموذج إلى وضع الرؤية (يستغرق ثواني)، ويتأخر الرد قليلًا، وترتفع حرارة الجهاز أكثر.")
         }
         .sheet(isPresented: $showSettings) {
-            CallSettingsSheet(onCamera: {
-                showSettings = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { toggleCamera() }
-            })
+            CallSettingsSheet()
             .environment(\.layoutDirection, AppLang.layout)
             .presentationDetents([.medium, .large])
         }
@@ -262,7 +259,6 @@ struct VoiceModeView: View {
 
 /// إعدادات المكالمة: الصوت واللغة والتشخيص والكاميرا — تتطبق على الكلام الجاي بدون إعادة المكالمة
 struct CallSettingsSheet: View {
-    var onCamera: () -> Void
     @EnvironmentObject var call: CallController
     @EnvironmentObject var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
@@ -286,12 +282,8 @@ struct CallSettingsSheet: View {
                 } footer: {
                     Text("يُطبَّق من الكلام التالي.")
                 }
+                PlacementSections()
                 Section {
-                    Button(action: onCamera) {
-                        Label(call.cameraOn ? L("أطفئ الكاميرا") : L("شغّل الكاميرا"),
-                              systemImage: call.cameraOn ? "video.slash" : "video")
-                    }
-                    .disabled(call.cameraBusy || call.state == .idle || call.state == .starting)
                     Toggle("نغمة بداية المكالمة", isOn: $callChime)
                     Toggle("عرض التشخيص", isOn: $showDebug)
                 }
@@ -364,6 +356,7 @@ struct DebugOverlay: View {
             Text(L("آخر كلام: %@", debug.lastTranscript.isEmpty ? "—" : debug.lastTranscript)).lineLimit(2)
             Text(L("التعرّف %1$@ms • أول كلمة %2$@ms • أول صوت %3$@ms", "\(debug.sttMs)", "\(debug.firstTokenMs)", "\(debug.firstAudioMs)"))
                 .monospacedDigit()
+            if !debug.devices.isEmpty { Text(debug.devices).monospacedDigit() }
             HStack {
                 Text(L("الذاكرة %1$@MB • المتبقي %2$@MB • الحرارة %3$@", "\(debug.ramMB)", "\(debug.availMB)", debug.thermal)).monospacedDigit()
                 Spacer()
@@ -431,5 +424,120 @@ struct CallReplyText: View {
         )
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: text.isEmpty)
         .accessibilityLabel(text)
+    }
+}
+
+
+/// مكان تشغيل النماذج في المكالمة: كرت الشاشة / المعالج / تلقائي، لنموذج الدردشة ولصوت أودار
+struct PlacementSections: View {
+    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var models: ModelManager
+    @AppStorage(Placement.chatKey) private var chatRaw = ""
+    @AppStorage(Placement.voiceKey) private var voiceRaw = "auto"
+    @State private var ask: Ask?
+
+    struct Ask: Identifiable {
+        let id = UUID()
+        let title: String
+        let message: String
+        let button: String?
+        let action: (() -> Void)?
+    }
+
+    private var chat: String { chatRaw.isEmpty ? ComputeMode.current : chatRaw }
+
+    var body: some View {
+        let fam = Placement.family()
+        let g = Placement.gpuReady(fam), c = Placement.cpuReady(fam)
+        let cloud = CloudLLM.active != nil && CloudLLM.useInCalls
+        Section {
+            row(L("تلقائي"), L("كرت الشاشة عادةً، والمعالج حين ترتفع الحرارة أو يتباطأ الصوت"), "auto", chat,
+                why: (fam.mlx == nil || fam.gguf == nil) ? L("لا توجد نسخة مقابلة لهذا النموذج") : nil) { pickChat("auto", fam, g, c) }
+            row(L("كرت الشاشة (GPU)"), L("أسرع، ويدعم الكاميرا"), "gpu", chat,
+                why: fam.mlx == nil ? L("لا توجد نسخة لكرت الشاشة من هذا النموذج") : nil) { pickChat("gpu", fam, g, c) }
+            row(L("المعالج (CPU)"), L("يترك كرت الشاشة للصوت، وأبطأ قليلًا، وبلا كاميرا"), "cpu", chat,
+                why: fam.gguf == nil ? L("لا توجد نسخة للمعالج من هذا النموذج") : nil) { pickChat("cpu", fam, g, c) }
+        } header: {
+            Text("نموذج الدردشة")
+        } footer: {
+            if cloud {
+                Text("النموذج السحابي مفعَّل للمكالمات، فلا يُستخدم هذا الإعداد حتى توقفه.")
+            } else if fam.mlx == nil || fam.gguf == nil {
+                Text(L("«%@» له نسخة واحدة فقط، فيعمل عليها دائمًا. النسختان متاحتان لـ Gemma 4 E2B وQwen3.5 2B وQwen3.5 4B.", fam.mlx?.title ?? fam.gguf?.name ?? ""))
+            } else {
+                Text("يُطبَّق من الرد التالي.")
+            }
+        }
+        Section {
+            row(L("تلقائي"), L("كرت الشاشة، والمعالج إذا ارتفعت الحرارة جدًا"), "auto", voiceRaw, why: audarWhy) { voiceRaw = "auto"; slog("placement: voice → auto") }
+            row(L("كرت الشاشة (GPU)"), L("الأسرع"), "gpu", voiceRaw, why: audarWhy) { voiceRaw = "gpu"; slog("placement: voice → gpu") }
+            row(L("المعالج (CPU)"), L("أبطأ بكثير، وقد يتقطع الصوت"), "cpu", voiceRaw, why: audarWhy) { voiceRaw = "cpu"; slog("placement: voice → cpu") }
+        } header: {
+            Text("نموذج الصوت")
+        } footer: {
+            Text(settings.voice.isAudar ? L("يُطبَّق من الجملة التالية (إعادة التحميل تستغرق نحو ثانية). في الخلفية يعمل على المعالج دائمًا.")
+                                        : L("هذا الإعداد لأصوات أودار فقط."))
+        }
+        .alert(ask?.title ?? "", isPresented: Binding(get: { ask != nil }, set: { if !$0 { ask = nil } }), presenting: ask) { a in
+            if let b = a.button, let act = a.action { Button(b) { act() } }
+            Button(a.button == nil ? L("حسنًا") : L("إلغاء"), role: .cancel) {}
+        } message: { a in
+            Text(a.message)
+        }
+    }
+
+    private var audarWhy: String? { settings.voice.isAudar ? nil : L("لأصوات أودار فقط") }
+
+    private func row(_ title: String, _ sub: String, _ tag: String, _ current: String, why: String?, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).foregroundStyle(why == nil ? .primary : .secondary)
+                    Text(why ?? sub).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if current == tag, why == nil { Image(systemName: "checkmark").foregroundStyle(Theme.accent) }
+            }
+        }
+        .disabled(why != nil)
+    }
+
+    private func gpuSize(_ m: LLMOption) -> String { String(format: "%.1f GB", m.sizeGB) }
+
+    private func pickChat(_ v: String, _ fam: (mlx: LLMOption?, gguf: GGUFSpec?), _ g: Bool, _ c: Bool) {
+        let dlCPU: (() -> Void)? = fam.gguf.map { spec -> () -> Void in { LlamaDownloader.of(spec).start(); slog("placement: download cpu \(spec.id)") } }
+        let dlGPU: (() -> Void)? = fam.mlx.map { m -> () -> Void in {
+            // التحميل يشغّله كمان؛ نتأكد إن الذاكرة تكفي وقت المكالمة
+            if RAM.availableMB > Int(m.ramGB * 1024) + 500 { models.activate(m); slog("placement: download gpu \(m.id)") }
+            else { ask = Ask(title: L("الذاكرة لا تكفي الآن"), message: L("حمِّل نسخة كرت الشاشة من صفحة النماذج بعد إنهاء المكالمة."), button: nil, action: nil) }
+        } }
+        switch v {
+        case "auto" where !(g && c):
+            if !g, let m = fam.mlx {
+                ask = Ask(title: L("«تلقائي» يحتاج النسختين"),
+                          message: L("يبدّل «تلقائي» بين كرت الشاشة والمعالج، لذلك يحتاج نسخة كرت الشاشة (%@) ونسخة المعالج معًا. نسخة كرت الشاشة غير محمّلة.", m.title),
+                          button: L("حمِّل نسخة كرت الشاشة (%@)", gpuSize(m)), action: dlGPU)
+            } else if let spec = fam.gguf {
+                ask = Ask(title: L("«تلقائي» يحتاج النسختين"),
+                          message: L("يبدّل «تلقائي» بين كرت الشاشة والمعالج، لذلك يحتاج نسخة كرت الشاشة ونسخة المعالج (%@) معًا. نسخة المعالج غير محمّلة.", spec.name),
+                          button: L("حمِّل نسخة المعالج (%@)", spec.sizeText), action: dlCPU)
+            }
+            return
+        case "gpu" where !g:
+            if let m = fam.mlx {
+                ask = Ask(title: L("نسخة كرت الشاشة غير محمّلة"), message: L("حمِّل %@ لتشغيل الدردشة على كرت الشاشة.", m.title),
+                          button: L("حمِّل (%@)", gpuSize(m)), action: dlGPU)
+            }
+            return
+        case "cpu" where !c:
+            if let spec = fam.gguf {
+                ask = Ask(title: L("نسخة المعالج غير محمّلة"), message: L("حمِّل %@ لتشغيل الدردشة على المعالج.", spec.name),
+                          button: L("حمِّل (%@)", spec.sizeText), action: dlCPU)
+            }
+            return
+        default:
+            chatRaw = v
+            slog("placement: chat → \(v)")
+        }
     }
 }

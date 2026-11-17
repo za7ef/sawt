@@ -60,6 +60,7 @@ final class CallController: ObservableObject {
         var ramMB = 0
         var availMB = 0
         var thermal = ""
+        var devices = ""
     }
     @Published private(set) var debug = Debug()
     private var procDB: Float = -120
@@ -117,6 +118,17 @@ final class CallController: ObservableObject {
             let sys = AppSettings.shared.systemPrompt(chat: false, query: "", memory: false)
             Task.detached(priority: .userInitiated) { await LlamaEngine.shared.prewarm(system: sys) }
         }
+        // مكان النماذج: نجهز نسخة المعالج مسبقًا لو المكالمة مختارة المعالج والتطبيق على كرت الشاشة
+        let fam = Placement.family()
+        if Placement.chatChoice == "cpu", ComputeMode.current == "gpu", let g = fam.gguf, g.isDownloaded {
+            if GGUFSpec.active.id != g.id { GGUFSpec.setActive(g) }
+            let sys = AppSettings.shared.systemPrompt(chat: false, query: "", memory: false)
+            Task.detached(priority: .userInitiated) { await LlamaEngine.shared.prewarm(system: sys) }
+        }
+        Placement.chatNow = "—"
+        let v = AppSettings.shared.voice
+        Placement.voiceNow = v.isAudar ? "—" : (v.kind == .namaa ? "GPU" : L("نظام iOS"))
+        self.lastChatDevice = ""
         let mm = ModelManager.shared
         if let missing = mm.callMissing {
             error = missing
@@ -223,6 +235,7 @@ final class CallController: ObservableObject {
                         d.ramMB = RAM.footprintMB
                         d.availMB = RAM.availableMB
                         d.thermal = ThermalWatch.label
+                        d.devices = Placement.liveLabel
                     }
                     if d != self.debug { self.debug = d }
                 }
@@ -515,6 +528,8 @@ final class CallController: ObservableObject {
     /// سرعة أودار المقاسة (ثواني صوت لكل ثانية توليد) ومدة الصوت لكل حرف، لحساب مخزون البداية
     private var audarSpeed = 1.0
     private var audarSecPerChar = 0.075
+    /// آخر جهاز اشتغل عليه نموذج الدردشة في المكالمة (لو تغيّر نبدأ جلسة جديدة)
+    private var lastChatDevice = ""
     private var lastFiller: String?
 
     private func userStarted(bargeIn: Bool) {
@@ -873,11 +888,31 @@ final class CallController: ObservableObject {
                     }
                     if Task.isCancelled || myID != self.replyID { return }
                 }
+                // مكان نموذج الدردشة لهذا الدور (إعداد المكالمة): السحابي له الأولوية لو مفعّل للمكالمات
+                let cloudInUse = CloudLLM.active != nil && CloudLLM.useInCalls
+                var dev = Placement.chatDevice(needsVision: frame != nil,
+                                               voiceSlow: voice.isAudar && Placement.voiceNow == "GPU"
+                                                   && self.audarSpeed < (self.lastChatDevice == "cpu" ? 1.25 : 0.95))   // هامش عشان ما يتذبذب كل دور
+                if !cloudInUse, dev == "gpu", ComputeMode.current == "cpu" {
+                    // التطبيق على المعالج والمكالمة تبي كرت الشاشة: نحمّل نسخة MLX إذا الذاكرة تكفي
+                    if let m = Placement.family().mlx, RAM.availableMB > Int(m.ramGB * 1024) + 500 {
+                        do { try await LLMService.shared.ensureLoaded(m) } catch { dev = "cpu"; slog("placement: mlx load failed → cpu \(error)") }
+                    } else { dev = "cpu"; slog("placement: not enough memory for gpu model → cpu") }
+                }
+                if !cloudInUse, dev == "cpu", let g = Placement.family().gguf, g.isDownloaded, GGUFSpec.active.id != g.id {
+                    GGUFSpec.setActive(g)
+                }
+                let forced: String? = cloudInUse ? nil : dev
+                Placement.chatNow = cloudInUse ? L("سحابي") : dev.uppercased()
+                if !cloudInUse, dev != ComputeMode.current || Placement.chatChoice == "auto" { slog("placement: chat on \(dev) (choice \(Placement.chatChoice))") }
+                if dev != self.lastChatDevice { await LLMService.shared.resetCallSession(); self.lastChatDevice = dev }
                 slog.stage("call:llm")
                 let stream = try await CloudLLM.$inCall.withValue(true) {
-                    try await LLMService.shared.stream(system: system, history: hist, user: userText, maxTokens: think ? 900 : 450,
-                                                       reuse: frame == nil && !think,
-                                                       images: frame.map { [$0] } ?? [], think: think)
+                    try await ComputeMode.$forced.withValue(forced) {
+                        try await LLMService.shared.stream(system: system, history: hist, user: userText, maxTokens: think ? 900 : 450,
+                                                           reuse: frame == nil && !think,
+                                                           images: frame.map { [$0] } ?? [], think: think)
+                    }
                 }
                 for try await chunk in stream {
                     if Task.isCancelled || myID != self.replyID { break }
