@@ -383,7 +383,9 @@ actor ImageGenerator {
     static var outDir: URL { Attachments.dir }
 
     /// source: صورة للتعديل («دقيق» يعدّلها، «واقعي+» يعيد رسمها). المحركات الثانية ما تقبلها.
+    /// localEdit: التعديل على شي محدد (مو الصورة كلها) — نطلع قناع التغيير ونحافظ على الباقي من الأصل
     func generate(engine: ImageEngine, prompt: String, negative: String, source: URL? = nil, plan: EditPlan? = nil,
+                  localEdit: Bool = false,
                   status: @escaping @Sendable (String) -> Void) async throws -> GeneratedImage {
         if source != nil, !engine.canEdit {
             throw SawtError.failed("«\(engine.title)» ما يعدّل الصور. اختر «دقيق» أو «واقعي+».")
@@ -401,7 +403,7 @@ actor ImageGenerator {
             try png.write(to: Self.outDir.appendingPathComponent(name), options: .atomic)
             return GeneratedImage(file: name, prompt: prompt, engine: engine)
         }
-        let img: CGImage
+        var img: CGImage
         var used = prompt
         switch engine {
         case .sdReal, .sdArt:
@@ -412,6 +414,9 @@ actor ImageGenerator {
             img = try await runSD(engine, prompt: used, negative: neg, status: status)
         case .klein, .zimage:
             img = try await runMLX(engine, prompt: prompt, source: source, plan: plan, status: status)
+            if let source, plan?.kind != .resize {
+                img = try Self.keepOriginal(source: source, edited: img, plan: plan, localEdit: localEdit)
+            }
         case .playground:
             img = try await runPlayground(prompt: prompt, status: status)
         case .gemini, .geminiLite:
@@ -512,6 +517,33 @@ actor ImageGenerator {
     }
 
     // MARK: «دقيق» (Bonsai Image: FLUX.2 Klein 4B ثلاثي على MLX)
+
+    /// يرجّع الأصل بدقته الكاملة لكل شي ما انطلب تغييره:
+    /// قناع المستخدم (ملاحظات/علامات/إزالة) لو موجود، وإلا قناع التغيير التلقائي للتعديل المحدد.
+    /// التعديل العام (ستايل، إضاءة…) أو قناع يغطي أغلب الصورة → الناتج كامل مثل ما هو.
+    nonisolated static func keepOriginal(source: URL, edited: CGImage, plan: EditPlan?, localEdit: Bool) throws -> CGImage {
+        let t0 = Date()
+        let orig = try EditImage.upright(source)
+        let w = edited.width, h = edited.height
+        let mask: [UInt8]
+        if let m = plan?.mask {
+            let grow = plan?.kind == .remove ? 10.0 : 6.0
+            mask = try Mask.load(m, w: w, h: h, grow: grow, feather: 6)
+        } else if localEdit {
+            let o = try EditImage.rgba(orig, w: w, h: h)
+            let e = try EditImage.rgba(edited, w: w, h: h)
+            guard let r = AutoMask.changeMask(original: o, edited: e, w: w, h: h) else {
+                slog("automask: global change → full result")
+                return edited
+            }
+            mask = r.mask
+        } else {
+            return edited
+        }
+        let out = try AutoMask.composite(original: orig, edited: edited, mask: mask, w: w, h: h)
+        slog("automask: composited \(out.width)x\(out.height) in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
+        return out
+    }
 
     private func runMLX(_ e: ImageEngine, prompt: String, source: URL?, plan: EditPlan?, status: @escaping @Sendable (String) -> Void) async throws -> CGImage {
         guard SDModels.installed(e) else { throw SawtError.failed("نموذج «\(e.title)» مو منزّل. نزّله من الإعدادات ← الصور.") }

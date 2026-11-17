@@ -773,6 +773,8 @@ final class ChatStore: ObservableObject {
                 // ١) نموذج المحادثة يكتب وصف إنجليزي (المحركات المحلية ما تفهم عربي)
                 // بدون نموذج المحادثة (أسرع وذاكرة أقل) إلا لو الوصف عربي والمحرك ما يفهمه، أو «حسّن الوصف» شغّال
                 var spec: (String, String)?
+                // تعديل على شي محدد (الافتراضي): الباقي يرجع من الأصل بدقته الكاملة
+                var localEdit = true
                 if source != nil, let plan, let fixed = Self.fixedEditPrompt(plan, engine: engine) {
                     // الإزالة وتغيير الحجم ما يحتاجون نموذج المحادثة
                     spec = (fixed, "")
@@ -782,7 +784,10 @@ final class ChatStore: ObservableObject {
                         spec = (request, "")
                     } else {
                         status("أكتب التعليمة…")
-                        spec = await Self.editPrompt(for: request).map { ($0, "") }
+                        if let r = await Self.editPrompt(for: request) {
+                            spec = (r.prompt, "")
+                            localEdit = !r.global
+                        }
                     }
                     if plan?.kind == .markup, let s = spec {
                         // الصورة الثانية = نفس الصورة مع علامات المستخدم
@@ -818,7 +823,8 @@ final class ChatStore: ObservableObject {
                 // ٢) المحلي يحتاج ذاكرة: نفك النموذج اللغوي وقت الرسم ونرجعه بعدين
                 if engine.isLocal { reloadLLM = await ModelManager.shared.unloadForImage() }
                 let img = try await ImageGenerator.shared.generate(engine: engine, prompt: prompt, negative: negative,
-                                                                   source: source?.imageURL, plan: plan, status: status)
+                                                                   source: source?.imageURL, plan: plan,
+                                                                   localEdit: source != nil && plan == nil && localEdit, status: status)
                 try Task.checkCancellation()
                 self.setGenImage(bid, in: conv, img)
             } catch is CancellationError {
@@ -915,10 +921,12 @@ final class ChatStore: ObservableObject {
     }
 
     /// تعليمة تعديل صورة: ترجمة إنجليزية قصيرة بنفس المعنى (بدون إضافات) لـFLUX.2 klein
-    static func editPrompt(for request: String) async -> String? {
+    static func editPrompt(for request: String) async -> (prompt: String, global: Bool)? {
         let sys = """
         You translate image-editing requests for an image-editing model. The user gives an instruction (any language) about a photo they attached. \
-        Reply with JSON only: {"prompt": "<one short, clear English edit instruction, max 40 words>"}. \
+        Reply with JSON only: {"prompt": "<one short, clear English edit instruction, max 40 words>", "scope": "local" or "global"}. \
+        scope is "global" only if the edit changes the whole picture (style, lighting, time of day, season, color grading, filter, overall look); \
+        if it changes, adds or removes specific objects or areas, scope is "local". \
         Keep the user's intent exactly; describe only what to change and anything that must stay the same; do not add new ideas. No other text.
         """
         guard let s = try? await LLMService.shared.stream(system: sys, history: [], user: String(request.prefix(600)), maxTokens: 120) else { return nil }
@@ -932,7 +940,9 @@ final class ChatStore: ObservableObject {
             slog("image: edit prompt json failed: \(out.prefix(300))")
             return nil
         }
-        return p
+        let global = (j["scope"] as? String)?.lowercased() == "global"
+        slog("image: edit scope \(global ? "global" : "local")")
+        return (p, global)
     }
 
     /// يعدّل رسالة موجودة في مكانها
