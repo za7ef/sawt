@@ -398,7 +398,7 @@
 "اضغط على الصورة لإضافة ملاحظات دقيقة حول التعديل" = "Tap the image to add precise notes about the edit";
 "افتح Sowtly لتشغيله وتنفيذ المهمة: %@" = "Open Sowtly to start it and run the task: %@";
 "اقرأ الرد" = "Read Reply Aloud";
-"اقرأ بصوت أودار" = "Read with Odar’s Voice";
+"اقرأ بصوت أودار" = "Read with Audar’s Voice";
 "اقرأ بصوت نماء (تجريبي)" = "Read with Namaa’s Voice (Beta)";
 "الإزالة في «دقيق» تستخدم أداة LaMa (حوالي ٢١٦ ميغابايت) وتحتاج إلى تحميلها مرة واحدة." = "Removal in “Precise” uses the LaMa tool (about 216 MB), which needs a one-time download.";
 "الانتقال إلى آخر المحادثة" = "Scroll to Bottom";
@@ -554,12 +554,12 @@
 "%@ غير جاهز. حمِّله من شاشة النماذج." = "%@ isn't ready. Download it from the Models screen.";
 "(لم يُفهم شيء)" = "(Nothing understood)";
 "أصوات أودار (حمِّلها أولًا)" = "Audar voices (download them first)";
-"أودار: رجالي ١" = "Audar: Male 1";
-"أودار: رجالي ٢" = "Audar: Male 2";
-"أودار: رجالي ٣" = "Audar: Male 3";
-"أودار: نسائي ١" = "Audar: Female 1";
-"أودار: نسائي ٢" = "Audar: Female 2";
-"أودار: نسائي ٣" = "Audar: Female 3";
+"أودار: سلطان" = "Audar: Sultan";
+"أودار: فيصل" = "Audar: Faisal";
+"أودار: يزن" = "Audar: Yazan";
+"أودار: ريم" = "Audar: Reem";
+"أودار: جود" = "Audar: Joud";
+"أودار: لمى" = "Audar: Lama";
 "أودار: فشل الاستئناف (%@)" = "Audar: Failed to resume (%@)";
 "أودار: فشلت معالجة الطلب (%@)" = "Audar: Failed to process the request (%@)";
 "استغرق %@ وقتًا طويلًا ولم يعمل. حاول مرة أخرى أو اختر نموذجًا أصغر." = "%@ took too long and didn't run. Try again or choose a smaller model.";
@@ -993,3 +993,7 @@
 "نسخة المعالج غير محمّلة" = "CPU Version Not Downloaded";
 "حمِّل %@ لتشغيل الدردشة على المعالج." = "Download %@ to run chat on the CPU.";
 "الدردشة: %1$@ · الصوت: %2$@" = "Chat: %1$@ · Voice: %2$@";
+"يقرأ أودار العربية والإنجليزية بالصوت نفسه." = "Audar reads Arabic and English in the same voice.";
+"ننصح بأودار للمكالمات. مع هذا الصوت يُقرأ النص الإنجليزي بصوت Apple." = "Audar is recommended for calls. With this voice, English text is read with an Apple voice.";
+"أدق، لكن بطيء وثقيل" = "More accurate, but slow and heavy";
+"متوازن ومفضّل" = "Balanced · Recommended";

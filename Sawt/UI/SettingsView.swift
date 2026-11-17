@@ -147,7 +147,11 @@ struct VoiceSettingsPage: View {
                 } header: {
                     Text("الصوت")
                 } footer: {
-                    Text("ننصح بالنبرة السعودية للمكالمات. النص الإنجليزي يُقرأ بصوت Apple.")
+                    if settings.voice.isAudar {
+                        Text("يقرأ أودار العربية والإنجليزية بالصوت نفسه.")
+                    } else {
+                        Text("ننصح بأودار للمكالمات. مع هذا الصوت يُقرأ النص الإنجليزي بصوت Apple.")
+                    }
                 }
 
                 Section {
@@ -236,7 +240,10 @@ struct VoiceSettingsPage: View {
         let title = Catalog.allVoices.first { $0.id == item.id }?.title ?? item.id
         HStack {
             VStack(alignment: .leading, spacing: 3) {
-                Text(title)
+                HStack(spacing: 6) {
+                    Text(title)
+                    if item.id == "nabra-saudi" || item.id == "piper-miro" { PerfBadge(text: L("سريع")) }
+                }
                 switch voiceDL.state[item.id] ?? .idle {
                 case .downloading(let p):
                     ProgressView(value: p).frame(maxWidth: 160)
@@ -265,7 +272,10 @@ struct VoiceSettingsPage: View {
     @ViewBuilder private var namaaDownloadRow: some View {
         HStack {
             VStack(alignment: .leading, spacing: 3) {
-                Text(Catalog.namaaVoice?.title ?? L("نماء سعودي (تجريبي)"))
+                HStack(spacing: 6) {
+                    Text(Catalog.namaaVoice?.title ?? L("نماء سعودي (تجريبي)"))
+                    PerfBadge(text: L("أدق، لكن بطيء وثقيل"))
+                }
                 switch namaa.state {
                 case .downloading(let p):
                     ProgressView(value: p).frame(maxWidth: 160)
@@ -298,7 +308,10 @@ struct VoiceSettingsPage: View {
     @ViewBuilder private var audarDownloadRow: some View {
         HStack {
             VStack(alignment: .leading, spacing: 3) {
-                Text("أودار (٦ أصوات)")
+                HStack(spacing: 6) {
+                    Text("أودار (٦ أصوات)")
+                    PerfBadge(text: L("متوازن ومفضّل"), recommended: true)
+                }
                 switch audar.state {
                 case .downloading(let p):
                     ProgressView(value: p).frame(maxWidth: 160)
@@ -554,5 +567,24 @@ struct AboutPage: View {
         Form { AboutSection() }
             .navigationTitle("حول Sowtly")
             .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+
+/// وسم صغير بأداء الصوت بجانب اسمه في «أصوات للتحميل». المفضّل بلون التطبيق مع نجمة.
+struct PerfBadge: View {
+    let text: String
+    var recommended = false
+
+    var body: some View {
+        HStack(spacing: 3) {
+            if recommended { Image(systemName: "star.fill").font(.system(size: 9, weight: .semibold)) }
+            Text(text).font(.caption2.weight(.medium)).lineLimit(1)
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .foregroundStyle(recommended ? Color.accentColor : Color.secondary)
+        .background(Capsule().fill(recommended ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.12)))
+        .fixedSize()
     }
 }
