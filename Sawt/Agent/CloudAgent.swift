@@ -56,11 +56,11 @@ enum CloudProvider: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .gemini: "Gemini (مفتاح AI Studio المجاني)"
-        case .openrouter: "OpenRouter (نماذج :free)"
+        case .gemini: L("Gemini (مفتاح AI Studio المجاني)")
+        case .openrouter: L("OpenRouter (نماذج :free)")
         case .openai: "ChatGPT (OpenAI)"
         case .anthropic: "Claude (Anthropic)"
-        case .geminiPaid: "Gemini (مدفوع / Pro)"
+        case .geminiPaid: L("Gemini (مدفوع / Pro)")
         }
     }
     var short: String {
@@ -90,11 +90,11 @@ enum CloudProvider: String, CaseIterable, Identifiable {
     /// ملاحظة الحدود
     var note: String {
         switch self {
-        case .gemini: "مجاني بحد بالدقيقة وباليوم؛ لو خلص يوقف لين يتجدد. جوجل ممكن تستخدم بيانات الطبقة المجانية لتحسين خدماتها."
-        case .openrouter: "نماذج :free مجانية بحد بالدقيقة وباليوم (أقل لو ما عندك رصيد)، وممكن تكون زحمة أو توقف. بدائل: nvidia/nemotron-3.5-super-vl:free، google/gemma-4-26b-a4b-it:free"
-        case .openai: "مدفوع حسب الاستخدام من رصيد حسابك."
-        case .anthropic: "مدفوع حسب الاستخدام من رصيد حسابك."
-        case .geminiPaid: "مدفوع (حساب فيه فوترة)؛ نماذج Pro/Carbon ما لها طبقة مجانية."
+        case .gemini: L("مجاني بحدٍّ في الدقيقة وفي اليوم؛ إذا نفد يتوقف حتى يتجدد. قد تستخدم Google بيانات الطبقة المجانية لتحسين خدماتها.")
+        case .openrouter: L("نماذج :free مجانية بحدٍّ في الدقيقة وفي اليوم (أقل إذا لم يكن لديك رصيد)، وقد تكون مزدحمة أو تتوقف. بدائل: nvidia/nemotron-3.5-super-vl:free، google/gemma-4-26b-a4b-it:free")
+        case .openai: L("مدفوع حسب الاستخدام من رصيد حسابك.")
+        case .anthropic: L("مدفوع حسب الاستخدام من رصيد حسابك.")
+        case .geminiPaid: L("مدفوع (حساب مفعّل فيه الفوترة)؛ نماذج Pro/Carbon ليس لها طبقة مجانية.")
         }
     }
     var key: String? { KeyStore.get("key." + rawValue) }
@@ -128,7 +128,7 @@ enum CloudAgent {
     }
 
     private static func askOnce(_ p: CloudProvider, model: String, system: String, user: String, image: URL?) async throws -> String {
-        guard let key = p.key else { throw Failure(message: "ما فيه مفتاح لـ\(p.short) — حطه في «مفاتيح الخدمات»") }
+        guard let key = p.key else { throw Failure(message: L("لا يوجد مفتاح لـ%@ — أضفه في «مفاتيح الخدمات»", p.short)) }
         let img = image.flatMap { try? Data(contentsOf: $0) }?.base64EncodedString()
         var req: URLRequest
         var body: [String: Any]
@@ -173,22 +173,22 @@ enum CloudAgent {
         catch {
             let ns = error as NSError
             if ns.code == NSURLErrorNotConnectedToInternet || ns.code == NSURLErrorNetworkConnectionLost {
-                throw Failure(message: "ما فيه إنترنت — الوكيل السحابي يحتاج اتصال")
+                throw Failure(message: L("لا يوجد اتصال بالإنترنت — الوكيل السحابي يحتاج إلى اتصال"))
             }
-            if ns.code == NSURLErrorTimedOut { throw Failure(message: "\(p.short) ما رد خلال دقيقة") }
-            throw Failure(message: "تعذّر الاتصال بـ\(p.short): \(ns.localizedDescription)")
+            if ns.code == NSURLErrorTimedOut { throw Failure(message: L("لم يستجب %@ خلال دقيقة", p.short)) }
+            throw Failure(message: L("تعذّر الاتصال بـ%1$@: %2$@", p.short, ns.localizedDescription))
         }
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         guard code == 200 else { throw Failure(message: errorText(p, code: code, json: json), code: code) }
-        guard let json else { throw Failure(message: "رد غير مفهوم من \(p.short)") }
+        guard let json else { throw Failure(message: L("رد غير مفهوم من %@", p.short)) }
 
         var text = ""
         switch p {
         case .openai, .openrouter:
             let ch = (json["choices"] as? [[String: Any]])?.first
             text = ((ch?["message"] as? [String: Any])?["content"] as? String) ?? ""
-            if text.isEmpty, (ch?["finish_reason"] as? String) == "length" { throw Failure(message: "\(p.short) خلّص حد الطول قبل ما يرد") }
+            if text.isEmpty, (ch?["finish_reason"] as? String) == "length" { throw Failure(message: L("بلغ %@ حد الطول قبل أن يرد", p.short)) }
         case .anthropic:
             let blocks = json["content"] as? [[String: Any]] ?? []
             text = blocks.filter { ($0["type"] as? String) == "text" }.compactMap { $0["text"] as? String }.joined()
@@ -198,7 +198,7 @@ enum CloudAgent {
             // نتجاهل أجزاء التفكير
             text = parts.filter { ($0["thought"] as? Bool) != true }.compactMap { $0["text"] as? String }.joined()
             if text.isEmpty, let r = cand?["finishReason"] as? String, r != "STOP" {
-                throw Failure(message: r == "SAFETY" ? "Gemini رفض الطلب (فلتر الأمان)" : "Gemini وقف بدون رد (\(r))")
+                throw Failure(message: r == "SAFETY" ? L("رفض Gemini الطلب (فلتر الأمان)") : L("توقف Gemini دون رد (%@)", "\(r)"))
             }
         }
         return text
@@ -214,41 +214,41 @@ enum CloudAgent {
         // OpenRouter: ما فيه مزوّد يدعم خصائص الطلب (failed_routing_step / No endpoints found)
         let rawAll = json.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? ""
         if p == .openrouter, rawAll.contains("failed_routing") || rawAll.contains("Request Feature Support") || rawAll.contains("No endpoints found") {
-            return "هالموديل ما يدعم الطلب — جرّب موديل ثاني"
+            return L("هذا النموذج لا يدعم الطلب — جرّب نموذجًا آخر")
         }
         switch code {
         case 401, 403:
-            if p.isGemini, msg.lowercased().contains("location") { return "Gemini مو متاح في منطقتك بهالمفتاح" }
-            return "مفتاح \(p.short) غلط أو ما له صلاحية — راجعه في «مفاتيح الخدمات»"
+            if p.isGemini, msg.lowercased().contains("location") { return L("Gemini غير متاح في منطقتك بهذا المفتاح") }
+            return L("مفتاح %@ غير صحيح أو ليست له صلاحية — راجعه في «مفاتيح الخدمات»", p.short)
         case 404:
-            return "اسم النموذج «\(p.model)» مو موجود عند \(p.short) — صحّحه في «مفاتيح الخدمات»"
+            return L("اسم النموذج «%1$@» غير موجود لدى %2$@ — صحّحه في «مفاتيح الخدمات»", p.model, p.short)
         case 429:
             switch p {
             case .gemini:
-                return "حد Gemini المجاني خلص (أو طلبات كثير ورا بعض) — استنى دقيقة، أو لين بكرة لو خلص الحد اليومي"
+                return L("نفد حد Gemini المجاني (أو أُرسلت طلبات كثيرة متتالية) — انتظر دقيقة، أو حتى الغد إذا نفد الحد اليومي")
             case .geminiPaid:
-                return "Gemini: وصلت حد الطلبات — استنى شوي وجرّب"
+                return L("Gemini: بلغتَ حد الطلبات — انتظر قليلًا ثم حاول")
             case .openrouter:
-                return "حد OpenRouter المجاني خلص أو النموذج زحمة — استنى دقيقة، أو جرّب نموذج :free ثاني"
+                return L("نفد حد OpenRouter المجاني أو النموذج مزدحم — انتظر دقيقة، أو جرّب نموذج :free آخر")
             case .openai:
-                if status.contains("insufficient_quota") || msg.contains("quota") { return "رصيد OpenAI خلص — اشحن الحساب" }
-                return "OpenAI: طلبات كثير ورا بعض — استنى شوي وجرّب"
+                if status.contains("insufficient_quota") || msg.contains("quota") { return L("نفد رصيد OpenAI — اشحن الحساب") }
+                return L("OpenAI: طلبات كثيرة متتالية — انتظر قليلًا ثم حاول")
             case .anthropic:
-                return "Claude: وصلت حد الطلبات — استنى شوي وجرّب"
+                return L("Claude: بلغتَ حد الطلبات — انتظر قليلًا ثم حاول")
             }
         case 400:
-            if p == .anthropic, msg.contains("credit") { return "رصيد Anthropic خلص — اشحن الحساب" }
-            return "\(p.short) رفض الطلب: \(msg)"
+            if p == .anthropic, msg.contains("credit") { return L("نفد رصيد Anthropic — اشحن الحساب") }
+            return L("رفض %1$@ الطلب: %2$@", p.short, String(msg))
         case 402:
-            if p == .openrouter { return "OpenRouter: النموذج مو مجاني أو الرصيد خلص — استخدم نموذج ينتهي بـ:free" }
-            return "رصيد \(p.short) خلص"
+            if p == .openrouter { return L("OpenRouter: النموذج ليس مجانيًا أو نفد الرصيد — استخدم نموذجًا ينتهي بـ:free") }
+            return L("نفد رصيد %@", p.short)
         case 503:
-            if p.isGemini { return "Gemini عليه ضغط الحين — جرّب بعد شوي أو غيّر الموديل" }
-            return "\(p.short) عليه ضغط الحين — جرّب بعد شوي"
+            if p.isGemini { return L("Gemini عليه ضغط الآن — حاول بعد قليل أو غيّر النموذج") }
+            return L("%@ عليه ضغط الآن — حاول بعد قليل", p.short)
         case 500...599:
-            return "\(p.short) عنده مشكلة الحين (\(code)) — جرّب بعد شوي"
+            return L("لدى %1$@ مشكلة الآن (%2$@) — حاول بعد قليل", p.short, String(code))
         default:
-            return "\(p.short): خطأ \(code) \(msg)"
+            return L("%1$@: خطأ %2$@ %3$@", p.short, String(code), String(msg))
         }
     }
 }
@@ -267,30 +267,30 @@ struct CloudSections: View {
         Group {
             if showActivate {
                 Section {
-                    Toggle("استخدمه في المكالمات بعد", isOn: $useInCalls)
+                    Toggle("استخدمه في المكالمات أيضًا", isOn: $useInCalls)
                 } footer: {
-                    Text("النموذج السحابي المفعّل يرد في الدردشة (ويشوف الصور). المحلي يبقى احتياط: لو صار خطأ أو انقطع النت تقدر ترجع له بضغطة.")
+                    Text("يرد النموذج السحابي المفعّل في الدردشة (ويرى الصور). ويبقى النموذج المحلي احتياطيًا: إذا حدث خطأ أو انقطع الإنترنت يمكنك العودة إليه بضغطة.")
                 }
             }
             Section {
                 ForEach(CloudProvider.free) { row($0) }
-            } header: { Text("مجاني") } footer: { Text("الطبقات المجانية لها حد بالدقيقة وباليوم، وممكن توقف لين يتجدد الحد.") }
+            } header: { Text("مجاني") } footer: { Text("للطبقات المجانية حدٌّ في الدقيقة وفي اليوم، وقد تتوقف حتى يتجدد الحد.") }
             Section {
                 ForEach(CloudProvider.paid) { row($0) }
             } header: { Text("مدفوع") } footer: {
-                Text("تندفع حسب الاستخدام من رصيد حسابك عند الخدمة. المفاتيح تنحفظ في سلسلة المفاتيح على هالجوال بس، ومشتركة بين الدردشة والوكيل.")
+                Text("تُدفع حسب الاستخدام من رصيد حسابك لدى الخدمة. تُحفظ المفاتيح في سلسلة المفاتيح على هذا الجهاز فقط، وتُستخدم في الدردشة والوكيل معًا.")
             }
         }
         .id(version)
         .alert("النماذج السحابية", isPresented: $askConsent) {
-            Button("موافق") {
+            Button("أوافق") {
                 UserDefaults.standard.set(true, forKey: "cloudConsent")
                 if let p = pending { CloudLLM.setActive(p) }
                 pending = nil; version += 1; onChange()
             }
             Button("إلغاء", role: .cancel) { pending = nil }
         } message: {
-            Text("النموذج السحابي يرسل لخوادم الخدمة اللي اخترتها: رسايلك والمحادثة السابقة والصور المرفقة (وفي الوكيل نص الشاشة وصورتها)، حسب سياسة خصوصيتها. الطبقات المجانية ممكن تستخدم البيانات لتحسين خدماتها. هالتنبيه يطلع مرة وحدة.")
+            Text("يرسل النموذج السحابي إلى خوادم الخدمة التي اخترتها: رسائلك والمحادثة السابقة والصور المرفقة (وفي الوكيل نص الشاشة وصورتها)، وفق سياسة خصوصيتها. قد تستخدم الطبقات المجانية البيانات لتحسين خدماتها. يظهر هذا التنبيه مرة واحدة.")
         }
     }
 
@@ -303,7 +303,7 @@ struct CloudSections: View {
                 if isActive { Text("مفعّل").font(.caption.bold()).foregroundStyle(.green) }
                 else if p.hasKey { Image(systemName: "key.fill").foregroundStyle(.secondary) }
             }
-            SecureField(p.hasKey ? "المفتاح محفوظ — الصق جديد لتغييره" : "الصق المفتاح هنا",
+            SecureField(p.hasKey ? L("المفتاح محفوظ — الصق مفتاحًا جديدًا لتغييره") : L("الصق المفتاح هنا"),
                         text: Binding(get: { drafts[p.rawValue] ?? "" }, set: { drafts[p.rawValue] = $0 }))
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .environment(\.layoutDirection, .leftToRight)
@@ -323,7 +323,7 @@ struct CloudSections: View {
                 }
                 if showActivate, p.hasKey {
                     if isActive {
-                        Button("رجوع للمحلي") { CloudLLM.setActive(nil); version += 1; onChange() }
+                        Button("العودة إلى المحلي") { CloudLLM.setActive(nil); version += 1; onChange() }
                     } else {
                         Button("تشغيل") {
                             if CloudLLM.consent { CloudLLM.setActive(p); version += 1; onChange() }
@@ -343,7 +343,7 @@ struct CloudSections: View {
                     }
                 }
                 Spacer()
-                if let u = URL(string: p.keyURL) { Link("جيب مفتاح", destination: u) }
+                if let u = URL(string: p.keyURL) { Link("احصل على مفتاح", destination: u) }
             }
             .buttonStyle(.borderless)
             .font(.footnote)

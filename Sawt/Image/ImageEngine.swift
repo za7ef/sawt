@@ -14,10 +14,10 @@ enum ImageEngine: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .sdReal: "واقعي — CyberRealistic"
-        case .sdArt: "فني — DreamShaper 8"
-        case .klein: "دقيق"
-        case .zimage: "واقعي+"
+        case .sdReal: L("واقعي — CyberRealistic")
+        case .sdArt: L("فني — DreamShaper 8")
+        case .klein: L("دقيق")
+        case .zimage: L("واقعي+")
         case .playground: "Image Playground"
         case .gemini: "Gemini 3.1 Flash Image"
         case .geminiLite: "Gemini 3.1 Flash Lite Image"
@@ -27,9 +27,9 @@ enum ImageEngine: String, CaseIterable, Identifiable {
     /// وصف قصير يطلع في القائمة
     var tag: String {
         switch self {
-        case .sdReal, .sdArt, .klein, .zimage: "محلي"
-        case .playground: "سحابة آبل الخاصة"
-        case .gemini, .geminiLite: "سحابي · مدفوع"
+        case .sdReal, .sdArt, .klein, .zimage: L("محلي")
+        case .playground: L("سحابة آبل الخاصة")
+        case .gemini, .geminiLite: L("سحابي · مدفوع")
         }
     }
 
@@ -145,7 +145,7 @@ final class SDModels: ObservableObject {
             Storage.otherDownloads += 1
             defer { Storage.otherDownloads -= 1; tasks[e] = nil }
             if let why = Storage.spaceProblem(forGB: Self.approxGB(e) + 0.3) { state[e] = .failed(why); return }
-            guard await NetworkGate.shared.permit("تنزيل نموذج الصور \(e.title)") else { state[e] = .idle; return }
+            guard await NetworkGate.shared.permit(L("تحميل نموذج الصور %@", e.title)) else { state[e] = .idle; return }
             let d = Self.dir(e)
             let tmp = d.deletingLastPathComponent().appendingPathComponent(e.rawValue + ".partial", isDirectory: true)
             do {
@@ -154,7 +154,7 @@ final class SDModels: ObservableObject {
                 var u = d.deletingLastPathComponent(); var v = URLResourceValues(); v.isExcludedFromBackup = true
                 try? u.setResourceValues(v)
                 let report: @Sendable (Double) -> Void = { p in Task { @MainActor in SDModels.shared.state[e] = .downloading(p) } }
-                guard let src = Self.source(e) else { throw SawtError.failed("ما فيه مصدر لهالنموذج") }
+                guard let src = Self.source(e) else { throw SawtError.failed(L("لا يوجد مصدر لهذا النموذج")) }
                 var own: @Sendable (Double) -> Void = report
                 if e.usesQwen && !QwenShared.installed {
                     // المُرمّز المشترك أول (ينزل مرة وحدة للمحركين)، بجزء من شريط التقدم حسب حجمه
@@ -209,7 +209,7 @@ final class SDModels: ObservableObject {
         // نتأكد من الأحجام (الرابط مثبت على نسخة، فأي اختلاف = تنزيل ناقص)
         for f in LaMa.files {
             let size = (try? FileManager.default.attributesOfItem(atPath: d.appendingPathComponent(f.path).path)[.size] as? NSNumber)?.int64Value
-            guard size == f.bytes else { throw SawtError.failed("ملف أداة الإزالة ناقص") }
+            guard size == f.bytes else { throw SawtError.failed(L("ملف أداة الإزالة غير مكتمل")) }
         }
     }
 
@@ -220,7 +220,7 @@ final class SDModels: ObservableObject {
         lamaTask = Task {
             defer { lamaTask = nil; lamaProgress = nil }
             if let why = Storage.spaceProblem(forGB: 0.5) { slog("lama: \(why)"); return }
-            guard await NetworkGate.shared.permit("تنزيل أداة الإزالة") else { return }
+            guard await NetworkGate.shared.permit(L("تحميل أداة الإزالة")) else { return }
             let d = LaMa.dir
             let tmp = d.deletingLastPathComponent().appendingPathComponent("lama.partial", isDirectory: true)
             do {
@@ -353,7 +353,7 @@ final class DownloadDelegate: NSObject, URLSessionDownloadDelegate, @unchecked S
     func urlSession(_ s: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
         let code = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 || code == 206 else {
-            finish(.failure(SawtError.failed("التنزيل رجع \(code)"))); return
+            finish(.failure(SawtError.failed(L("أعاد التحميل الرمز %@", String(code))))); return
         }
         // الملف المؤقت ينحذف بعد هالدالة: ننقله أول
         let keep = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -388,18 +388,18 @@ actor ImageGenerator {
                   localEdit: Bool = false,
                   status: @escaping @Sendable (String) -> Void) async throws -> GeneratedImage {
         if source != nil, !engine.canEdit {
-            throw SawtError.failed("«\(engine.title)» ما يعدّل الصور. اختر «دقيق» أو «واقعي+».")
+            throw SawtError.failed(L("«%@» لا يعدّل الصور. اختر «دقيق» أو «واقعي+».", engine.title))
         }
         // الإزالة في «دقيق»: LaMa (Core ML) بدل الانتشار
         if engine == .klein, let source, let plan, plan.kind == .remove, let m = plan.mask {
-            guard LaMa.installed else { throw SawtError.failed("أداة الإزالة مو منزّلة. نزّلها من شاشة «إزالة».") }
-            status("أمسح المنطقة…")
+            guard LaMa.installed else { throw SawtError.failed(L("أداة الإزالة غير محمَّلة. حمِّلها من شاشة «إزالة».")) }
+            status(L("أمسح المنطقة…"))
             let t0 = Date()
             let img = try await LaMa.inpaint(source: source, mask: m)
             LaMa.unload()
             slog("lama: removed in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
             let name = "\(UUID().uuidString)-gen.png"
-            guard let png = UIImage(cgImage: img).pngData() else { throw SawtError.failed("ما قدرت أحفظ الصورة") }
+            guard let png = UIImage(cgImage: img).pngData() else { throw SawtError.failed(L("تعذّر حفظ الصورة")) }
             try png.write(to: Self.outDir.appendingPathComponent(name), options: .atomic)
             return GeneratedImage(file: name, prompt: prompt, engine: engine)
         }
@@ -423,7 +423,7 @@ actor ImageGenerator {
             img = try await runGemini(engine, prompt: prompt, status: status)
         }
         let name = "\(UUID().uuidString)-gen.png"
-        guard let png = UIImage(cgImage: img).pngData() else { throw SawtError.failed("ما قدرت أحفظ الصورة") }
+        guard let png = UIImage(cgImage: img).pngData() else { throw SawtError.failed(L("تعذّر حفظ الصورة")) }
         try png.write(to: Self.outDir.appendingPathComponent(name), options: .atomic)
         return GeneratedImage(file: name, prompt: used, engine: engine)
     }
@@ -456,12 +456,12 @@ actor ImageGenerator {
 
     private func runSD(_ e: ImageEngine, prompt: String, negative: String,
                        status: @escaping @Sendable (String) -> Void) async throws -> CGImage {
-        guard SDModels.installed(e) else { throw SawtError.failed("نموذج \(e.title) مو منزّل. نزّله من الإعدادات ← الصور.") }
+        guard SDModels.installed(e) else { throw SawtError.failed(L("نموذج %@ غير محمَّل. حمِّله من الإعدادات ← الصور.", e.title)) }
         let dir = SDModels.dir(e)
         if pipelineEngine != e {
             unloadSD()
             // أول تحميل يجهّز النموذج للمحرك العصبي (ممكن ياخذ دقيقة أو أكثر)، وبعدها النظام يحفظه
-            status("أحمّل نموذج الصور… (أول مرة ممكن ياخذ دقيقة)")
+            status(L("أحمّل نموذج الصور… (قد يستغرق دقيقة في المرة الأولى)"))
             ImageProgress.post(.loading)
             let cfg = MLModelConfiguration()
             cfg.computeUnits = .cpuAndNeuralEngine
@@ -473,7 +473,7 @@ actor ImageGenerator {
             pipelineEngine = e
             slog("image: sd loaded \(e.rawValue) in \(Int(Date().timeIntervalSince(t0) * 1000))ms footprint=\(RAM.footprintMB)MB")
         }
-        guard let p = pipeline else { throw SawtError.failed("ما تحمّل نموذج الصور") }
+        guard let p = pipeline else { throw SawtError.failed(L("لم يُحمَّل نموذج الصور")) }
         var c = StableDiffusionPipeline.Configuration(prompt: prompt)
         c.schedulerType = .lcmScheduler
         c.seed = UInt32.random(in: 0...UInt32.max)
@@ -488,7 +488,7 @@ actor ImageGenerator {
         // المعاينة الحية من تقدير الصورة النهائية في كل خطوة (مو الـlatent المزعج)
         c.useDenoisedIntermediates = true
         let steps = c.stepCount
-        status("أرسم… 0/\(steps)")
+        status(L("أرسم… %1$@/%2$@", "0", String(steps)))
         ImageProgress.post(.drawing(0, steps))
         let t0 = Date()
         let images = try p.generateImages(configuration: c) { prog in
@@ -501,18 +501,18 @@ actor ImageGenerator {
                 box = PreviewBox(cg)
             }
             if done >= prog.stepCount {
-                status("أجهّز الصورة…")
+                status(L("أجهّز الصورة…"))
                 ImageProgress.post(.decoding, preview: box)
             } else {
-                status("أرسم… \(done)/\(prog.stepCount)")
+                status(L("أرسم… %1$@/%2$@", String(done), String(prog.stepCount)))
                 ImageProgress.post(.drawing(done, prog.stepCount), preview: box)
             }
             return !Task.isCancelled
         }
         if Task.isCancelled { throw CancellationError() }
-        status("أحفظ الصورة…")
+        status(L("أحفظ الصورة…"))
         slog("image: sd \(e.rawValue) \(steps) steps in \(Int(Date().timeIntervalSince(t0) * 1000))ms footprint=\(RAM.footprintMB)MB")
-        guard let img = images.compactMap({ $0 }).first else { throw SawtError.failed("النموذج ما رجّع صورة") }
+        guard let img = images.compactMap({ $0 }).first else { throw SawtError.failed(L("لم يُرجع النموذج صورة")) }
         return img
     }
 
@@ -546,23 +546,23 @@ actor ImageGenerator {
     }
 
     private func runMLX(_ e: ImageEngine, prompt: String, source: URL?, plan: EditPlan?, status: @escaping @Sendable (String) -> Void) async throws -> CGImage {
-        guard SDModels.installed(e) else { throw SawtError.failed("نموذج «\(e.title)» مو منزّل. نزّله من الإعدادات ← الصور.") }
+        guard SDModels.installed(e) else { throw SawtError.failed(L("نموذج «%@» غير محمَّل. حمِّله من الإعدادات ← الصور.", e.title)) }
         guard ProcessInfo.processInfo.physicalMemory >= 7_000_000_000 else {
-            throw SawtError.failed("«\(e.title)» يحتاج جوال بذاكرة 8GB أو أكثر.")
+            throw SawtError.failed(L("«%@» يحتاج إلى جهاز بذاكرة 8GB أو أكثر.", e.title))
         }
         unloadSD()
         let t0 = Date()
         let seed = UInt64.random(in: 0 ... UInt64(UInt32.max))
         let onPhase: (String) -> Void = { phase in
             switch phase {
-            case "source": status("أقرأ صورتك…"); ImageProgress.post(.loading)
-            case "encode": status("أقرأ الوصف…"); ImageProgress.post(.loading)
-            case "load": status("أحمّل نموذج الصور…"); ImageProgress.post(.loading)
-            default: status("أجهّز الصورة…"); ImageProgress.post(.decoding)
+            case "source": status(L("أقرأ صورتك…")); ImageProgress.post(.loading)
+            case "encode": status(L("أقرأ الوصف…")); ImageProgress.post(.loading)
+            case "load": status(L("أحمّل نموذج الصور…")); ImageProgress.post(.loading)
+            default: status(L("أجهّز الصورة…")); ImageProgress.post(.decoding)
             }
         }
         let onStep: (Int, Int) -> Void = { k, n in
-            status("أرسم… \(k)/\(n)")
+            status(L("أرسم… %1$@/%2$@", String(k), String(n)))
             ImageProgress.post(.drawing(k, n))
         }
         let img: CGImage
@@ -572,7 +572,7 @@ actor ImageGenerator {
             img = try await ZImagePipeline.generate(dir: SDModels.dir(e), prompt: prompt, seed: seed, source: source, plan: plan, onPhase: onPhase, onStep: onStep)
         }
         if Task.isCancelled { throw CancellationError() }
-        status("أحفظ الصورة…")
+        status(L("أحفظ الصورة…"))
         slog("image: \(e.rawValue) steps in \(Int(Date().timeIntervalSince(t0) * 1000))ms footprint=\(RAM.footprintMB)MB")
         return img
     }
@@ -581,10 +581,10 @@ actor ImageGenerator {
     // ImageCreator (الرسم البرمجي) انلغى في iOS 27، فنفتح نافذة Image Playground بالبرومبت جاهز والمستخدم يأكّد
 
     private func runPlayground(prompt: String, status: @escaping @Sendable (String) -> Void) async throws -> CGImage {
-        guard await NetworkGate.shared.permit("رسم صورة بـImage Playground (سحابة آبل الخاصة)") else {
-            throw SawtError.failed("الإنترنت مقفول")
+        guard await NetworkGate.shared.permit(L("رسم صورة بـImage Playground (سحابة آبل الخاصة)")) else {
+            throw SawtError.failed(L("الإنترنت مغلق"))
         }
-        status("كمّل في Image Playground…")
+        status(L("أكمل في Image Playground…"))
         ImageProgress.post(.waiting)
         let url = await withTaskCancellationHandler {
             await PlaygroundBridge.shared.request(prompt)
@@ -594,7 +594,7 @@ actor ImageGenerator {
         try Task.checkCancellation()
         guard let url else { throw CancellationError() }
         guard let ui = UIImage(contentsOfFile: url.path), let cg = ui.cgImage else {
-            throw SawtError.failed("ما قدرت أقرأ الصورة من Image Playground")
+            throw SawtError.failed(L("تعذّرت قراءة الصورة من Image Playground"))
         }
         slog("image: playground ok \(cg.width)x\(cg.height)")
         return cg
@@ -604,9 +604,9 @@ actor ImageGenerator {
 
     private func runGemini(_ e: ImageEngine, prompt: String, status: @escaping @Sendable (String) -> Void) async throws -> CGImage {
         // توليد الصور مدفوع: نفضّل مفتاح Gemini المدفوع لو موجود
-        guard let key = CloudProvider.geminiPaid.key ?? CloudProvider.gemini.key else { throw SawtError.failed("ما فيه مفتاح Gemini. أضفه من النماذج ← السحابية.") }
-        guard await NetworkGate.shared.permit("توليد صورة بـGemini") else { throw SawtError.failed("الإنترنت مقفول") }
-        status("أطلب الصورة من \(e.title)…")
+        guard let key = CloudProvider.geminiPaid.key ?? CloudProvider.gemini.key else { throw SawtError.failed(L("لا يوجد مفتاح Gemini. أضفه من النماذج ← السحابية.")) }
+        guard await NetworkGate.shared.permit(L("توليد صورة بـGemini")) else { throw SawtError.failed(L("الإنترنت مغلق")) }
+        status(L("أطلب الصورة من %@…", e.title))
         ImageProgress.post(.waiting)
         var req = URLRequest(url: URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(e.geminiModel):generateContent")!)
         req.httpMethod = "POST"
@@ -627,7 +627,7 @@ actor ImageGenerator {
         guard code == 200 else {
             let msg = ((json?["error"] as? [String: Any])?["message"] as? String) ?? String(decoding: data.prefix(300), as: UTF8.self)
             slog("image: gemini \(code) \(msg)")
-            throw SawtError.failed("Gemini رجّع \(code): \(msg.prefix(220))")
+            throw SawtError.failed(L("أعاد Gemini الرمز %1$@: %2$@", String(code), String(msg.prefix(220))))
         }
         let cand = (json?["candidates"] as? [[String: Any]])?.first
         let parts = ((cand?["content"] as? [String: Any])?["parts"] as? [[String: Any]]) ?? []
@@ -643,7 +643,7 @@ actor ImageGenerator {
         let text = parts.filter { ($0["thought"] as? Bool) != true }.compactMap { $0["text"] as? String }.joined(separator: " ")
         let reason = (cand?["finishReason"] as? String) ?? ((json?["promptFeedback"] as? [String: Any])?["blockReason"] as? String) ?? ""
         slog("image: gemini no image reason=\(reason) text=\(text.prefix(200))")
-        throw SawtError.failed("Gemini ما رجّع صورة\(reason.isEmpty ? "" : " (\(reason))")\(text.isEmpty ? "" : ": \(text.prefix(200))")")
+        throw SawtError.failed(L("لم يُرجع Gemini صورة") + (reason.isEmpty ? "" : " (\(reason))") + (text.isEmpty ? "" : ": \(text.prefix(200))"))
     }
 }
 
@@ -652,7 +652,7 @@ actor ImageGenerator {
 enum PlaygroundStyles {
     /// الأنماط اللي تظهر في النافذة (externalProvider = مزوّد خارجي مثل ChatGPT، اختياري)
     static let all: [(id: String, label: String)] = [
-        ("animation", "أنيميشن"), ("illustration", "رسم توضيحي"), ("sketch", "سكتش"), ("externalProvider", "ChatGPT (مزوّد خارجي)"),
+        ("animation", L("رسوم متحركة")), ("illustration", L("رسم توضيحي")), ("sketch", L("رسم تخطيطي")), ("externalProvider", L("ChatGPT (مزوّد خارجي)")),
     ]
 
     static func style(_ id: String) -> ImagePlaygroundStyle {

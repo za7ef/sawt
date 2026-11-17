@@ -24,7 +24,7 @@ enum LiveData {
     // MARK: الطقس
 
     static func weather(text: String, previous: String?) async -> (String, [WebSource])? {
-        guard await NetworkGate.shared.permit("الطقس") else { return nil }
+        guard await NetworkGate.shared.permit(L("الطقس")) else { return nil }
         var place: (String, Double, Double)?
         // 1) مدينة مذكورة في الرسالة أو اللي قبلها
         for cand in LiveIntent.placeCandidates(text) + LiveIntent.placeCandidates(previous ?? "") {
@@ -85,7 +85,7 @@ enum LiveData {
     // MARK: العملات
 
     static func currency() async -> (String, [WebSource])? {
-        guard await NetworkGate.shared.permit("أسعار العملات") else { return nil }
+        guard await NetworkGate.shared.permit(L("أسعار العملات")) else { return nil }
         guard let j = await json("https://open.er-api.com/v6/latest/USD"),
               let rates = j["rates"] as? [String: Double] else { return nil }
         let pick = ["SAR", "EUR", "GBP", "AED", "EGP", "KWD", "QAR", "JOD", "TRY", "PKR", "INR", "IDR", "SDG", "YER", "CNY", "JPY"]

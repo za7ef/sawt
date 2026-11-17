@@ -64,11 +64,11 @@ enum XCTBackend {
     /// لو التطبيق فيه حركة مستمرة أو خيطه الرئيسي مشغول (مثل صوت نفسه وقت الاختبار). يرجع وش انعطّل
     nonisolated(unsafe) private static var quiescenceOff: String?
     /// حالة وضع الأتمتة بعد آخر تجهيز
-    nonisolated(unsafe) static var automation: String = "؟"
+    nonisolated(unsafe) static var automation: String = "?"
     /// رقم جيل الجلسة: يزيد مع كل تجهيز ناجح (أي انقطاع من جيل قديم ما يأثر)
     nonisolated(unsafe) static var generation = 0
-    nonisolated(unsafe) static var axLoaded: String = "؟"
-    nonisolated(unsafe) static var sessionState: String = "مطفية"
+    nonisolated(unsafe) static var axLoaded: String = "?"
+    nonisolated(unsafe) static var sessionState: String = L("متوقفة")
     nonisolated(unsafe) private static var keeper: Task<Void, Never>?
     nonisolated(unsafe) private static var bundles: [Int32: String] = [:]
     /// سبب آخر فشل للقراءة السريعة (يطلع في سجل الاختبار)
@@ -99,11 +99,11 @@ enum XCTBackend {
         lifeObservers = true
         let nc = NotificationCenter.default
         let pairs: [(Notification.Name, String)] = [
-            (UIApplication.didEnterBackgroundNotification, "خلفية"),
-            (UIApplication.willEnterForegroundNotification, "رجع"),
-            (UIApplication.willResignActiveNotification, "فقد التركيز"),
-            (UIApplication.protectedDataWillBecomeUnavailableNotification, "قفل الشاشة"),
-            (UIApplication.protectedDataDidBecomeAvailableNotification, "فتح القفل"),
+            (UIApplication.didEnterBackgroundNotification, L("الخلفية")),
+            (UIApplication.willEnterForegroundNotification, L("العودة")),
+            (UIApplication.willResignActiveNotification, L("فقدان التركيز")),
+            (UIApplication.protectedDataWillBecomeUnavailableNotification, L("قفل الشاشة")),
+            (UIApplication.protectedDataDidBecomeAvailableNotification, L("فتح القفل")),
         ]
         for (n, label) in pairs { nc.addObserver(forName: n, object: nil, queue: nil) { _ in noteLife(label) } }
     }
@@ -114,10 +114,10 @@ enum XCTBackend {
         prepared = false
         automationEnabled = false
         generation += 1
-        let recent = lifeEvents.isEmpty ? "ما فيه أحداث خلفية/قفل مسجّلة" : lifeEvents.joined(separator: "، ")
-        sessionState = "انتهى التفويض (\(where_)) — آخر الأحداث: \(recent)"
+        let recent = lifeEvents.isEmpty ? L("لا توجد أحداث خلفية/قفل مسجّلة") : lifeEvents.joined(separator: L("، "))
+        sessionState = L("انتهى التفويض (%1$@) — آخر الأحداث: %2$@", L(where_), recent)
         slog("xct: auth lost at \(where_); recent: \(recent)")
-        if automationWanted { postAutomationEnded("انتهى التفويض (\(where_))") }
+        if automationWanted { postAutomationEnded(L("انتهى التفويض (%@)", L(where_))) }
     }
 
     /// يعيد التفويض ووضع الأتمتة (ممكن يطلب الرمز). true لو رجعت الجلسة
@@ -154,10 +154,10 @@ enum XCTBackend {
             automation = "✗ " + e
             slog("xct: enableAutomation failed: \(e)")
             if isAuthLost(e) { markAuthLost("تفعيل الأتمتة") }
-            return "تفعيل وضع الأتمتة: " + e
+            return L("تفعيل وضع الأتمتة: %@", e)
         }
         automationEnabled = true
-        automation = "مفعّل"
+        automation = L("مفعّل")
         slog("xct: automation enabled")
         return nil
     }
@@ -172,7 +172,7 @@ enum XCTBackend {
         }
         automationEnabled = false
         slog("xct: automation disable: \(how)")
-        if !how.hasPrefix("✗") { automation = "مطفي (\(how))"; return }
+        if !how.hasPrefix("✗") { automation = L("متوقف (%@)", how); return }
         let closed: String = await withCheckedContinuation { (c: CheckedContinuation<String, Never>) in
             DispatchQueue.global(qos: .utility).async { c.resume(returning: SawtXCTCloseSession()) }
         }
@@ -180,8 +180,8 @@ enum XCTBackend {
         // الجاية تفتح جلسة جديدة داخل العملية أول؛ لو ما قرت الشاشة بعدها نعيد التشغيل (sessionDead)
         prepared = false
         generation += 1
-        automation = "الإطفاء فشل (\(how.prefix(60)))؛ الجلسة: \(closed)"
-        sessionState = lightReady ? "جاهز (مفوّض، الجلسة تنفتح مع المهمة)" : "مطفية"
+        automation = L("فشل الإيقاف (%1$@)؛ الجلسة: %2$@", String(how.prefix(60)), closed)
+        sessionState = lightReady ? L("جاهز (مفوَّض، تُفتح الجلسة مع المهمة)") : L("متوقفة")
     }
 
     /// نهاية أي مهمة (نجحت، فشلت، انوقفت، خطأ): نطفّي وضع الأتمتة دايمًا
@@ -199,8 +199,8 @@ enum XCTBackend {
     static func startAutomation() async -> String? {
         keeper?.cancel()
         startLifecycleLog()
-        if runnerReady { sessionState = prepared ? sessionState : "جاهز (مفوّض، الجلسة تنفتح مع المهمة)"; startKeeper(); return nil }
-        if preparing { return "التجهيز شغّال" }
+        if runnerReady { sessionState = prepared ? sessionState : L("جاهز (مفوَّض، تُفتح الجلسة مع المهمة)"); startKeeper(); return nil }
+        if preparing { return L("التجهيز جارٍ") }
         preparing = true
         let cfg = await XCTestProbe.connectionConfig()
         let t = Date()
@@ -216,13 +216,13 @@ enum XCTBackend {
                 var checks = XCTestProbe.localChecks()
                 let auth = XCTestProbe.authorizeSelf(cfg: cfg, checks: &checks)
                 slog("runner: step authorize \(auth.ok ? "ok" : "failed") \(Int(Date().timeIntervalSince(t) * 1000))ms")
-                cont.resume(returning: auth.ok ? nil : "التفويض: " + auth.detail)
+                cont.resume(returning: auth.ok ? nil : L("التفويض: %@", auth.detail))
             }
         }
         preparing = false
-        if let err { sessionState = "فشل: " + String(err.prefix(80)); return err }
+        if let err { sessionState = L("فشل: %@", String(err.prefix(80))); return err }
         lightReady = true
-        sessionState = "جاهز (مفوّض، الجلسة تنفتح مع المهمة)"
+        sessionState = L("جاهز (مفوَّض، تُفتح الجلسة مع المهمة)")
         startKeeper()
         return nil
     }
@@ -272,7 +272,7 @@ enum XCTBackend {
                 DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTReopenNow()) }
             }
             slog("runner: step reopen session: \(re ?? "ok") [\(SawtXCTSessionInfo())]")
-            if let re { sessionDead = true; return "القراءة ما ترد، وفشل فتح جلسة جديدة: \(re)" }
+            if let re { sessionDead = true; return L("القراءة لا تستجيب، وفشل فتح جلسة جديدة: %@", re) }
             automationEnabled = false  // الجلسة الجديدة تحتاج تفعيل من جديد
             if let e = await enableAutomation() { return e }
             let ax2: String? = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
@@ -282,7 +282,7 @@ enum XCTBackend {
                 DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: SawtXCTWarmSystem(8)) }
             }
             slog("runner: step after reopen: ax=\(ax2 ?? "ok") warm=\(warm2 ?? "ok") \(Int(Date().timeIntervalSince(t) * 1000))ms")
-            if let warm2 { sessionDead = true; return "قراءة الشاشة ما ترد حتى بعد جلسة جديدة: \(warm2)" }
+            if let warm2 { sessionDead = true; return L("قراءة الشاشة لا تستجيب حتى بعد فتح جلسة جديدة: %@", warm2) }
             sessionDead = false
         }
         return nil
@@ -310,7 +310,7 @@ enum XCTBackend {
         #if SAWTCTL
         c_xct_release_backend()
         #endif
-        sessionState = "مطفية"
+        sessionState = L("متوقفة")
         slog("xct: automation stopped")
     }
     private static func disableQuiescence() -> String {
@@ -340,7 +340,7 @@ enum XCTBackend {
     static func prepare(cfg: String, force: Bool = false, onChecks: (@Sendable ([XCTestProbe.Check]) -> Void)? = nil) async -> String? {
         if prepared && !force { return nil }
         if force { prepared = false }
-        if preparing { return "التجهيز شغّال" }
+        if preparing { return L("التجهيز جارٍ") }
         preparing = true
         defer { preparing = false }
         let t = Date()
@@ -356,17 +356,17 @@ enum XCTBackend {
                 onChecks?(checks)
                 let auth = XCTestProbe.authorizeSelf(cfg: cfg, checks: &checks)
                 onChecks?(checks)
-                guard auth.ok else { cont.resume(returning: "التفويض: " + auth.detail); return }
+                guard auth.ok else { cont.resume(returning: L("التفويض: %@", auth.detail)); return }
                 let session: [XCTestProbe.Step] = DispatchQueue.main.sync { () -> [XCTestProbe.Step] in
                     _ = disableQuiescence()
                     return XCTestProbe.sessionSteps()
                 }
                 if let c = session.first(where: { $0.name == "config" }), !c.ok {
-                    cont.resume(returning: "الإعداد: " + c.detail); return
+                    cont.resume(returning: L("الإعداد: %@", c.detail)); return
                 }
                 // وضع الأتمتة ما يتفعّل هنا: يتفعّل لما تبدأ مهمة (enableAutomation) مثل Poki
                 automationEnabled = false
-                automation = "مطفي (يتفعّل مع المهمة)"
+                automation = L("متوقف (يُفعَّل مع المهمة)")
                 cont.resume(returning: nil)
             }
         }
@@ -374,17 +374,17 @@ enum XCTBackend {
             prepared = true
             generation += 1
             let gen = generation
-            axLoaded = (SawtXCTLoadAccessibility(4).map { "✗ " + $0 } ?? "محمّل") + " عبر " + SawtXCTAXSource()
+            axLoaded = (SawtXCTLoadAccessibility(4).map { "✗ " + $0 } ?? L("محمَّل")) + L(" عبر ") + SawtXCTAXSource()
             let watched = SawtXCTWatchSession {
                 // الجلسة انقطعت: نعلّمها، والمراقب يعيد بناءها لو وضع الأتمتة شغّال
                 guard gen == generation else { return }
                 prepared = false
                 automationEnabled = false
-                sessionState = "انقطعت (جيل \(gen))"
-                if automationWanted { postAutomationEnded("الجلسة انقطعت") }
+                sessionState = L("انقطعت (الجيل %@)", String(gen))
+                if automationWanted { postAutomationEnded(L("انقطعت الجلسة")) }
                 slog("xct: session invalidated gen \(gen)")
             }
-            sessionState = "شغّالة (جيل \(gen))" + (watched ? "" : "؛ بدون مراقبة انقطاع")
+            sessionState = L("تعمل (الجيل %@)", String(gen)) + (watched ? "" : L("؛ دون مراقبة الانقطاع"))
         }
         slog("xct: prepare \(err == nil ? "ok" : "failed: \(err!)") \(Int(Date().timeIntervalSince(t) * 1000))ms")
         return err
@@ -466,14 +466,14 @@ enum XCTBackend {
 
     private static func snapshot(_ app: NSObject) -> (NSObject?, String?) {
         let sel = NSSelectorFromString("snapshotWithError:")
-        guard app.responds(to: sel), let imp = app.method(for: sel) else { return (nil, "snapshotWithError: مو مدعوم") }
+        guard app.responds(to: sel), let imp = app.method(for: sel) else { return (nil, L("snapshotWithError: غير مدعوم")) }
         typealias SnapFn = @convention(c) (AnyObject, Selector, AutoreleasingUnsafeMutablePointer<NSError?>?) -> AnyObject?
         let fn = unsafeBitCast(imp, to: SnapFn.self)
         var err: NSError?
         var snap: AnyObject?
         if let exc = SawtTryCatch({ snap = fn(app, sel, &err) }) { return (nil, exc) }
         guard let s = snap as? NSObject else {
-            return (nil, err.map { "\($0.domain) \($0.code) \($0.localizedDescription)" } ?? "رجع فاضي")
+            return (nil, err.map { "\($0.domain) \($0.code) \($0.localizedDescription)" } ?? L("أُرجعت قيمة فارغة"))
         }
         return (s, nil)
     }
@@ -587,7 +587,7 @@ enum XCTBackend {
         // شاشة النوم تبقى ضمن النشطة والجوال مفتوح (Poki: PKLockScreenOnlyBundles)؛ ما نختارها إلا لو ما فيه غيرها
         let overlays: Set<String> = ["com.apple.springboard", "com.apple.SleepLockScreen"]
         guard let front = list.first(where: { !overlays.contains($0.1) && !$0.1.isEmpty }) ?? list.first(where: { $0.1 == "com.apple.springboard" }) ?? list.first else {
-            lastAXError = "ما فيه تطبيقات نشطة"
+            lastAXError = L("لا توجد تطبيقات نشطة")
             slog("xct: ax no active apps"); return nil
         }
         let (pid, bundle) = front
@@ -626,13 +626,13 @@ enum XCTBackend {
     /// الفشل: nil والسبب في lastAXError
     static func readFront(screen: CGSize) async -> Screen? {
         if !prepared && !preparing {
-            guard await reauthorize() else { lastAXError = "الجلسة مو جاهزة وفشلت إعادة التفويض"; return nil }
+            guard await reauthorize() else { lastAXError = L("الجلسة غير جاهزة وفشلت إعادة التفويض"); return nil }
         }
-        guard prepared else { lastAXError = "الجلسة مو جاهزة"; return nil }
+        guard prepared else { lastAXError = L("الجلسة غير جاهزة"); return nil }
         if let s = await readFrontAX(screen: screen) { return s }
         if isAuthLost(lastAXError) {
             markAuthLost("قراءة")
-            guard await reauthorize() else { lastAXError = "انتهى التفويض وفشلت إعادته"; return nil }
+            guard await reauthorize() else { lastAXError = L("انتهى التفويض وفشلت إعادته"); return nil }
             return await readFrontAX(screen: screen)
         }
         return nil
@@ -715,7 +715,7 @@ enum XCTBackend {
         // لقطة سابقة (مثل التسخين) شغّالة: ننتظرها بدل ما نفشل (أول لقطة تدفع كلفة تحميل الوصول، والباقي أسرع)
         let tw = Date()
         while appSnapBusy && Date().timeIntervalSince(tw) < timeout { try? await Task.sleep(nanoseconds: 100_000_000) }
-        if appSnapBusy { lastAXError = "\(bundle): لقطة سابقة ما خلصت بعد"; return nil }
+        if appSnapBusy { lastAXError = L("%@: لم تنتهِ لقطة سابقة بعد", bundle); return nil }
         if Date().timeIntervalSince(tw) > 0.15 { slog("xct: app read waited \(Int(Date().timeIntervalSince(tw) * 1000))ms for previous snapshot") }
         appSnapBusy = true
         readInFlight = true
@@ -724,14 +724,14 @@ enum XCTBackend {
         let r: (NSObject?, String)? = await onMainTimed(timeout) { () -> (NSObject?, String) in
             defer { appSnapBusy = false }
             let a: NSObject? = !bundle.isEmpty ? app(bundle: bundle) : app(pid: pid)?.0
-            guard let a else { return (nil, "ما قدر يسوي XCUIApplication") }
+            guard let a else { return (nil, L("تعذّر إنشاء XCUIApplication")) }
             let (snap, err) = snapshot(a)
             return (snap, err ?? "")
         }
         readInFlight = false
         let ms0 = Int(Date().timeIntervalSince(t0) * 1000)
         guard let r else {
-            lastAXError = "\(bundle): لقطة XCUIApplication ما ردت خلال \(Int(timeout)) ثانية"
+            lastAXError = L("%1$@: لم تستجب لقطة XCUIApplication خلال %2$@ ثانية", bundle, String(Int(timeout)))
             slog("xct: app read \(bundle) timeout \(ms0)ms"); return nil
         }
         guard let snap = r.0 else {
@@ -929,7 +929,7 @@ enum XCTBackend {
             let l = "\(ok ? "✓" : "✗") \(name) (\(Int(Date().timeIntervalSince(t) * 1000))ms): \(d)"
             slog("xct: tapTest \(l)"); onLine(l)
         }
-        func start(_ name: String) { slog("xct: tapTest start \(name)"); onLine("… \(name): بدأ") }
+        func start(_ name: String) { slog("xct: tapTest start \(name)"); onLine(L("… %@: بدأ", name)) }
 
         startLifecycleLog()
         // ١) التجهيز مع تفويض جديد (الجلسة القديمة ممكن تنرفض: XCTDaemonErrorDomain 41)
@@ -937,13 +937,13 @@ enum XCTBackend {
         start("prepare")
         let keep = automationOn && prepared
         let prep: String?? = await withTimeout(90) { await prepare(cfg: cfg, force: !keep, onChecks: onChecks) }
-        guard let prepRes = prep else { add(false, "prepare", t, "انتهى الوقت (٩٠ ثانية)؛ غالبًا الاتصال المحلي أو رمز الجوال"); return false }
+        guard let prepRes = prep else { add(false, "prepare", t, L("انتهت المهلة (٩٠ ثانية)؛ غالبًا بسبب الاتصال المحلي أو رمز الجهاز")); return false }
         if let e = prepRes { add(false, "prepare", t, e); return false }
-        add(true, "prepare", t, "\(keep ? "الجلسة الدائمة" : "تفويض جديد")؛ \(sessionState)؛ وضع الأتمتة: \(automation)؛ الوصول: \(axLoaded)؛ انتظار الهدوء: \(quiescenceOff ?? "؟")")
+        add(true, "prepare", t, L("%1$@؛ %2$@؛ وضع الأتمتة: %3$@؛ الوصول: %4$@؛ انتظار الهدوء: %5$@", keep ? L("الجلسة الدائمة") : L("تفويض جديد"), sessionState, automation, axLoaded, quiescenceOff ?? "?"))
         t = Date()
         start("automation")
         if let e = await enableAutomation() { add(false, "automation", t, e); return false }
-        add(true, "automation", t, "وضع الأتمتة مفعّل (ينطفي آخر الاختبار)")
+        add(true, "automation", t, L("وضع الأتمتة مفعّل (يتوقف في نهاية الاختبار)"))
         defer { Task { await disableAutomation() } }
 
         // ٢أ) القراءة السريعة عبر عميل الوصول (مرتين: الثانية ساخنة)
@@ -952,11 +952,11 @@ enum XCTBackend {
             start("read-ax\(i)")
             let r: Screen?? = await withTimeout(12) { await readFrontAX(screen: screen, skipSelf: true) }
             switch r {
-            case .none: add(false, "read-ax\(i)", t, "انتهى الوقت (١٢ ثانية)")
-            case .some(.none): add(false, "read-ax\(i)", t, "فشلت: \(lastAXError.prefix(200))")
+            case .none: add(false, "read-ax\(i)", t, L("انتهت المهلة (%@ ثانية)", "12"))
+            case .some(.none): add(false, "read-ax\(i)", t, L("فشلت: %@", String(lastAXError.prefix(200))))
             case .some(.some(let sc)):
                 let sample = sc.nodes.prefix(5).map { "\($0.kind):\($0.label.prefix(18))" }.joined(separator: "، ")
-                add(true, "read-ax\(i)", t, sc.isSelf ? "صوت نفسه قدّام (ما نقرأه)" : "\(sc.name)؛ \(sc.raw) عقدة، \(sc.nodes.count) عنصر؛ \(sample)")
+                add(true, "read-ax\(i)", t, sc.isSelf ? L("Sowtly نفسه في الواجهة (لا نقرؤه)") : L("%1$@؛ %2$@ عقدة، %3$@ عنصر؛ %4$@", sc.name, String(sc.raw), String(sc.nodes.count), sample))
             }
         }
 
@@ -970,24 +970,24 @@ enum XCTBackend {
                 guard let snap else { return (false, err ?? "؟") }
                 let fl = flatten(snap, screen: screen)
                 let sample = fl.nodes.prefix(6).map { "\($0.kind):\($0.label.prefix(20))" }.joined(separator: "، ")
-                return (true, "\(fl.raw) عقدة، \(fl.nodes.count) عنصر؛ \(sample)")
+                return (true, L("%1$@ عقدة، %2$@ عنصر؛ %3$@", String(fl.raw), String(fl.nodes.count), sample))
             }
-            guard var s else { add(false, "snapshot\(i)", t, "انتهى الوقت (٢٠ ثانية)"); return false }
+            guard var s else { add(false, "snapshot\(i)", t, L("انتهت المهلة (%@ ثانية)", "20")); return false }
             if !s.0 && isAuthLost(s.1) {
                 add(false, "snapshot\(i)", t, s.1)
                 markAuthLost("اختبار")
-                onLine("… التفويض انتهى: \(sessionState)؛ نعيد التفويض")
+                onLine(L("… انتهى التفويض: %@؛ جارٍ إعادة التفويض", sessionState))
                 t = Date()
-                guard await reauthorize() else { add(false, "reauth", t, "فشل إعادة التفويض"); return false }
-                add(true, "reauth", t, "\(sessionState)؛ وضع الأتمتة: \(automation)")
+                guard await reauthorize() else { add(false, "reauth", t, L("فشلت إعادة التفويض")); return false }
+                add(true, "reauth", t, L("%1$@؛ وضع الأتمتة: %2$@", sessionState, automation))
                 t = Date()
                 s = await onMainTimed(20) { () -> (Bool, String) in
                     guard let sb = app(bundle: "com.apple.springboard") else { return (false, "XCUIApplication") }
                     let (snap, err) = snapshot(sb)
                     guard let snap else { return (false, err ?? "؟") }
                     let fl = flatten(snap, screen: screen)
-                    return (true, "\(fl.raw) عقدة، \(fl.nodes.count) عنصر (بعد إعادة التفويض)")
-                } ?? (false, "انتهى الوقت")
+                    return (true, L("%1$@ عقدة، %2$@ عنصر (بعد إعادة التفويض)", String(fl.raw), String(fl.nodes.count)))
+                } ?? (false, L("انتهت المهلة"))
             }
             add(s.0, "snapshot\(i)", t, s.1)   // فشلها ما يوقف الاختبار (مقارنة بس)
         }
@@ -1000,13 +1000,13 @@ enum XCTBackend {
             guard let f = frontApp() else { return "ما عرف (\(pids.count) نشط)" }
             return "\(f.2) pid \(f.1)؛ نشط: \(pids.count)"
         }
-        if let front { add(!front.hasPrefix("ما"), "front", t, front) } else { add(false, "front", t, "انتهى الوقت (١٠ ثواني)") }
+        if let front { add(!front.hasPrefix("ما"), "front", t, front) } else { add(false, "front", t, L("انتهت المهلة (%@ ثانية)", "10")) }
 
         // ٤) اللمس (حدث مركّب عبر daemonProxy، ولو ما انقبل XCUICoordinate بحد زمني)
         t = Date()
         start("tap")
         let r: String? = await withTimeout(25) { await tap(target) }
-        guard let r else { add(false, "tap", t, "انتهى الوقت (٢٥ ثانية)"); return false }
+        guard let r else { add(false, "tap", t, L("انتهت المهلة (%@ ثانية)", "25")); return false }
         let ok = r.contains("\"ok\":true")
         add(ok, "tap", t, "(\(Int(target.x)), \(Int(target.y))) " + r)
         return ok

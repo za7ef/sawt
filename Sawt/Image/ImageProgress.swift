@@ -67,19 +67,19 @@ final class ImageProgress: ObservableObject {
         func ease(_ tau: Double) -> Double { 1 - exp(-dt / tau) }
         switch phase {
         case .prompt:
-            return ("أفهم الوصف", 0.08 * ease(4))
+            return (L("أفهم الوصف"), 0.08 * ease(4))
         case .loading:
-            return ("أجهّز المشهد", 0.08 + 0.07 * ease(8))
+            return (L("أجهّز المشهد"), 0.08 + 0.07 * ease(8))
         case .drawing(let k, let n):
             let f = n > 0 ? Double(k) / Double(n) : 0
-            let label = f < 0.35 ? "أرسم المسودة الأولى" : f < 0.7 ? "أرسم الملامح" : "أحسّن التفاصيل"
+            let label = f < 0.35 ? L("أرسم المسودة الأولى") : f < 0.7 ? L("أرسم الملامح") : L("أحسّن التفاصيل")
             return (label, 0.15 + 0.8 * f)
         case .waiting:
             // ما فيه تقدم حقيقي: مراحل بالوقت ونسبة تقرب من ٩٥٪ بدون ما توصلها
-            let label = dt < 3 ? "أجهّز المشهد" : dt < 9 ? "أرسم المسودة الأولى" : dt < 16 ? "أرسم الملامح" : "أحسّن التفاصيل"
+            let label = dt < 3 ? L("أجهّز المشهد") : dt < 9 ? L("أرسم المسودة الأولى") : dt < 16 ? L("أرسم الملامح") : L("أحسّن التفاصيل")
             return (label, 0.1 + 0.85 * ease(14))
         case .decoding:
-            return ("أجهّز الصورة", 0.97)
+            return (L("أجهّز الصورة"), 0.97)
         }
     }
 
@@ -135,7 +135,7 @@ struct GenProgressView: View {
             }
             TimelineView(.animation(minimumInterval: reduceMotion ? 0.5 : 1.0 / 30)) { tl in
                 let live = hub.id == message.id
-                let st = live ? hub.stage(at: tl.date) : (label: "أجهّز", fraction: 0.0)
+                let st = live ? hub.stage(at: tl.date) : (label: L("جارٍ التجهيز"), fraction: 0.0)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(st.label)
                         .font(.callout)
@@ -153,13 +153,13 @@ struct GenProgressView: View {
 
     private func promptBox(_ p: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("📝 البرومبت").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Text("📝 الوصف").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             Text(p).font(.callout).textSelection(.enabled)
                 .environment(\.layoutDirection, .leftToRight)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let n = message.genNegative, !n.isEmpty {
                 Button { withAnimation { showNeg.toggle() } } label: {
-                    Label(showNeg ? "إخفاء اللي نتجنبه" : "اللي نتجنبه", systemImage: showNeg ? "chevron.up" : "chevron.down")
+                    Label(showNeg ? L("إخفاء ما نتجنبه") : L("ما نتجنبه"), systemImage: showNeg ? "chevron.up" : "chevron.down")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
@@ -211,7 +211,7 @@ struct GenProgressView: View {
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("أرسم الصورة")
-        .accessibilityValue("\(Int((progress * 100).rounded())) بالمية")
+        .accessibilityValue(L("%@ بالمئة", String(Int((progress * 100).rounded()))))
     }
 }
 

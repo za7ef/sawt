@@ -32,7 +32,7 @@ enum XCTestProbe {
     static func listDevLib() -> Step {
         let dir = "/System/Developer/usr/lib"
         guard let items = try? FileManager.default.contentsOfDirectory(atPath: dir) else {
-            return Step(name: "usr/lib", ok: false, detail: "ما قدر يقرأ \(dir)")
+            return Step(name: "usr/lib", ok: false, detail: L("تعذّرت قراءة %@", dir))
         }
         let libs = items.filter { $0.hasSuffix(".dylib") }.sorted()
         return Step(name: "usr/lib", ok: !libs.isEmpty, detail: "\(libs.count): " + libs.joined(separator: ", "))
@@ -42,7 +42,7 @@ enum XCTestProbe {
     static func loadFrameworks() -> [Step] {
         var out: [Step] = []
         let devExists = FileManager.default.fileExists(atPath: "/System/Developer/Library")
-        out.append(Step(name: "ddi", ok: devExists, detail: devExists ? "/System/Developer موجود" : "صورة المطوّر مو مركّبة (أو المسار مخفي)"))
+        out.append(Step(name: "ddi", ok: devExists, detail: devExists ? L("/System/Developer موجود") : L("صورة المطوّر غير مركّبة (أو المسار مخفي)")))
         out.append(listDevLib())
         for (name, paths) in frameworks {
             var done = false
@@ -65,14 +65,14 @@ enum XCTestProbe {
     static func classesStep() -> Step {
         let names = ["XCUIApplication", "XCUIDevice", "XCUIElement", "XCUICoordinate"]
         let missing = names.filter { NSClassFromString($0) == nil }
-        return Step(name: "classes", ok: missing.isEmpty, detail: missing.isEmpty ? "كلها موجودة" : "ناقص: " + missing.joined(separator: ", "))
+        return Step(name: "classes", ok: missing.isEmpty, detail: missing.isEmpty ? L("كلها موجودة") : L("ناقص: %@", missing.joined(separator: ", ")))
     }
 
     /// ينادي دالة ترجع كائن (بدون وسيط أو بوسيط كائن واحد) داخل @try/@catch.
     /// يرجع (الكائن، نص الاستثناء لو صار)
     private static func call(_ target: AnyObject, _ selName: String, _ arg: AnyObject? = nil) -> (AnyObject?, String?) {
         let sel = NSSelectorFromString(selName)
-        guard target.responds(to: sel) else { return (nil, "\(selName) مو مدعوم") }
+        guard target.responds(to: sel) else { return (nil, L("%@ غير مدعوم", selName)) }
         var result: AnyObject?
         let exc = SawtTryCatch {
             if let arg {
@@ -93,7 +93,7 @@ enum XCTestProbe {
         if let cfgCls = NSClassFromString("XCTestConfiguration") {
             let (active, e1) = call(cfgCls as AnyObject, "activeTestConfiguration")
             if let e1 { out.append(Step(name: "config", ok: false, detail: "activeTestConfiguration: " + e1)) }
-            else if active != nil { out.append(Step(name: "config", ok: true, detail: "موجود من قبل")) }
+            else if active != nil { out.append(Step(name: "config", ok: true, detail: L("موجود مسبقًا"))) }
             else {
                 // نسوي واحد جديد ونحط له التطبيق الهدف
                 let (fresh, e2) = call(cfgCls as AnyObject, "new")
@@ -112,11 +112,11 @@ enum XCTestProbe {
                     notes.append(e3 == nil ? "setActiveTestConfiguration ✓" : "setActiveTestConfiguration ✗ \(e3!)")
                     out.append(Step(name: "config", ok: e3 == nil, detail: notes.joined(separator: "؛ ")))
                 } else {
-                    out.append(Step(name: "config", ok: false, detail: "ما قدر يسوي XCTestConfiguration: " + (e2 ?? "رجع فاضي")))
+                    out.append(Step(name: "config", ok: false, detail: L("تعذّر إنشاء XCTestConfiguration: %@", e2 ?? L("أُرجعت قيمة فارغة"))))
                 }
             }
         } else {
-            out.append(Step(name: "config", ok: false, detail: "XCTestConfiguration مو موجود"))
+            out.append(Step(name: "config", ok: false, detail: L("XCTestConfiguration غير موجود")))
         }
         // ٢) جلسة testmanagerd
         if let sessCls = NSClassFromString("XCTRunnerDaemonSession") {
@@ -131,17 +131,17 @@ enum XCTestProbe {
                     free(props)
                 }
                 let wanted = names.filter { $0.localizedCaseInsensitiveContains("version") || $0.localizedCaseInsensitiveContains("capabilit") }
-                out.append(Step(name: "testmanagerd", ok: true, detail: "الجلسة موجودة؛ \(names.count) خاصية" + (wanted.isEmpty ? "" : "؛ " + wanted.prefix(6).joined(separator: "، "))))
+                out.append(Step(name: "testmanagerd", ok: true, detail: L("الجلسة موجودة؛ %@ خاصية", String(names.count)) + (wanted.isEmpty ? "" : "؛ " + wanted.prefix(6).joined(separator: "، "))))
             } else {
-                out.append(Step(name: "testmanagerd", ok: false, detail: "sharedSession رجع فاضي (غالبًا ما فيه اتصال)"))
+                out.append(Step(name: "testmanagerd", ok: false, detail: L("أرجع sharedSession قيمة فارغة (غالبًا لا يوجد اتصال)")))
             }
         } else {
-            out.append(Step(name: "testmanagerd", ok: false, detail: "XCTRunnerDaemonSession مو موجود"))
+            out.append(Step(name: "testmanagerd", ok: false, detail: L("XCTRunnerDaemonSession غير موجود")))
         }
         // ٣) الجهاز
         if let devCls = NSClassFromString("XCUIDevice") {
             let (dev, e) = call(devCls as AnyObject, "sharedDevice")
-            out.append(Step(name: "device", ok: e == nil && dev != nil, detail: e ?? (dev == nil ? "sharedDevice رجع فاضي" : "موجود")))
+            out.append(Step(name: "device", ok: e == nil && dev != nil, detail: e ?? (dev == nil ? L("أرجع sharedDevice قيمة فارغة") : L("موجود"))))
         }
         return out
     }
@@ -151,15 +151,15 @@ enum XCTestProbe {
     /// كل نداء لأطر XCTest داخل SawtTryCatch: أي استثناء يصير سطر ✗ بدل كراش
     static func snapshotSpringboard() -> Step {
         guard let cls = NSClassFromString("XCUIApplication") as? NSObject.Type else {
-            return Step(name: "snapshot", ok: false, detail: "XCUIApplication مو موجود")
+            return Step(name: "snapshot", ok: false, detail: L("XCUIApplication غير موجود"))
         }
         let initSel = NSSelectorFromString("initWithBundleIdentifier:")
         guard cls.instancesRespond(to: initSel) else {
-            return Step(name: "snapshot", ok: false, detail: "initWithBundleIdentifier: مو مدعوم")
+            return Step(name: "snapshot", ok: false, detail: L("initWithBundleIdentifier: غير مدعوم"))
         }
         typealias InitFn = @convention(c) (AnyObject, Selector, NSString) -> Unmanaged<AnyObject>?
         guard let initMethod = class_getInstanceMethod(cls, initSel) else {
-            return Step(name: "snapshot", ok: false, detail: "ما لقى تنفيذ initWithBundleIdentifier:")
+            return Step(name: "snapshot", ok: false, detail: L("لم يُعثر على تنفيذ initWithBundleIdentifier:"))
         }
         let initFn = unsafeBitCast(method_getImplementation(initMethod), to: InitFn.self)
         var app: NSObject?
@@ -171,11 +171,11 @@ enum XCTestProbe {
             return Step(name: "init", ok: false, detail: exc)
         }
         guard let app else {
-            return Step(name: "init", ok: false, detail: "ما قدر يسوي XCUIApplication(springboard)")
+            return Step(name: "init", ok: false, detail: L("تعذّر إنشاء XCUIApplication(springboard)"))
         }
         let snapSel = NSSelectorFromString("snapshotWithError:")
         guard app.responds(to: snapSel), let imp = app.method(for: snapSel) else {
-            return Step(name: "snapshot", ok: false, detail: "snapshotWithError: مو مدعوم")
+            return Step(name: "snapshot", ok: false, detail: L("snapshotWithError: غير مدعوم"))
         }
         typealias SnapFn = @convention(c) (AnyObject, Selector, AutoreleasingUnsafeMutablePointer<NSError?>?) -> AnyObject?
         let fn = unsafeBitCast(imp, to: SnapFn.self)
@@ -185,14 +185,14 @@ enum XCTestProbe {
             return Step(name: "snapshot", ok: false, detail: exc)
         }
         guard let snapObj = snap as? NSObject else {
-            return Step(name: "snapshot", ok: false, detail: "رجع فاضي: " + (err.map { "\($0.domain) \($0.code) \($0.localizedDescription)" } ?? "بدون خطأ"))
+            return Step(name: "snapshot", ok: false, detail: L("أُرجعت قيمة فارغة: %@", err.map { "\($0.domain) \($0.code) \($0.localizedDescription)" } ?? L("دون خطأ")))
         }
         var dictAny: Any?
         if let exc = SawtTryCatch({ dictAny = snapObj.value(forKey: "dictionaryRepresentation") }) {
             return Step(name: "snapshot", ok: false, detail: "dictionaryRepresentation: " + exc)
         }
         guard let dict = dictAny as? [AnyHashable: Any] else {
-            return Step(name: "snapshot", ok: false, detail: "ما فيه dictionaryRepresentation")
+            return Step(name: "snapshot", ok: false, detail: L("لا يوجد dictionaryRepresentation"))
         }
         var count = 0
         var labels: [String] = []
@@ -202,7 +202,7 @@ enum XCTestProbe {
             if let kids = d["children"] as? [[AnyHashable: Any]] { kids.forEach(walk) }
         }
         walk(dict)
-        return Step(name: "snapshot", ok: count > 0, detail: "\(count) عنصر؛ " + labels.joined(separator: "، "))
+        return Step(name: "snapshot", ok: count > 0, detail: L("%@ عنصر؛ ", String(count)) + labels.joined(separator: "، "))
     }
 
     // MARK: - قائمة الشروط وتفويض الجلسة
@@ -211,11 +211,11 @@ enum XCTestProbe {
     struct Check: Identifiable, Sendable { let id: String; let title: String; var ok: Bool?; var note: String = "" }
 
     static let checkOrder: [(String, String)] = [
-        ("pairing", "ملف الاقتران"),
-        ("loopback", "الاتصال المحلي (LocalDevVPN)"),
-        ("ddi", "صورة المطوّر مركّبة"),
-        ("devmode", "وضع المطوّر + خدمة testmanagerd"),
-        ("authorize", "تفويض جلسة اختبار الواجهة"),
+        ("pairing", L("ملف الاقتران")),
+        ("loopback", L("الاتصال المحلي (LocalDevVPN)")),
+        ("ddi", L("صورة المطوّر مركّبة")),
+        ("devmode", L("وضع المطوّر + خدمة testmanagerd")),
+        ("authorize", L("تفويض جلسة اختبار الواجهة")),
     ]
 
     /// الفحوص المحلية السريعة (بدون اتصال)
@@ -260,10 +260,10 @@ enum XCTestProbe {
             set("devmode", tm)
         }
         set("authorize", ok, ok ? "pid \(pid)" : err)
-        let detail = ok ? "pid \(pid) مفوّض" : String(err.prefix(500))
+        let detail = ok ? L("pid %@ مفوَّض", String(pid)) : String(err.prefix(500))
         return Step(name: "authorize", ok: ok, detail: detail)
         #else
-        return Step(name: "authorize", ok: false, detail: "هالنسخة مبنية بدون sawtctl")
+        return Step(name: "authorize", ok: false, detail: L("هذه النسخة مبنية دون sawtctl"))
         #endif
     }
 

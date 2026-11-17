@@ -20,7 +20,7 @@ final class NetworkGate: ObservableObject {
     enum Mode { case off, auto, on }
     var mode: Mode { !on ? .off : (auto ? .auto : .on) }
     var modeLabel: String {
-        switch mode { case .off: "طافي"; case .auto: "تلقائي"; case .on: "دايم" }
+        switch mode { case .off: L("مغلق"); case .auto: L("تلقائي"); case .on: L("دائمًا") }
     }
     /// طافي ← تلقائي ← دايم ← طافي
     func cycle() {
@@ -51,11 +51,11 @@ final class NetworkGate: ObservableObject {
                 resumed = true
                 c.resume(returning: v)
             }
-            let a = UIAlertController(title: "الإنترنت مقفول",
-                                      message: "\(reason) يحتاج إنترنت. نسمح له هالمرة بس؟ زر الإنترنت يظل مقفول.",
+            let a = UIAlertController(title: L("الإنترنت مغلق"),
+                                      message: L("«%@» يحتاج إلى الإنترنت. هل تسمح بذلك هذه المرة فقط؟ سيبقى زر الإنترنت مغلقًا.", reason),
                                       preferredStyle: .alert)
-            a.addAction(UIAlertAction(title: "إلغاء", style: .cancel) { _ in finish(false) })
-            a.addAction(UIAlertAction(title: "اسمح هالمرة", style: .default) { _ in finish(true) })
+            a.addAction(UIAlertAction(title: L("إلغاء"), style: .cancel) { _ in finish(false) })
+            a.addAction(UIAlertAction(title: L("اسمح هذه المرة"), style: .default) { _ in finish(true) })
             // لو التنبيه ما انعرض (شاشة ثانية فوق مثلاً) أو ما أحد رد خلال دقيقة: نرفض بدل ما نعلّق
             top.present(a, animated: true) {
                 MainActor.assumeIsolated { if a.presentingViewController == nil { finish(false) } }

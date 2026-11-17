@@ -30,7 +30,7 @@ struct ModelsView: View {
             List {
                 Section {
                     Picker("اعرض", selection: $tab) {
-                        Text("كرت الشاشة").tag("gpu")
+                        Text("معالج الرسوميات").tag("gpu")
                         Text("المعالج").tag("cpu")
                         Text("النماذج السحابية").tag("cloud")
                     }
@@ -47,16 +47,16 @@ struct ModelsView: View {
                     } header: {
                         Text("نماذج المعالج")
                     } footer: {
-                        Text("أبطأ من كرت الشاشة لكنه يكمّل بالخلفية، ويشتغل عليه الوكيل.")
+                        Text("أبطأ من معالج الرسوميات لكنه يكمل في الخلفية، ويعمل عليه الوكيل.")
                     }
                     if GGUFSpec.all.contains(where: { $0.isDownloaded }) { CPUTestsSection() }
                 } else {
                 Section {
                     ForEach(Catalog.builtInLLMs) { row($0) }
                 } header: {
-                    Text("نماذج كرت الشاشة")
+                    Text("نماذج معالج الرسوميات")
                 } footer: {
-                    Text("ذاكرة جهازك تقريبًا \(String(format: "%.0f", ramGB)) GB. تنزل مرة وحدة وتشتغل بدون نت.")
+                    Text(L("ذاكرة جهازك نحو %@ GB. تُحمَّل النماذج مرة واحدة وتعمل دون إنترنت.", String(format: "%.0f", ramGB)))
                 }
 
                 Section("نموذج مخصص") {
@@ -78,7 +78,7 @@ struct ModelsView: View {
 
                 Section {
                     if files.isEmpty {
-                        Text("ما فيه ملفات نماذج على الجهاز").foregroundStyle(.secondary)
+                        Text("لا توجد ملفات نماذج على الجهاز").foregroundStyle(.secondary)
                     }
                     ForEach(files) { f in
                         HStack {
@@ -100,12 +100,12 @@ struct ModelsView: View {
                 } header: {
                     Text("الملفات على الجهاز")
                 } footer: {
-                    Text("كل مجلدات النماذج، حتى التنزيلات الناقصة.")
+                    Text("كل مجلدات النماذج، بما فيها التحميلات غير المكتملة.")
                 }
             }
             .task { reloadFiles() }
             .id(refresh)
-            .confirmationDialog("تحذف كل النماذج من الجوال؟", isPresented: $confirmAll, titleVisibility: .visible) {
+            .confirmationDialog("حذف كل النماذج من الجهاز؟", isPresented: $confirmAll, titleVisibility: .visible) {
                 Button("حذف الكل", role: .destructive) { models.deleteAllModels(); reloadFiles() }
             }
             .navigationTitle("النماذج")
@@ -138,7 +138,7 @@ struct ModelsView: View {
                 Text(m.title).font(.headline)
                 if m.vision {
                     Image(systemName: "eye").font(.caption).foregroundStyle(.secondary)
-                        .accessibilityLabel("يشوف الصور")
+                        .accessibilityLabel("يفهم الصور")
                 }
                 if let tag = m.tag {
                     Text(tag).font(.caption2.weight(.semibold))
@@ -158,17 +158,17 @@ struct ModelsView: View {
             .font(.caption).foregroundStyle(.secondary)
             .environment(\.layoutDirection, AppLang.layout)
             if m.ramGB > 0 { fitChips(m) }
-            Text("العربي: \(m.arabic)" + (tooBig ? " • قد يكون ثقيل على جهازك" : ""))
+            Text(L("العربية: %@", m.arabic) + (tooBig ? L(" • قد يكون ثقيلًا على جهازك") : ""))
                 .font(.caption).foregroundStyle(tooBig ? .orange : .secondary)
 
             if downloading, let p = models.llm.progress {
                 ProgressView(value: p) {
-                    Text("ينزل… \(Int(p * 100))٪").font(.caption)
+                    Text(L("جارٍ التحميل… %@٪", String(Int(p * 100)))).font(.caption)
                 }
             } else if active && models.llm == .preparing {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("يجهّز النموذج في الذاكرة…").font(.caption).foregroundStyle(.secondary)
+                    Text("جارٍ تجهيز النموذج في الذاكرة…").font(.caption).foregroundStyle(.secondary)
                 }
             }
 
@@ -176,7 +176,7 @@ struct ModelsView: View {
                 if downloading {
                     Button("إيقاف مؤقت") { models.pauseDownload() }.buttonStyle(.glass)
                 } else if !(active && (models.llm.isReady || models.llm == .preparing)) {
-                    Button(isDown ? "تشغيل" : "تنزيل وتشغيل") {
+                    Button(isDown ? L("تشغيل") : L("تحميل وتشغيل")) {
                         CloudLLM.setActive(nil)
                         ComputeMode.set("gpu")
                         models.activate(m)
@@ -203,7 +203,7 @@ struct ModelsView: View {
         case .ready: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
         case .loading(let v): ProgressView(value: v).frame(width: 60)
         case .preparing:
-            HStack(spacing: 6) { ProgressView().controlSize(.small); Text("يجهّز…").font(.caption) }
+            HStack(spacing: 6) { ProgressView().controlSize(.small); Text("جارٍ التجهيز…").font(.caption) }
         case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
         case .idle: EmptyView()
         }
@@ -224,16 +224,16 @@ struct ModelsView: View {
         let fit = DeviceFit.fitHere(m)
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
-                chip("كتابة: " + (text?.label ?? "ثقيل على الآيفون"), icon: "text.bubble")
-                chip("مكالمة: " + (call?.label ?? "ثقيل على الآيفون"), icon: "phone")
+                chip(L("الكتابة: %@", text?.label ?? L("ثقيل على iPhone")), icon: "text.bubble")
+                chip(L("المكالمة: %@", call?.label ?? L("ثقيل على iPhone")), icon: "phone")
             }
             switch fit {
             case .both:
-                Label("يناسب جوالك", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
+                Label("يناسب جهازك", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
             case .textOnly:
-                Label("على جوالك يناسب الكتابة، المكالمة ممكن تقفل", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Label("يناسب جهازك للكتابة، وقد تتوقف المكالمة", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
             case .none:
-                Label("ثقيل على جوالك", systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+                Label("ثقيل على جهازك", systemImage: "xmark.octagon.fill").foregroundStyle(.red)
             case .unknown:
                 EmptyView()
             }
@@ -293,24 +293,24 @@ struct CPUModelRow: View {
             .environment(\.layoutDirection, AppLang.layout)
             Group {
                 if fits {
-                    Label("يناسب جوالك", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
+                    Label("يناسب جهازك", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
                 } else {
-                    Label("ثقيل على جوالك", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Label("ثقيل على جهازك", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 }
             }
             .font(.caption2.weight(.semibold))
-            Text("العربي: \(spec.arabic) • على المعالج، يشتغل بالخلفية").font(.caption).foregroundStyle(.secondary)
+            Text(L("العربية: %@ • على المعالج، ويعمل في الخلفية", spec.arabic)).font(.caption).foregroundStyle(.secondary)
 
             if dl.running {
                 ProgressView(value: dl.progress) {
-                    Text("ينزل… \(Int(dl.progress * 100))٪").font(.caption)
+                    Text(L("جارٍ التحميل… %@٪", String(Int(dl.progress * 100)))).font(.caption)
                 }
             }
             HStack(spacing: 10) {
                 if dl.running {
                     Button("إلغاء") { dl.cancel() }.buttonStyle(.glass)
                 } else if !dl.downloaded {
-                    Button("تنزيل وتشغيل") { dl.activateWhenDone = true; dl.start() }
+                    Button("تحميل وتشغيل") { dl.activateWhenDone = true; dl.start() }
                         .buttonStyle(.glassProminent)
                 } else if !active {
                     Button("تشغيل") { GGUFSpec.choose(spec) }
@@ -327,7 +327,7 @@ struct CPUModelRow: View {
             .controlSize(.small)
         }
         .padding(.vertical, 4)
-        .confirmationDialog("تحذف \(spec.name)؟", isPresented: $confirmDelete, titleVisibility: .visible) {
+        .confirmationDialog(L("حذف %@؟", spec.name), isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("حذف من الجهاز", role: .destructive) { dl.delete() }
         }
     }

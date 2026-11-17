@@ -18,14 +18,14 @@ final class Dictation: ObservableObject {
         if let why = AppleSTT.blockedReason { error = why; return }
         Speaker.shared.stop()
         if AudioIO.shared.isRunning {
-            if AudioIO.shared.ownedByCall { error = "المايك مشغول بالمكالمة."; return }
+            if AudioIO.shared.ownedByCall { error = L("الميكروفون مشغول بالمكالمة."); return }
             Speaker.shared.stop()
         }
         starting = true
         Task {
             defer { starting = false }
             guard await AVAudioApplicationShim.requestRecord() else {
-                error = "اسمح للتطبيق يستخدم المايك من الإعدادات."
+                error = L("اسمح للتطبيق باستخدام الميكروفون من الإعدادات.")
                 return
             }
             lock.lock(); buffer.removeAll(); lock.unlock()
@@ -41,7 +41,7 @@ final class Dictation: ObservableObject {
                 isRecording = true
             } catch {
                 AudioIO.shared.onMic = nil
-                self.error = "ما قدرت أشغّل المايك: \(error.localizedDescription)"
+                self.error = L("تعذّر تشغيل الميكروفون: %@", error.localizedDescription)
                 slog("dictation start failed \(error)")
             }
         }
@@ -59,10 +59,10 @@ final class Dictation: ObservableObject {
             defer { isBusy = false }
             do {
                 let r = try await SpeechRecognizer.shared.transcribe(audio, language: l == "auto" ? nil : l)
-                if !r.text.isEmpty { done(r.text) } else { error = "ما سمعت شي واضح، جرّب مرة ثانية." }
+                if !r.text.isEmpty { done(r.text) } else { error = L("لم أسمع شيئًا واضحًا، حاول مرة أخرى.") }
             } catch {
                 slog("dictation transcribe failed \(error)")
-                self.error = "ما قدرت أحوّل الصوت لنص: \(error.localizedDescription)"
+                self.error = L("تعذّر تحويل الصوت إلى نص: %@", error.localizedDescription)
             }
         }
     }

@@ -28,7 +28,7 @@ final class HostPairing: NSObject, ObservableObject, NetServiceDelegate {
     func start() {
         guard !running else { return }
         running = true; pin = ""; result = ""; pairAlive = false
-        status = "أجهّز…"
+        status = L("جارٍ التجهيز…")
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         let cfg = PhoneControl.config(host: "10.7.0.1", rpPort: 0, rpHost: "")
         Task {
@@ -36,7 +36,7 @@ final class HostPairing: NSObject, ObservableObject, NetServiceDelegate {
             Log.shared("hostpair begin: \(begin)")
             guard let d = try? JSONSerialization.jsonObject(with: Data(begin.utf8)) as? [String: Any],
                   d["ok"] as? Bool == true, let port = d["port"] as? Int, let ident = d["identifier"] as? String else {
-                finish("ما قدرت أجهّز: \(begin.prefix(300))"); return
+                finish(L("تعذّر التجهيز: %@", String(begin.prefix(300)))); return
             }
             let txt = (d["txt"] as? [String: String]) ?? [:]
             let s = NetService(domain: "local.", type: "_remotepairing-pairable-host._tcp.", name: ident, port: Int32(port))
@@ -45,22 +45,22 @@ final class HostPairing: NSObject, ObservableObject, NetServiceDelegate {
             s.publish()
             service = s
             keepAlive(true); pairAlive = true
-            status = "جاهز. روح للإعدادات واختر «Sawt» من الأجهزة القريبة للاقتران، وبيطلع لك رمز هنا وبإشعار."
+            status = L("جاهز. اذهب إلى الإعدادات واختر «Sawt» من الأجهزة القريبة للاقتران، وسيظهر لك رمز هنا وفي إشعار.")
             let res = await Task.detached { () -> String in
                 HostPairing.call { c_accept(cfg, 300) }
             }.value
             Log.shared("hostpair accept: \(res.prefix(6000))")
             if res.contains("\"paired\":true") {
                 PhoneControl.pairingWritten()
-                finish("تم الاقتران ✅ انحفظ ملف جديد. جرّب «فحص الاتصال».")
+                finish(L("تم الاقتران ✅ حُفظ ملف جديد. جرّب «فحص الاتصال»."))
             } else {
-                finish("ما تم الاقتران: \(res.prefix(800))")
+                finish(L("لم يتم الاقتران: %@", String(res.prefix(800))))
             }
         }
     }
 
     func cancel() {
-        status = "أوقف…"
+        status = L("جارٍ الإيقاف…")
         #if SAWTCTL
         c_host_cancel()
         #endif
@@ -74,7 +74,7 @@ final class HostPairing: NSObject, ObservableObject, NetServiceDelegate {
     }
 
     nonisolated func netService(_ sender: NetService, didNotPublish errorDict: [String: NSNumber]) {
-        Task { @MainActor in Log.shared("hostpair: bonjour publish failed \(errorDict)"); self.status = "ما قدرت أعلن الخدمة (الشبكة المحلية مسموحة؟) \(errorDict)" }
+        Task { @MainActor in Log.shared("hostpair: bonjour publish failed \(errorDict)"); self.status = L("تعذّر الإعلان عن الخدمة (هل الشبكة المحلية مسموحة؟) %@", "\(errorDict)") }
     }
     nonisolated func netServiceDidPublish(_ sender: NetService) {
         Task { @MainActor in Log.shared("hostpair: bonjour published \(sender.name)") }
@@ -149,11 +149,11 @@ final class HostPairing: NSObject, ObservableObject, NetServiceDelegate {
     nonisolated fileprivate static func gotPin(_ p: String) {
         Log.shared("hostpair: pin shown")
         let c = UNMutableNotificationContent()
-        c.title = "رمز الاقتران"
-        c.body = "اكتب الرمز في الجوال: \(p)"
+        c.title = L("رمز الاقتران")
+        c.body = L("اكتب الرمز في الجهاز: %@", "\(p)")
         c.sound = .default
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "sawt.pin", content: c, trigger: nil))
-        Task { @MainActor in HostPairing.shared.pin = p; HostPairing.shared.status = "اكتب الرمز في الجوال" }
+        Task { @MainActor in HostPairing.shared.pin = p; HostPairing.shared.status = L("اكتب الرمز في الجهاز") }
     }
 
     nonisolated private static func call(_ f: () -> UnsafeMutablePointer<CChar>?) -> String {

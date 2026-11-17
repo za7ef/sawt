@@ -15,11 +15,11 @@ struct CallActivityAttributes: ActivityAttributes {
 extension CallActivityAttributes.ContentState {
     var label: String {
         switch status {
-        case "starting": return "يجهز…"
-        case "thinking": return "يفكر…"
-        case "speaking": return "يتكلم"
-        case "paused": return "افتح التطبيق"
-        default: return muted ? "المايك مكتوم" : "يسمع"
+        case "starting": return L("جارٍ التجهيز…")
+        case "thinking": return L("يفكر…")
+        case "speaking": return L("يتكلم")
+        case "paused": return L("افتح التطبيق")
+        default: return muted ? L("الميكروفون مكتوم") : L("يستمع")
         }
     }
     var icon: String {
@@ -46,7 +46,7 @@ struct EndCallIntent: LiveActivityIntent {
 
 /// زر كتم المايك
 struct ToggleMuteIntent: LiveActivityIntent {
-    static var title: LocalizedStringResource = "كتم المايك"
+    static var title: LocalizedStringResource = "كتم الميكروفون"
     init() {}
     func perform() async throws -> some IntentResult {
         await MainActor.run { NotificationCenter.default.post(name: Notification.Name("sawt.toggleMute"), object: nil) }

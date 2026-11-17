@@ -40,9 +40,9 @@ enum AttachmentError: LocalizedError {
     case unreadable, unsupported(String), tooBig
     var errorDescription: String? {
         switch self {
-        case .unreadable: return "ما قدرت أقرأ الملف."
-        case .unsupported(let e): return "نوع الملف (\(e)) مو مدعوم للحين. جرّب PDF أو نص أو صورة."
-        case .tooBig: return "الملف كبير مرة (أكثر من 50MB)."
+        case .unreadable: return L("تعذّرت قراءة الملف.")
+        case .unsupported(let e): return L("نوع الملف (%@) غير مدعوم حاليًا. جرّب PDF أو نصًا أو صورة.", e)
+        case .tooBig: return L("الملف كبير جدًا (أكثر من 50MB).")
         }
     }
 }
@@ -270,7 +270,7 @@ struct AttachmentChip: View {
                     Image(systemName: a.name.lowercased().hasSuffix(".pdf") ? "doc.richtext" : "doc.text")
                     VStack(alignment: .leading, spacing: 1) {
                         Text(a.name).lineLimit(1).font(.caption)
-                        if let p = a.pages { Text("\(p) صفحة").font(.caption2).foregroundStyle(.secondary) }
+                        if let p = a.pages { Text(L("%@ صفحة", String(p))).font(.caption2).foregroundStyle(.secondary) }
                     }
                 }
                 .padding(.horizontal, 10).frame(height: size)

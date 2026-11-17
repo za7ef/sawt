@@ -41,37 +41,37 @@ enum Catalog {
     /// كل الأحجام متحقق منها من Hugging Face (نوفمبر 2026).
     static let builtInLLMs: [LLMOption] = [
         LLMOption(id: "mlx-community/Qwen3.5-2B-4bit", title: "Qwen3.5 2B", sizeGB: 1.72, ramGB: 2.4,
-                  speed: "سريع جدًا", arabic: "عربي جيد", tag: "الأسرع والأخف", vision: true),
+                  speed: L("سريع جدًا"), arabic: L("عربي جيد"), tag: L("الأسرع والأخف"), vision: true),
         LLMOption(id: "mlx-community/Qwen3-4B-4bit", title: "Qwen3 4B", sizeGB: 2.26, ramGB: 3.0,
-                  speed: "سريع", arabic: "عربي ممتاز ولهجات زينة", tag: "عربي أحسن • للمكالمات مع سمع آبل"),
+                  speed: L("سريع"), arabic: L("عربي ممتاز ولهجات جيدة"), tag: L("عربي أفضل • للمكالمات مع تعرّف Apple على الكلام")),
         LLMOption(id: "mlx-community/Qwen3.5-4B-4bit", title: "Qwen3.5 4B", sizeGB: 3.03, ramGB: 3.8,
-                  speed: "متوسط", arabic: "عربي ممتاز", tag: "الأحدث", vision: true),
+                  speed: L("متوسط"), arabic: L("عربي ممتاز"), tag: L("الأحدث"), vision: true),
         LLMOption(id: "mlx-community/gemma-3-4b-it-qat-4bit", title: "Gemma 3 4B", sizeGB: 3.0, ramGB: 3.8,
-                  speed: "متوسط", arabic: "عربي ممتاز وأسلوب طبيعي", vision: true),
+                  speed: L("متوسط"), arabic: L("عربي ممتاز وأسلوب طبيعي"), vision: true),
         LLMOption(id: "mlx-community/gemma-4-e2b-it-4bit", title: "Gemma 4 E2B", sizeGB: 3.55, ramGB: 3.5,
-                  speed: "متوسط", arabic: "عربي ممتاز", vision: true),
+                  speed: L("متوسط"), arabic: L("عربي ممتاز"), vision: true),
         LLMOption(id: "mlx-community/Qwen2.5-3B-Instruct-4bit", title: "Qwen2.5 3B", sizeGB: 1.74, ramGB: 2.4,
-                  speed: "سريع", arabic: "عربي جيد"),
+                  speed: L("سريع"), arabic: L("عربي جيد")),
         LLMOption(id: "mlx-community/Llama-3.2-3B-Instruct-4bit", title: "Llama 3.2 3B", sizeGB: 1.81, ramGB: 2.5,
-                  speed: "سريع", arabic: "عربي مقبول"),
+                  speed: L("سريع"), arabic: L("عربي مقبول")),
         LLMOption(id: "mlx-community/Phi-4-mini-instruct-4bit", title: "Phi-4 Mini", sizeGB: 2.16, ramGB: 2.9,
-                  speed: "سريع", arabic: "عربي ضعيف، إنجليزي قوي"),
+                  speed: L("سريع"), arabic: L("عربي ضعيف، إنجليزي قوي")),
         LLMOption(id: "mlx-community/SmolLM3-3B-4bit", title: "SmolLM3 3B", sizeGB: 1.73, ramGB: 2.4,
-                  speed: "سريع", arabic: "عربي ضعيف"),
+                  speed: L("سريع"), arabic: L("عربي ضعيف")),
         LLMOption(id: "mlx-community/Qwen3-1.7B-4bit", title: "Qwen3 1.7B", sizeGB: 0.97, ramGB: 1.5,
-                  speed: "سريع جدًا", arabic: "عربي مقبول"),
+                  speed: L("سريع جدًا"), arabic: L("عربي مقبول")),
         LLMOption(id: "mlx-community/gemma-3-1b-it-qat-4bit", title: "Gemma 3 1B", sizeGB: 0.73, ramGB: 1.2,
-                  speed: "سريع جدًا", arabic: "عربي مقبول"),
+                  speed: L("سريع جدًا"), arabic: L("عربي مقبول")),
         LLMOption(id: "mlx-community/Llama-3.2-1B-Instruct-4bit", title: "Llama 3.2 1B", sizeGB: 0.7, ramGB: 1.2,
-                  speed: "سريع جدًا", arabic: "عربي ضعيف"),
+                  speed: L("سريع جدًا"), arabic: L("عربي ضعيف")),
         LLMOption(id: "mlx-community/Qwen3-0.6B-4bit", title: "Qwen3 0.6B", sizeGB: 0.34, ramGB: 0.8,
-                  speed: "لحظي", arabic: "للتجربة فقط"),
+                  speed: L("لحظي"), arabic: L("للتجربة فقط")),
     ]
 
     static var customLLMs: [LLMOption] {
         (UserDefaults.standard.stringArray(forKey: "customLLMs") ?? []).map {
             LLMOption(id: $0, title: String($0.split(separator: "/").last ?? Substring($0)), sizeGB: 0, ramGB: 0,
-                      speed: "؟", arabic: "نموذج مخصص", custom: true)
+                      speed: L("؟"), arabic: L("نموذج مخصص"), custom: true)
         }
     }
 
@@ -92,25 +92,25 @@ enum Catalog {
     }
 
     static let stts: [STTOption] = [
-        STTOption(id: "apple", title: "سمع آبل",
-                  subtitle: "موصى به للمكالمات: ما ياخذ ذاكرة، فيخلي مكان لنموذج أذكى", approxSize: "0 MB"),
+        STTOption(id: "apple", title: L("تعرّف Apple على الكلام"),
+                  subtitle: L("موصى به للمكالمات: لا يستهلك الذاكرة، فيترك مساحة لنموذج أذكى"), approxSize: "0 MB"),
     ]
 
     /// الأصوات المدمجة. يُتجاهل أي صوت ملفاته غير موجودة في الحزمة.
     static let allVoices: [VoiceOption] = [
-        VoiceOption(id: "nabra-saudi", title: "نبرة سعودية",
-                    subtitle: "صوت أنثوي طبيعي باللهجة السعودية، المقترح للمكالمات", folder: "nabra-saudi",
+        VoiceOption(id: "nabra-saudi", title: L("نبرة سعودية"),
+                    subtitle: L("صوت أنثوي طبيعي باللهجة السعودية، وهو المقترح للمكالمات"), folder: "nabra-saudi",
                     kind: .kokoro(model: "model.int8.onnx")),
-        VoiceOption(id: "nabra-msa", title: "نبرة فصحى",
-                    subtitle: "صوت أنثوي طبيعي بالفصحى", folder: "nabra-msa",
+        VoiceOption(id: "nabra-msa", title: L("نبرة فصحى"),
+                    subtitle: L("صوت أنثوي طبيعي بالفصحى"), folder: "nabra-msa",
                     kind: .kokoro(model: "model.int8.onnx")),
-        VoiceOption(id: "piper-miro", title: "ميرو",
-                    subtitle: "صوت بلكنة سعودية، سريع جدًا", folder: "piper-miro",
+        VoiceOption(id: "piper-miro", title: L("ميرو"),
+                    subtitle: L("صوت بلكنة سعودية، سريع جدًا"), folder: "piper-miro",
                     kind: .piper(onnx: "ar_JO-SA_miro_V2-high.onnx")),
-        VoiceOption(id: "apple", title: "صوت آبل",
-                    subtitle: "أصوات النظام، تشتغل دايم", folder: "", kind: .apple),
-        VoiceOption(id: "namaa", title: "نماء سعودي (تجريبي)",
-                    subtitle: "صوت رجّالي سعودي، ثقيل وياخذ وقت قبل كل جملة في المكالمة", folder: "", kind: .namaa),
+        VoiceOption(id: "apple", title: L("صوت Apple"),
+                    subtitle: L("أصوات النظام، تعمل دائمًا"), folder: "", kind: .apple),
+        VoiceOption(id: "namaa", title: L("نماء سعودي (تجريبي)"),
+                    subtitle: L("صوت رجالي سعودي، ثقيل ويستغرق وقتًا قبل كل جملة في المكالمة"), folder: "", kind: .namaa),
     ] + AudarRefs.all.map {
         VoiceOption(id: "audar-\($0.key)", title: $0.title, subtitle: $0.subtitle, folder: "", kind: .audar(voice: $0.key))
     }

@@ -83,7 +83,7 @@ enum Mask {
 
     /// يقرأ القناع بنفس قص الصورة، يوسّعه ويليّن حدوده → بايتات رمادية w×h
     static func load(_ url: URL, w: Int, h: Int, grow: Double, feather: Double) throws -> [UInt8] {
-        guard let ui = UIImage(contentsOfFile: url.path), let cg = ui.cgImage else { throw SawtError.failed("ما قدرت أقرأ القناع") }
+        guard let ui = UIImage(contentsOfFile: url.path), let cg = ui.cgImage else { throw SawtError.failed(L("تعذّرت قراءة القناع")) }
         var gray = [UInt8](repeating: 0, count: w * h)
         let ok: Bool = gray.withUnsafeMutableBytes { buf in
             guard let ctx = CGContext(data: buf.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
@@ -92,7 +92,7 @@ enum Mask {
             ctx.draw(cg, in: EditImage.fillRect(cg, w: w, h: h))
             return true
         }
-        guard ok else { throw SawtError.failed("ما قدرت أجهّز القناع") }
+        guard ok else { throw SawtError.failed(L("تعذّر تجهيز القناع")) }
         return soften(gray, w: w, h: h, grow: grow, feather: feather)
     }
 

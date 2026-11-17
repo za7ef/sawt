@@ -62,13 +62,13 @@ final class UpdateChecker: ObservableObject {
         }
         // بدون إنترنت مفتوح: التحقق التلقائي يتخطى بصمت، واليدوي يطلب سماح
         if force {
-            guard await NetworkGate.shared.permit("التحقق من التحديثات") else { return }
+            guard await NetworkGate.shared.permit(L("التحقق من التحديثات")) else { return }
         } else if !NetworkGate.shared.on { return }
         d.set(now, forKey: "updLastCheck")
         var found = await fromReleases()
         if found == nil { found = await fromFeed() }
         guard let info = found else {
-            if force { lastMessage = "ما قدرت أتحقق من التحديثات الحين." }
+            if force { lastMessage = L("تعذّر التحقق من التحديثات الآن.") }
             return
         }
         // ما نقبل إلا روابط إصدارات المطوّر نفسه
@@ -76,7 +76,7 @@ final class UpdateChecker: ObservableObject {
         if info.build > AppVersion.build {
             available = info
         } else if force {
-            lastMessage = "عندك آخر إصدار (\(AppVersion.version) بناء \(AppVersion.build))."
+            lastMessage = L("لديك أحدث إصدار (%1$@ البناء %2$@).", AppVersion.version, String(AppVersion.build))
         }
     }
 
@@ -96,8 +96,8 @@ struct UpdateSheet: View {
                 Image(systemName: "arrow.down.app.fill").font(.largeTitle).foregroundStyle(Theme.accent)
                 VStack(alignment: .leading) {
                     Text("تحديث جديد متوفر").font(.title3.bold())
-                    Text("الإصدار \(info.version) (بناء \(info.build))").foregroundStyle(.secondary)
-                    Text("عندك: \(AppVersion.version) (بناء \(AppVersion.build))").font(.caption).foregroundStyle(.secondary)
+                    Text(L("الإصدار %1$@ (البناء %2$@)", info.version, String(info.build))).foregroundStyle(.secondary)
+                    Text(L("لديك: %1$@ (البناء %2$@)", AppVersion.version, String(AppVersion.build))).font(.caption).foregroundStyle(.secondary)
                 }
             }
             if let n = info.notes, !n.isEmpty {

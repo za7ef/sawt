@@ -28,7 +28,7 @@ final class VAEEncoder {
         }
         guard d["encoder.conv_in.weight"] != nil, d["encoder.conv_out.weight"] != nil,
               d["encoder.mid_block.attentions.0.to_q.weight"] != nil else {
-            throw SawtError.failed("ملف VAE ما فيه المرمّز")
+            throw SawtError.failed(L("ملف VAE لا يحتوي على المرمِّز"))
         }
         w = KleinWeights(d: d, bits: 0, group: 0)
     }
@@ -120,11 +120,11 @@ enum EditImage {
 
     /// يقرأ صورة بالاتجاه الصحيح (صور الكاميرا مخزنة مدوّرة)
     static func upright(_ url: URL) throws -> CGImage {
-        guard let ui = UIImage(contentsOfFile: url.path) else { throw SawtError.failed("ما قدرت أقرأ الصورة") }
+        guard let ui = UIImage(contentsOfFile: url.path) else { throw SawtError.failed(L("تعذّرت قراءة الصورة")) }
         let fmt = UIGraphicsImageRendererFormat.default()
         fmt.scale = 1
         let img = UIGraphicsImageRenderer(size: ui.size, format: fmt).image { _ in ui.draw(at: .zero) }
-        guard let cg = img.cgImage else { throw SawtError.failed("ما قدرت أقرأ الصورة") }
+        guard let cg = img.cgImage else { throw SawtError.failed(L("تعذّرت قراءة الصورة")) }
         return cg
     }
 
@@ -139,7 +139,7 @@ enum EditImage {
             ctx.draw(cg, in: fillRect(cg, w: w, h: h))
             return true
         }
-        guard ok else { throw SawtError.failed("ما قدرت أجهّز الصورة") }
+        guard ok else { throw SawtError.failed(L("تعذّر تجهيز الصورة")) }
         return bytes
     }
 

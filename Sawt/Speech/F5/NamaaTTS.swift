@@ -51,7 +51,7 @@ final class NamaaVoice: ObservableObject {
         }
     }
 
-    static let testSentence = "هلا والله، كيف حالك اليوم؟ إن شاء الله أمورك طيبة والشغل ماشي تمام."
+    static let testSentence = "أهلًا وسهلًا، كيف حالك اليوم؟ أتمنى أن تكون أمورك بخير وأن يسير عملك على ما يرام."
 
     private var task: Task<Void, Never>?
 
@@ -67,7 +67,7 @@ final class NamaaVoice: ObservableObject {
         guard task == nil else { return }
         task = Task {
             if let why = Storage.spaceProblem(forGB: 1.5) { state = .failed(why); task = nil; return }
-            guard await NetworkGate.shared.permit("تنزيل صوت نماء") else { task = nil; return }
+            guard await NetworkGate.shared.permit(L("تحميل صوت نماء")) else { task = nil; return }
             do {
                 try FileManager.default.createDirectory(at: Self.dir, withIntermediateDirectories: true)
                 var excluded = URLResourceValues(); excluded.isExcludedFromBackup = true
@@ -112,7 +112,7 @@ final class NamaaVoice: ObservableObject {
 
     /// الملف طلع تالف وقت التحميل.
     func markBroken() {
-        state = .failed("ملف الصوت تالف، نزّله مرة ثانية")
+        state = .failed(L("ملف الصوت تالف، حمِّله مرة أخرى"))
         if AppSettings.shared.voiceID == "namaa" { slog("namaa: broken while selected") }
     }
 
@@ -143,13 +143,14 @@ final class NamaaVoice: ObservableObject {
             testing = false
             switch r {
             case .failure(let e):
-                lastTest = "ما زبط: \(e.localizedDescription)"
+                lastTest = L("لم ينجح: %@", e.localizedDescription)
             case .success(let out):
                 let rtf = out.genSeconds / max(out.audioSeconds, 0.01)
-                lastTest = String(format: "التوليد: %.1f ث • طول الصوت: %.1f ث • النسبة: %.2f× (أقل من 1 يعني أسرع من الكلام)",
-                                  out.genSeconds, out.audioSeconds, rtf)
+                lastTest = L("التوليد: %1$@ ث • طول الصوت: %2$@ ث • النسبة: %3$@× (أقل من 1 يعني أسرع من الكلام)",
+                             String(format: "%.1f", out.genSeconds), String(format: "%.1f", out.audioSeconds),
+                             String(format: "%.2f", rtf))
                 if out.loadSeconds > 0.05 {
-                    lastTest! += String(format: "\nالتحميل للذاكرة أول مرة: %.1f ث", out.loadSeconds)
+                    lastTest! += "\n" + L("التحميل إلى الذاكرة أول مرة: %@ ث", String(format: "%.1f", out.loadSeconds))
                 }
                 Speaker.shared.play(samples: out.samples, sampleRate: 24_000)
             }
@@ -172,7 +173,7 @@ enum Downloader {
             do {
                 if let http = downloadTask.response as? HTTPURLResponse, http.statusCode != 200 {
                     throw NSError(domain: "namaa", code: http.statusCode,
-                                  userInfo: [NSLocalizedDescriptionKey: "التنزيل رجع \(http.statusCode)"])
+                                  userInfo: [NSLocalizedDescriptionKey: L("فشل التحميل (رمز %@)", String(http.statusCode))])
                 }
                 try? FileManager.default.removeItem(at: dest)
                 try FileManager.default.moveItem(at: location, to: dest)
@@ -310,7 +311,7 @@ final class NamaaEngine: @unchecked Sendable {
         let raw = dir.appendingPathComponent("raw.safetensors")
         let out = NamaaVoice.modelURL
         if FileManager.default.fileExists(atPath: out.path) { return }
-        guard FileManager.default.fileExists(atPath: raw.path) else { throw NamaaError.missing("ملف النموذج ناقص") }
+        guard FileManager.default.fileExists(atPath: raw.path) else { throw NamaaError.missing(L("ملف النموذج ناقص")) }
         slog("namaa: converting")
         let src = try loadArrays(url: raw)
         var dst: [String: MLXArray] = [:]
@@ -346,7 +347,7 @@ final class NamaaEngine: @unchecked Sendable {
         if dit != nil { return 0 }
         let t0 = Date()
         let dir = NamaaVoice.dir
-        guard NamaaVoice.isInstalled else { throw NamaaError.missing("الصوت مو منزّل") }
+        guard NamaaVoice.isInstalled else { throw NamaaError.missing(L("الصوت غير محمَّل")) }
 
         // المفردات: سطر لكل رمز، والرقم هو ترتيب السطر
         let text = try String(contentsOf: dir.appendingPathComponent("vocab.txt"), encoding: .utf8)
@@ -365,13 +366,13 @@ final class NamaaEngine: @unchecked Sendable {
             slog("namaa: model file broken → removing (\(error))")
             try? FileManager.default.removeItem(at: NamaaVoice.modelURL)
             Task { @MainActor in NamaaVoice.shared.markBroken() }
-            throw NamaaError.missing("ملف صوت نماء تالف، نزّله مرة ثانية من الإعدادات")
+            throw NamaaError.missing(L("ملف صوت نماء تالف، حمِّله مرة أخرى من الإعدادات"))
         }
         eval(model)
 
         var vw = try loadArrays(url: dir.appendingPathComponent("vocos.safetensors"))
         guard let fb = vw.removeValue(forKey: "feature_extractor.filterbank") else {
-            throw NamaaError.missing("ملف Vocos ناقص")
+            throw NamaaError.missing(L("ملف Vocos ناقص"))
         }
         let voc = N5Vocos()
         try voc.update(parameters: ModuleParameters.unflattened(vw), verify: [.all])
@@ -506,7 +507,7 @@ final class NamaaEngine: @unchecked Sendable {
 
     private func generate(_ text: String, speed inSpeed: Double, steps stepsOverride: Int? = nil) throws -> Output {
         let loadS = try loadIfNeeded()
-        guard let dit, let vocos, let filterbank else { throw NamaaError.missing("الصوت مو جاهز") }
+        guard let dit, let vocos, let filterbank else { throw NamaaError.missing(L("الصوت غير جاهز")) }
         let t0 = Date()
         defer { MLX.Memory.clearCache() }
 

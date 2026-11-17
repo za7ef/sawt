@@ -74,7 +74,7 @@ enum AutoMask {
             ctx.draw(edited, in: dst)
             return true
         }
-        guard ok1, let maskImg = grayImage(mask, w: w, h: h) else { throw SawtError.failed("ما قدرت أدمج التعديل") }
+        guard ok1, let maskImg = grayImage(mask, w: w, h: h) else { throw SawtError.failed(L("تعذّر دمج التعديل")) }
         let ok2: Bool = m.withUnsafeMutableBytes { buf in
             guard let ctx = CGContext(data: buf.baseAddress, width: W, height: H, bitsPerComponent: 8, bytesPerRow: W,
                                       space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return false }
@@ -82,7 +82,7 @@ enum AutoMask {
             ctx.draw(maskImg, in: dst)
             return true
         }
-        guard ok2 else { throw SawtError.failed("ما قدرت أدمج التعديل") }
+        guard ok2 else { throw SawtError.failed(L("تعذّر دمج التعديل")) }
         var out = base
         for i in 0 ..< W * H {
             let a = Int(m[i])
@@ -92,7 +92,7 @@ enum AutoMask {
                 out[j] = UInt8((Int(top[j]) * a + Int(base[j]) * (255 - a) + 127) / 255)
             }
         }
-        guard let img = rgbImage(out, w: W, h: H) else { throw SawtError.failed("ما قدرت أدمج التعديل") }
+        guard let img = rgbImage(out, w: W, h: H) else { throw SawtError.failed(L("تعذّر دمج التعديل")) }
         return img
     }
 

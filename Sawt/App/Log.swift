@@ -130,11 +130,11 @@ enum ThermalWatch {
 
     static var label: String {
         switch ProcessInfo.processInfo.thermalState {
-        case .nominal: return "طبيعي"
-        case .fair: return "دافي"
-        case .serious: return "حار"
-        case .critical: return "حار جدًا"
-        @unknown default: return "؟"
+        case .nominal: return L("طبيعية")
+        case .fair: return L("دافئة")
+        case .serious: return L("مرتفعة")
+        case .critical: return L("مرتفعة جدًا")
+        @unknown default: return L("؟")
         }
     }
 }

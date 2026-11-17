@@ -88,7 +88,7 @@ enum KleinError: LocalizedError {
     case missing(String)
     var errorDescription: String? {
         switch self {
-        case .missing(let w): return "ملفات «دقيق» ناقصة (\(w)). احذفه ونزّله من جديد."
+        case .missing(let w): return L("ملفات «دقيق» غير مكتملة (%@). احذفه وحمِّله من جديد.", w)
         }
     }
 }
@@ -609,7 +609,7 @@ enum KleinPipeline {
                                 space: CGColorSpaceCreateDeviceRGB(),
                                 bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
                                 provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent) else {
-            throw SawtError.failed("ما قدرت أحوّل الصورة")
+            throw SawtError.failed(L("تعذّر تحويل الصورة"))
         }
         return img
     }

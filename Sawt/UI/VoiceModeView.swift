@@ -29,7 +29,7 @@ struct VoiceModeView: View {
                     .frame(width: 280, height: 280)
                     .contentShape(Circle())
                     .onTapGesture { call.interrupt() }
-                    .accessibilityLabel("الكرة: اضغط عشان تقاطعه")
+                    .accessibilityLabel("الكرة: اضغط لمقاطعته")
                 // الحالة: نص رمادي صغير يتبدّل بتلاشي ناعم
                 ZStack {
                     Text(statusText ?? " ")
@@ -82,13 +82,13 @@ struct VoiceModeView: View {
             call.onTurnsChanged = nil
         }
         .alert("تنبيه", isPresented: Binding(get: { call.error != nil }, set: { if !$0 { call.error = nil } })) {
-            Button("تمام", role: .cancel) { if call.state == .idle { dismiss() } }
+            Button("حسنًا", role: .cancel) { if call.state == .idle { dismiss() } }
         } message: { Text(call.error ?? "") }
         .alert("الكاميرا في المكالمة", isPresented: $cameraWarn) {
-            Button("شغّل") { cameraWarned = true; Task { await call.toggleCamera() } }
+            Button("تشغيل") { cameraWarned = true; Task { await call.toggleCamera() } }
             Button("إلغاء", role: .cancel) {}
         } message: {
-            Text("مع كل كلام تقوله ينأخذ إطار واحد من الكاميرا ويشوفه النموذج على جوالك. هذا يبدّل النموذج لوضع النظر (ياخذ ثواني)، والرد يتأخر شوي، والجوال يسخن أكثر.")
+            Text("مع كل ما تقوله تُلتقط صورة واحدة من الكاميرا ويراها النموذج على جهازك. هذا ينقل النموذج إلى وضع الرؤية (يستغرق ثواني)، ويتأخر الرد قليلًا، وترتفع حرارة الجهاز أكثر.")
         }
         .sheet(isPresented: $showSettings) {
             CallSettingsSheet(onCamera: {
@@ -169,13 +169,13 @@ struct VoiceModeView: View {
     private var statusText: String? {
         switch call.state {
         case .idle:
-            if let m = models.callMissing { return models.stt.isBusy || models.llm.isBusy ? "يجهّز…" : m }
+            if let m = models.callMissing { return models.stt.isBusy || models.llm.isBusy ? L("جارٍ التجهيز…") : m }
             return nil
-        case .starting: return "يجهّز الصوت…"
-        case .listening: return call.muted ? "المايك مكتوم" : "يستمع…"
-        case .hearing: return "يسمعك…"
-        case .thinking: return "يفكر…"
-        case .speaking: return "يتكلم…"
+        case .starting: return L("جارٍ تجهيز الصوت…")
+        case .listening: return call.muted ? L("الميكروفون مكتوم") : L("يستمع…")
+        case .hearing: return L("يسمعك…")
+        case .thinking: return L("يفكر…")
+        case .speaking: return L("يتكلم…")
         }
     }
 
@@ -230,7 +230,7 @@ struct VoiceModeView: View {
                         .glassEffect(.regular.interactive(), in: .circle)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(call.muted ? "شغّل المايك" : "اكتم المايك")
+                .accessibilityLabel(call.muted ? L("شغّل الميكروفون") : L("اكتم الميكروفون"))
 
                 // الكاميرا: زر دائري بين المايك والإنهاء
                 Button { toggleCamera() } label: {
@@ -244,7 +244,7 @@ struct VoiceModeView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(call.cameraBusy || call.state == .idle || call.state == .starting)
-                .accessibilityLabel(call.cameraOn ? "اطفِ الكاميرا" : "شغّل الكاميرا")
+                .accessibilityLabel(call.cameraOn ? L("أطفئ الكاميرا") : L("شغّل الكاميرا"))
 
                 Button { dismiss() } label: {
                     Image(systemName: "xmark")
@@ -280,15 +280,15 @@ struct CallSettingsSheet: View {
                     }
                     Picker("اللغة", selection: $settings.language) {
                         Text("تلقائي").tag("auto")
-                        Text("عربي").tag("ar")
+                        Text("العربية").tag("ar")
                         Text("English").tag("en")
                     }
                 } footer: {
-                    Text("يتطبق من الكلام الجاي.")
+                    Text("يُطبَّق من الكلام التالي.")
                 }
                 Section {
                     Button(action: onCamera) {
-                        Label(call.cameraOn ? "اطفِ الكاميرا" : "شغّل الكاميرا",
+                        Label(call.cameraOn ? L("أطفئ الكاميرا") : L("شغّل الكاميرا"),
                               systemImage: call.cameraOn ? "video.slash" : "video")
                     }
                     .disabled(call.cameraBusy || call.state == .idle || call.state == .starting)
@@ -335,8 +335,8 @@ struct CallVoiceList: View {
                 }
             } footer: {
                 Text(isNamaa
-                     ? "نماء أبطأ: يتأخر الرد شوي لأنه يولّد كل جملة كاملة."
-                     : "الرد الجاي يطلع بالصوت الجديد. أصوات ثانية تنزلها من الإعدادات ← الصوت.")
+                     ? L("نماء أبطأ: يتأخر الرد قليلًا لأنه يولّد كل جملة كاملة.")
+                     : L("سيأتي الرد التالي بالصوت الجديد. يمكنك تحميل أصوات أخرى من الإعدادات ← الصوت."))
             }
         }
         .navigationTitle("الصوت")
@@ -356,16 +356,16 @@ struct DebugOverlay: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text("الحالة: \(debug.stage)").bold()
+                Text(L("الحالة: %@", "\(debug.stage)")).bold()
                 Spacer()
                 Circle().fill(debug.vadSpeech ? .green : .gray).frame(width: 9, height: 9)
                 Text(String(format: "%.0f dB", debug.micDB)).monospacedDigit()
             }
-            Text("آخر كلام: \(debug.lastTranscript.isEmpty ? "—" : debug.lastTranscript)").lineLimit(2)
-            Text("سمع \(debug.sttMs)ms • أول كلمة \(debug.firstTokenMs)ms • أول صوت \(debug.firstAudioMs)ms")
+            Text(L("آخر كلام: %@", debug.lastTranscript.isEmpty ? "—" : debug.lastTranscript)).lineLimit(2)
+            Text(L("التعرّف %1$@ms • أول كلمة %2$@ms • أول صوت %3$@ms", "\(debug.sttMs)", "\(debug.firstTokenMs)", "\(debug.firstAudioMs)"))
                 .monospacedDigit()
             HStack {
-                Text("ذاكرة \(debug.ramMB)MB • متبقي \(debug.availMB)MB • حرارة \(debug.thermal)").monospacedDigit()
+                Text(L("الذاكرة %1$@MB • المتبقي %2$@MB • الحرارة %3$@", "\(debug.ramMB)", "\(debug.availMB)", debug.thermal)).monospacedDigit()
                 Spacer()
                 Button { shareURL = Log.shared.export() } label: {
                     Image(systemName: "square.and.arrow.up")

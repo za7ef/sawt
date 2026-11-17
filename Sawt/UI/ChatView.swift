@@ -59,12 +59,12 @@ struct ChatView: View {
                               onCompletion: { url in playground.finish(url) },
                               onCancellation: { playground.finish(nil) })
         .imagePlaygroundGenerationStyle(PlaygroundStyles.selected, in: PlaygroundStyles.allowed)
-        .alert("المشغّل طافي — تبي أشغّله وأنفّذ المهمة؟",
+        .alert("المشغّل متوقف — هل تريد تشغيله وتنفيذ المهمة؟",
                isPresented: Binding(get: { store.runnerAsk != nil }, set: { if !$0, store.runnerAsk != nil { store.answerRunnerAsk(run: false) } })) {
             Button("شغّل ونفّذ") { store.answerRunnerAsk(run: true) }
-            Button("لا، دردشة عادية", role: .cancel) { store.answerRunnerAsk(run: false) }
+            Button("لا، محادثة عادية", role: .cancel) { store.answerRunnerAsk(run: false) }
         } message: {
-            Text("المشغّل هو اللي يخليني أشوف الشاشة وأضغط بدالك، وبدونه ما أقدر أنفّذ.")
+            Text("المشغّل هو ما يتيح لي رؤية الشاشة والضغط نيابةً عنك، وبدونه لا أستطيع التنفيذ.")
         }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { img in addImage(img) }.ignoresSafeArea()
@@ -98,9 +98,9 @@ struct ChatView: View {
         .onChange(of: dictation.error) { _, e in if let e { store.error = e; dictation.error = nil } }
         .alert("تنبيه", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             if CloudLLM.active != nil {
-                Button("ارجع للنموذج المحلي") { CloudLLM.setActive(nil); cloudTick += 1; if models.llm == .idle { models.loadAll() } }
+                Button("العودة إلى النموذج المحلي") { CloudLLM.setActive(nil); cloudTick += 1; if models.llm == .idle { models.loadAll() } }
             }
-            Button("تمام", role: .cancel) {}
+            Button("حسنًا", role: .cancel) {}
         } message: { Text(store.error ?? "") }
     }
 
@@ -111,7 +111,7 @@ struct ChatView: View {
                 let _ = cloudTick
                 let cloud = CloudLLM.active
                 let onCPU = cloud == nil && ComputeMode.current == "cpu"
-                Section("كرت الشاشة") {
+                Section("بطاقة الرسومات") {
                     ForEach(Catalog.llms.filter { models.downloaded.contains($0.id) || $0.id == settings.llmID }) { m in
                         Button { pickGPU(m) } label: {
                             if cloud == nil, !onCPU, m.id == settings.llmID { Label(m.title, systemImage: "checkmark") } else { Text(m.title) }
@@ -173,7 +173,7 @@ struct ChatView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("النموذج: \(activeTitle)")
+            .accessibilityLabel(L("النموذج: %@", activeTitle))
             .alert("النماذج السحابية", isPresented: $askCloudConsent) {
                 Button("موافق") {
                     UserDefaults.standard.set(true, forKey: "cloudConsent")
@@ -182,7 +182,7 @@ struct ChatView: View {
                 }
                 Button("إلغاء", role: .cancel) { pendingCloud = nil }
             } message: {
-                Text("النموذج السحابي يرسل لخوادم الخدمة اللي اخترتها: رسايلك والمحادثة السابقة والصور المرفقة (وفي الوكيل نص الشاشة وصورتها)، حسب سياسة خصوصيتها. الطبقات المجانية ممكن تستخدم البيانات لتحسين خدماتها. هالتنبيه يطلع مرة وحدة.")
+                Text("النموذج السحابي يرسل إلى خوادم الخدمة التي اخترتها: رسائلك والمحادثة السابقة والصور المرفقة (وفي الوكيل نص الشاشة وصورتها)، وفق سياسة خصوصيتها. قد تستخدم الباقات المجانية البيانات لتحسين خدماتها. يظهر هذا التنبيه مرة واحدة.")
             }
 
 
@@ -195,7 +195,7 @@ struct ChatView: View {
                 }
                 .accessibilityLabel("محادثة جديدة")
                 Menu {
-                    Menu { modelMenuItems } label: { Label("النموذج: \(activeTitle)", systemImage: "cpu") }
+                    Menu { modelMenuItems } label: { Label(L("النموذج: %@", activeTitle), systemImage: "cpu") }
                     Button { showModels = true } label: { Label("كل النماذج…", systemImage: "square.grid.2x2") }
                 } label: {
                     Image(systemName: "ellipsis").font(.system(size: 20, weight: .semibold)).frame(width: 44, height: 44)
@@ -321,7 +321,7 @@ struct ChatView: View {
                             }
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("انزل لآخر المحادثة")
+                    .accessibilityLabel("الانتقال إلى آخر المحادثة")
                     .padding(.bottom, 10)
                     .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 }
@@ -389,15 +389,15 @@ struct ChatView: View {
                     .padding(.horizontal, 16).padding(.top, 6)
                 }
                 if pending.contains(where: { $0.kind == .image }) && settings.llm.vision {
-                    Text("أول صورة تحتاج تحميل النموذج بوضع النظر، ياخذ ثواني وذاكرة أكثر شوي.")
+                    Text("أول صورة تتطلب تحميل النموذج بوضع الرؤية، ويستغرق ذلك ثواني وذاكرة أكبر قليلًا.")
                         .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16)
                 }
                 if pending.contains(where: { $0.kind == .image }) && !settings.llm.vision {
                     HStack(spacing: 6) {
-                        Text("\(settings.llm.title) ما يشوف الصور، بيقرأ النص اللي فيها بس.")
+                        Text(L("%@ لا يرى الصور، وسيقرأ النص الموجود فيها فقط.", settings.llm.title))
                         if let v = Catalog.llms.first(where: { $0.vision && models.downloaded.contains($0.id) })
                             ?? Catalog.llms.first(where: { $0.vision }) {
-                            Button("بدّل لـ \(v.title)") { models.activate(v) }.font(.caption.weight(.semibold))
+                            Button(L("التبديل إلى %@", v.title)) { models.activate(v) }.font(.caption.weight(.semibold))
                         }
                     }
                     .font(.caption).foregroundStyle(.secondary)
@@ -424,22 +424,22 @@ struct ChatView: View {
                         }
                     }
                 } label: {
-                    Label("محرك الصور: \(ImageEngine(rawValue: imageEngineRaw)?.title ?? "ما اخترت")", systemImage: "photo.artframe")
+                    Label(L("محرك الصور: %@", ImageEngine(rawValue: imageEngineRaw)?.title ?? L("لم يُختر")), systemImage: "photo.artframe")
                 }
             }
             Section {
                 Menu {
                     Picker("بحث في الويب", selection: Binding(get: { net.mode }, set: { setWeb($0) })) {
-                        Text("طافي").tag(NetworkGate.Mode.off)
+                        Text("متوقف").tag(NetworkGate.Mode.off)
                         Text("تلقائي").tag(NetworkGate.Mode.auto)
-                        Text("دايم").tag(NetworkGate.Mode.on)
+                        Text("دائمًا").tag(NetworkGate.Mode.on)
                     }
-                } label: { Label("بحث في الويب: \(net.modeLabel)", systemImage: "globe") }
+                } label: { Label(L("بحث في الويب: %@", net.modeLabel), systemImage: "globe") }
                 Menu {
                     Picker("التفكير", selection: Binding(get: { store.thinkMode }, set: { store.setThinkMode($0) })) {
                         ForEach(ThinkMode.allCases, id: \.self) { Text($0.label).tag($0) }
                     }
-                } label: { Label("التفكير: \(store.thinkMode.label)", systemImage: "brain") }
+                } label: { Label(L("التفكير: %@", store.thinkMode.label), systemImage: "brain") }
             }
         } label: {
             Image(systemName: "plus").font(.system(size: 22, weight: .regular)).frame(width: 40, height: 44)
@@ -469,7 +469,7 @@ struct ChatView: View {
                         chip("paintbrush", "صورة") { imageMode = false }
                     }
                     if net.mode != .off {
-                        chip("globe", net.mode == .auto ? "بحث تلقائي" : "بحث دايم") { applyWeb(.off) }
+                        chip("globe", net.mode == .auto ? "بحث تلقائي" : "بحث دائم") { applyWeb(.off) }
                     }
                     if store.thinkMode == .on {
                         chip("brain", "تفكير عميق") { store.setThinkMode(.off) }
@@ -484,7 +484,7 @@ struct ChatView: View {
         Button(action: off) {
             HStack(spacing: 4) {
                 Image(systemName: icon)
-                Text(title)
+                Text(L(title))
                 Image(systemName: "xmark").font(.caption2.weight(.bold))
             }
             .font(.caption.weight(.medium))
@@ -493,7 +493,7 @@ struct ChatView: View {
             .background(Theme.accent.opacity(0.15), in: Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(title)، اضغط عشان تطفيه")
+        .accessibilityLabel(L("%@، اضغط لإيقافه", L(title)))
     }
 
     private var micButton: some View {
@@ -526,7 +526,7 @@ struct ChatView: View {
                 stateChips
                 HStack(alignment: .bottom, spacing: 4) {
                     attachMenu
-                    ComposerField(text: $draft, placeholder: dictation.isRecording ? "أسمعك…" : (imageMode ? "صِف الصورة" : "اسأل صوت"),
+                    ComposerField(text: $draft, placeholder: dictation.isRecording ? L("أستمع إليك…") : (imageMode ? L("صِف الصورة") : L("اسأل Sowtly")),
                                   focused: $focused, clearToken: sendGen)
                     micButton
                     actionButton.padding(.trailing, 4)
@@ -545,11 +545,11 @@ struct ChatView: View {
             .animation(.easeOut(duration: 0.2), value: store.thinkMode)
             .animation(.easeOut(duration: 0.2), value: imageMode)
         }
-        .alert("بيتم الوصول للإنترنت", isPresented: Binding(get: { webPending != nil }, set: { if !$0 { webPending = nil } })) {
+        .alert("سيتم الوصول إلى الإنترنت", isPresented: Binding(get: { webPending != nil }, set: { if !$0 { webPending = nil } })) {
             Button("متابعة") { netWarned = true; if let m = webPending { applyWeb(m) }; webPending = nil }
             Button("إلغاء", role: .cancel) { webPending = nil }
         } message: {
-            Text("سؤالك بيروح لمحرك بحث (DuckDuckGo، أو ويكيبيديا كبديل) عشان يجيب صفحات، والباقي يظل على جوالك. لما تطفي البحث ينقطع التطبيق عن الإنترنت.")
+            Text("سيُرسل سؤالك إلى محرك بحث (DuckDuckGo، أو ويكيبيديا كبديل) لجلب الصفحات، ويبقى الباقي على جهازك. عند إيقاف البحث ينقطع التطبيق عن الإنترنت.")
         }
     }
 
@@ -600,7 +600,7 @@ struct ChatView: View {
         let needsLLM = !isImage || ImageIntent.needsModel(ImageIntent.strip(raw), engine: ImageEngine.selected)
         guard !needsLLM || models.llm.isReady || CloudLLM.active != nil
                 || (LLMService.onCPU && LlamaModelFile.isDownloaded) else {
-            store.error = models.llm.isBusy ? "النموذج للحين يتجهز، لحظات." : "اختر نموذج ونزّله من شاشة النماذج أول."
+            store.error = models.llm.isBusy ? L("النموذج قيد التجهيز، لحظات.") : L("اختر نموذجًا وحمِّله من شاشة النماذج أولًا.")
             if !models.llm.isBusy { showModels = true }
             return
         }
@@ -643,10 +643,10 @@ struct EmptyState: View {
                 .frame(width: 110, height: 110)
                 .scaleEffect(appear ? 1 : 0.6)
                 .opacity(appear ? 1 : 0)
-            Text("وش في بالك؟").font(.title2.weight(.semibold))
+            Text("بماذا تفكر؟").font(.title2.weight(.semibold))
             let _ = cloudTick
-            Text(CloudLLM.active.map { "النموذج السحابي: \($0.short) — رسايلك تروح لسيرفراته" }
-                 ?? "النموذج يشتغل على جوالك، والإنترنت مقفول إلا إذا شغّلته")
+            Text(CloudLLM.active.map { L("النموذج السحابي: %@ — تُرسل رسائلك إلى خوادمه", $0.short) }
+                 ?? L("النموذج يعمل على جهازك، والإنترنت مغلق إلا إذا فعّلته"))
                 .font(.subheadline).foregroundStyle(.secondary)
             Button(action: startVoice) {
                 Label("ابدأ مكالمة صوتية", systemImage: "waveform")
@@ -899,9 +899,9 @@ struct ThinkingSection: View {
     }
 
     private var title: String {
-        if live { return "يفكر…" }
-        if let s = seconds { return (auto ? "فكّر تلقائيًا " : "فكّر لمدة ") + "\(max(1, Int(s.rounded())))ث" }
-        return "التفكير"
+        if live { return L("يفكر…") }
+        if let s = seconds { return L(auto ? "فكّر تلقائيًا %@ث" : "فكّر لمدة %@ث", String(max(1, Int(s.rounded())))) }
+        return L("التفكير")
     }
 }
 

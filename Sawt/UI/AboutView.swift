@@ -3,7 +3,7 @@ import SwiftUI
 enum AppVersion {
     static var version: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?" }
     static var build: Int { Int(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") ?? 0 }
-    static var label: String { "الإصدار \(version) (بناء \(build))" }
+    static var label: String { L("الإصدار %1$@ (البناء %2$@)", version, String(build)) }
 }
 
 /// يقرأ ملف Markdown من مجلد About داخل التطبيق.
@@ -15,7 +15,7 @@ enum AboutText {
            let s = try? String(contentsOf: u, encoding: .utf8) { return s }
         guard let url = Bundle.main.url(forResource: name, withExtension: "md")
             ?? Bundle.main.url(forResource: name, withExtension: "md", subdirectory: "About"),
-              let s = try? String(contentsOf: url, encoding: .utf8) else { return "ما لقيت النص." }
+              let s = try? String(contentsOf: url, encoding: .utf8) else { return L("تعذّر العثور على النص.") }
         return s
     }
 }
@@ -72,15 +72,15 @@ struct AboutSection: View {
                     .foregroundStyle(LinearGradient(colors: [Theme.accent, Theme.accent2],
                                                     startPoint: .topLeading, endPoint: .bottomTrailing))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("صوت").font(.headline)
+                    Text(verbatim: "Sowtly").font(.headline)
                     Text(AppVersion.label).font(.caption).foregroundStyle(.secondary)
-                    Text("مساعد ذكي يشتغل على جوالك").font(.caption).foregroundStyle(.secondary)
+                    Text("مساعد ذكي يعمل على جهازك").font(.caption).foregroundStyle(.secondary)
                 }
             }
             .padding(.vertical, 4)
-            NavigationLink("عن صوت والتراخيص") { MarkdownPage(title: "حول التطبيق", file: "about") }
-            NavigationLink("سياسة الاستخدام") { MarkdownPage(title: "سياسة الاستخدام", file: "terms") }
-            NavigationLink("سياسة الخصوصية") { MarkdownPage(title: "سياسة الخصوصية", file: "privacy") }
+            NavigationLink("عن Sowtly والتراخيص") { MarkdownPage(title: L("حول التطبيق"), file: "about") }
+            NavigationLink("سياسة الاستخدام") { MarkdownPage(title: L("سياسة الاستخدام"), file: "terms") }
+            NavigationLink("سياسة الخصوصية") { MarkdownPage(title: L("سياسة الخصوصية"), file: "privacy") }
             Button("تحقق من التحديثات") { Task { await UpdateChecker.shared.check(force: true) } }
         }
     }

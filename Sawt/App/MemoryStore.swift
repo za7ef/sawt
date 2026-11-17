@@ -366,13 +366,13 @@ struct MemoryView: View {
     var body: some View {
         List {
             Section {
-                Toggle("الذاكرة شغالة", isOn: $store.enabled)
+                Toggle("تفعيل الذاكرة", isOn: $store.enabled)
             } footer: {
-                Text("يحفظ معلومات مهمة عنك من المحادثات عشان يتذكرها بعدين. كل شي محفوظ على جوالك بس.")
+                Text("يحفظ معلومات مهمة عنك من المحادثات ليتذكرها لاحقًا. كل شيء محفوظ على جهازك فقط.")
             }
             Section {
                 if store.items.isEmpty {
-                    Text("ما فيه شي محفوظ للحين").foregroundStyle(.secondary)
+                    Text("لا يوجد شيء محفوظ بعد").foregroundStyle(.secondary)
                 }
                 ForEach(store.items) { item in
                     Button {
@@ -391,7 +391,7 @@ struct MemoryView: View {
                     }
                     .swipeActions(edge: .leading) {
                         Button { store.togglePin(item.id) } label: {
-                            Label(item.isPinned ? "إلغاء التثبيت" : "تثبيت", systemImage: item.isPinned ? "pin.slash" : "pin")
+                            Label(item.isPinned ? L("إلغاء التثبيت") : L("تثبيت"), systemImage: item.isPinned ? "pin.slash" : "pin")
                         }
                         .tint(.orange)
                     }
@@ -399,9 +399,9 @@ struct MemoryView: View {
                 .onDelete { idx in store.delete(idx.map { store.items[$0].id }) }
                 Button { draft = ""; adding = true } label: { Label("أضف معلومة", systemImage: "plus") }
             } header: {
-                Text("المحفوظ (\(store.items.count))")
+                Text(L("المحفوظ (%@)", String(store.items.count)))
             } footer: {
-                Text("اسحب يمين على أي معلومة عشان تثبّتها: المثبّتة تنضاف للتعليمات دايمًا وما تتغير تلقائيًا.")
+                Text("اسحب أي معلومة لتثبيتها: المعلومات المثبّتة تُضاف إلى التعليمات دائمًا ولا تتغير تلقائيًا.")
             }
             if !store.trash.isEmpty {
                 Section {
@@ -409,14 +409,14 @@ struct MemoryView: View {
                         HStack {
                             Text(item.text).foregroundStyle(.secondary)
                             Spacer()
-                            Button("رجّع") { store.restore(item.id) }.buttonStyle(.borderless)
+                            Button("استعادة") { store.restore(item.id) }.buttonStyle(.borderless)
                         }
                     }
-                    Button("فضّي السلة", role: .destructive) { store.emptyTrash() }
+                    Button("أفرغ السلة", role: .destructive) { store.emptyTrash() }
                 } header: {
-                    Text("انحذفت تلقائيًا")
+                    Text("حُذفت تلقائيًا")
                 } footer: {
-                    Text("لما تقول إن معلومة غلط أو تطلب أنساها، تنحذف هنا وتقدر ترجّعها خلال ٧ أيام.")
+                    Text("عندما تقول إن معلومة خاطئة أو تطلب نسيانها، تُنقل إلى هنا ويمكنك استعادتها خلال ٧ أيام.")
                 }
             }
             if !store.items.isEmpty {
@@ -437,7 +437,7 @@ struct MemoryView: View {
             Button("حفظ") { store.add(draft) }
             Button("إلغاء", role: .cancel) {}
         }
-        .confirmationDialog("تحذف كل الذاكرة؟", isPresented: $confirmAll, titleVisibility: .visible) {
+        .confirmationDialog("حذف كل الذاكرة؟", isPresented: $confirmAll, titleVisibility: .visible) {
             Button("حذف الكل", role: .destructive) { store.deleteAll() }
         }
     }
@@ -453,10 +453,10 @@ struct MemoryMeta: View {
                     Circle().frame(width: 4, height: 4).opacity(i <= item.level ? 0.9 : 0.2)
                 }
             }
-            .accessibilityLabel("الأهمية \(item.level) من 5")
-            if let c = item.category { Text(c) }
+            .accessibilityLabel(L("الأهمية %@ من 5", String(item.level)))
+            if let c = item.category { Text(L(c)) }
             if let e = item.expires {
-                Text("لين \(e.formatted(.dateTime.day().month(.abbreviated)))")
+                Text(L("حتى %@", e.formatted(.dateTime.day().month(.abbreviated).locale(AppLang.locale))))
             }
         }
         .font(.caption2)

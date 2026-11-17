@@ -15,18 +15,18 @@ struct ImageModelsSection: View {
     var body: some View {
         Section {
             Picker("المحرك", selection: $engineRaw) {
-                Text("ما اخترت").tag("")
-                ForEach(ImageEngine.allCases) { e in Text("\(e.title) · \(e.tag)").tag(e.rawValue) }
+                Text("لم تختر").tag("")
+                ForEach(ImageEngine.allCases) { e in Text(verbatim: "\(e.title) · \(e.tag)").tag(e.rawValue) }
             }
             VStack(alignment: .leading, spacing: 4) {
                 Toggle("حسّن الوصف بالنموذج", isOn: $enhance)
                 Text(enhance
-                     ? "كل وصف (عربي أو إنجليزي) يكتبه نموذج المحادثة وصف إنجليزي مفصّل: الأسلوب والإضاءة والتكوين وكلمات الجودة، مع قائمة أشياء نتجنبها."
-                     : "الوصف الإنجليزي يروح مباشرة (أسرع وبدون تحميل النموذج). العربي يترجمه نموذج المحادثة لـStable Diffusion وImage Playground لأنهم ما يفهمون عربي، وGemini ياخذه زي ما هو.")
+                     ? L("كل وصف (عربي أو إنجليزي) يحوّله نموذج المحادثة إلى وصف إنجليزي مفصّل: الأسلوب والإضاءة والتكوين وكلمات الجودة، مع قائمة بما يجب تجنبه.")
+                     : L("الوصف الإنجليزي يُرسَل مباشرة (أسرع ودون تحميل النموذج). أما العربي فيترجمه نموذج المحادثة لـStable Diffusion وImage Playground لأنهما لا يفهمان العربية، ويأخذه Gemini كما هو."))
                     .font(.caption).foregroundStyle(.secondary)
             }
             if engineRetired && engineRaw.isEmpty {
-                Text("المحرك اللي كنت مختاره انشال من التطبيق، وملفاته انحذفت من جوالك. اختر «واقعي» أو «فني» أو «دقيق» أو «واقعي+» ونزّله.")
+                Text("المحرك الذي كنت تختاره أُزيل من التطبيق، وحُذفت ملفاته من جهازك. اختر «واقعي» أو «فني» أو «دقيق» أو «واقعي+» وحمِّله.")
                     .font(.caption).foregroundStyle(.orange)
             }
             ForEach([ImageEngine.sdReal, .sdArt, .klein, .zimage]) { sdRow($0) }
@@ -34,9 +34,9 @@ struct ImageModelsSection: View {
         } header: {
             Text("الصور")
         } footer: {
-            Text("ما نبدّل بين المحركات تلقائيًا: لو المختار ما اشتغل يقول لك السبب. المحركات المحلية (Stable Diffusion و«دقيق» و«واقعي+») تشتغل على جوالك (تفك نموذج المحادثة وقت الرسم وترجعه بعدين). Gemini مدفوع وما له مجاني: تقريبًا ‎$0.067 للصورة (1K)، وLite تقريبًا ‎$0.034، ويستخدم مفتاح Gemini حقك.")
+            Text("لا نبدّل بين المحركات تلقائيًا: إن لم يعمل المحرك المختار يخبرك بالسبب. المحركات المحلية (Stable Diffusion و«دقيق» و«واقعي+») تعمل على جهازك (تُفرِّغ نموذج المحادثة أثناء الرسم ثم تعيده). Gemini مدفوع وليس له خيار مجاني: نحو ‎$0.067 للصورة (1K)، وLite نحو ‎$0.034، ويستخدم مفتاح Gemini الخاص بك.")
         }
-        .confirmationDialog("تحذف النموذج؟", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
+        .confirmationDialog("حذف النموذج؟", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
                             titleVisibility: .visible) {
             Button("حذف", role: .destructive) { if let e = confirmDelete { sd.delete(e) }; confirmDelete = nil }
         }
@@ -60,27 +60,27 @@ struct ImageModelsSection: View {
                         Button(role: .destructive) { confirmDelete = e } label: { Image(systemName: "trash") }
                             .buttonStyle(.borderless)
                     } else {
-                        Button("تنزيل") { sd.download(e) }.buttonStyle(.borderless)
+                        Button("تحميل") { sd.download(e) }.buttonStyle(.borderless)
                     }
                 }
             }
             switch sd.state[e] ?? .idle {
             case .downloading(let p):
-                ProgressView(value: p) { Text(String(format: "%ld٪", Int(p * 100))).font(.caption2) }
+                ProgressView(value: p) { Text(L("%@٪", String(Int(p * 100)))).font(.caption2) }
             case .failed(let why):
                 Text(why).font(.caption).foregroundStyle(.red)
             case .idle:
-                if installed { Text("منزّل ✓").font(.caption).foregroundStyle(.green) }
+                if installed { Text("محمَّل ✓").font(.caption).foregroundStyle(.green) }
             }
         }
     }
 
     private static func detail(_ e: ImageEngine) -> String {
         switch e {
-        case .sdReal: "صور واقعية (ناس وأماكن). 512×512، ٦ خطوات، ~0.9 GB"
-        case .klein: "مبني على Bonsai من PrismML · ~4.1 GB (مع أداة الإزالة LaMa) · 512×512 بأربع خطوات. يفهم الوصف الطويل ويطلع تفاصيل أدق، ويعدّل الصور (يحتاج جوال بذاكرة 8GB)."
-        case .zimage: "مبني على Z-Image Turbo من Tongyi-MAI · ~5.9 GB (أو ~3.6 GB لو «دقيق» منزّل، لأنهم يتشاركون مُرمّز النص) · 512×512 بثماني خطوات. أبطأ وأقوى في الواقعية (يحتاج جوال بذاكرة 8GB)."
-        default: "رسم وفن وخيال. 512×512، ٨ خطوات، ~1 GB"
+        case .sdReal: L("صور واقعية (أشخاص وأماكن). 512×512، ٦ خطوات، ~0.9 GB")
+        case .klein: L("مبني على Bonsai من PrismML · ~4.1 GB (مع أداة الإزالة LaMa) · 512×512 بأربع خطوات. يفهم الوصف الطويل ويُخرج تفاصيل أدق، ويعدّل الصور (يحتاج جهازًا بذاكرة 8GB).")
+        case .zimage: L("مبني على Z-Image Turbo من Tongyi-MAI · ~5.9 GB (أو ~3.6 GB إن كان «دقيق» محمَّلًا، لأنهما يتشاركان مُرمِّز النص) · 512×512 بثماني خطوات. أبطأ وأقوى في الواقعية (يحتاج جهازًا بذاكرة 8GB).")
+        default: L("رسم وفن وخيال. 512×512، ٨ خطوات، ~1 GB")
         }
     }
 
@@ -89,7 +89,7 @@ struct ImageModelsSection: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Image Playground")
-                    Text("نافذة آبل تنفتح بالوصف جاهز وتأكّد منها. في iOS 27 يرسم على سحابة آبل الخاصة (يحتاج نت).")
+                    Text("تُفتح نافذة Apple والوصف جاهز لتؤكده. في iOS 27 يرسم على سحابة Apple الخاصة (يحتاج إلى الإنترنت).")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -97,7 +97,7 @@ struct ImageModelsSection: View {
                     .buttonStyle(.borderless)
             }
             if let ok = probeNote {
-                Text(ok ? "متاح ✓" : "مو متاح: شغّل Apple Intelligence وتوليد الصور من الإعدادات، وتأكد إن لغة الجهاز ومنطقته مدعومة.")
+                Text(ok ? L("متاح ✓") : L("غير متاح: فعّل Apple Intelligence وتوليد الصور من الإعدادات، وتأكد أن لغة الجهاز ومنطقته مدعومتان."))
                     .font(.caption).foregroundStyle(ok ? Color.green : Color.red)
             }
             Picker("النمط", selection: $styleID) {

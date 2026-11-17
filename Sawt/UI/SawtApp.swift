@@ -84,7 +84,7 @@ struct SawtApp: App {
                 .sheet(item: $updater.available) { UpdateSheet(info: $0).environment(\.layoutDirection, AppLang.layout) }
                 .alert("التحديثات", isPresented: Binding(get: { updater.lastMessage != nil },
                                                         set: { if !$0 { updater.lastMessage = nil } })) {
-                    Button("تمام", role: .cancel) {}
+                    Button("حسنًا", role: .cancel) {}
                 } message: { Text(updater.lastMessage ?? "") }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
                     slog("⚠️ memory warning: footprint=\(RAM.footprintMB)MB avail=\(RAM.availableMB)MB llm=\(AppSettings.shared.llmID) stt=\(AppSettings.shared.sttID) voice=\(AppSettings.shared.voiceID)")

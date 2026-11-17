@@ -22,14 +22,14 @@ struct GGUFSpec: Sendable, Identifiable, Hashable {
 
     static let gemma = GGUFSpec(id: "gemma", name: "Gemma 4 E2B", repo: "unsloth/gemma-4-E2B-it-GGUF", file: "gemma-4-E2B-it-Q4_K_M.gguf",
                                 bytes: 3_106_738_272, template: .gemma,
-                                ramGB: 3.4, speed: "سريع", arabic: "عربي جيد", tag: "الافتراضي")
+                                ramGB: 3.4, speed: L("سريع"), arabic: L("عربي جيد"), tag: L("الافتراضي"))
     /// Qwen3.5-4B (هجين Gated DeltaNet) — مدعوم في llama.cpp b12387
     static let qwen = GGUFSpec(id: "qwen", name: "Qwen3.5-4B", repo: "unsloth/Qwen3.5-4B-GGUF", file: "Qwen3.5-4B-Q4_K_M.gguf",
                                bytes: 2_740_937_888, template: .chatml,
-                               ramGB: 3.3, speed: "أبطأ", arabic: "عربي ممتاز", tag: "الأذكى")
+                               ramGB: 3.3, speed: L("أبطأ"), arabic: L("عربي ممتاز"), tag: L("الأذكى"))
     static let qwen2b = GGUFSpec(id: "qwen2b", name: "Qwen3.5-2B", repo: "unsloth/Qwen3.5-2B-GGUF", file: "Qwen3.5-2B-Q4_K_M.gguf",
                                  bytes: 1_280_835_840, template: .chatml,
-                                 ramGB: 1.8, speed: "سريع جدًا", arabic: "عربي جيد", tag: "الأخف")
+                                 ramGB: 1.8, speed: L("سريع جدًا"), arabic: L("عربي جيد"), tag: L("الأخف"))
     static let all: [GGUFSpec] = [.gemma, .qwen, .qwen2b]
 
     static func == (a: GGUFSpec, b: GGUFSpec) -> Bool { a.id == b.id }
@@ -113,22 +113,22 @@ final class LlamaDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
         guard !running else { return }
         let need = spec.bytes + 300_000_000
         if LlamaModelFile.freeBytes < need {
-            message = "المساحة ما تكفي: تحتاج \(ByteCountFormatter.string(fromByteCount: need, countStyle: .file)) فاضية، والمتوفر \(ByteCountFormatter.string(fromByteCount: LlamaModelFile.freeBytes, countStyle: .file))"
+            message = L("المساحة غير كافية: يلزم %1$@ متاحة، والمتوفر %2$@", ByteCountFormatter.string(fromByteCount: need, countStyle: .file), ByteCountFormatter.string(fromByteCount: LlamaModelFile.freeBytes, countStyle: .file))
             return
         }
-        running = true; progress = 0; message = "ينزّل…"
+        running = true; progress = 0; message = L("جارٍ التحميل…")
         slog("llama: download start \(spec.remote)")
         task = session.downloadTask(with: spec.remote)
         task?.resume()
     }
 
-    func cancel() { task?.cancel(); task = nil; running = false; message = "انلغى" }
+    func cancel() { task?.cancel(); task = nil; running = false; message = L("أُلغي") }
 
     func delete() {
         try? FileManager.default.removeItem(at: spec.url)
         let eng = LlamaEngine.of(spec)
         Task { await eng.unload() }
-        downloaded = false; message = "انحذف"
+        downloaded = false; message = L("حُذف")
     }
 
     nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
@@ -151,7 +151,7 @@ final class LlamaDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
             self.downloaded = self.spec.isDownloaded
             if self.downloaded, self.activateWhenDone { GGUFSpec.choose(self.spec) }
             self.activateWhenDone = false
-            self.message = err.map { "فشل الحفظ: \($0)" } ?? (self.downloaded ? "جاهز ✅" : "الملف ناقص، نزّله مرة ثانية")
+            self.message = err.map { L("فشل الحفظ: %@", $0) } ?? (self.downloaded ? L("جاهز ✅") : L("الملف غير مكتمل، حمِّله مرة أخرى"))
             slog("llama: download finished ok=\(self.downloaded) \(err ?? "")")
         }
     }
@@ -160,7 +160,7 @@ final class LlamaDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
         guard let error else { return }
         MainActor.assumeIsolated {
             self.running = false
-            if (error as NSError).code != NSURLErrorCancelled { self.message = "فشل التنزيل: \(error.localizedDescription)" }
+            if (error as NSError).code != NSURLErrorCancelled { self.message = L("فشل التحميل: %@", error.localizedDescription) }
             slog("llama: download error \(error)")
         }
     }
@@ -219,7 +219,7 @@ actor LlamaEngine {
     func benchThreads() throws -> String {
         #if LLAMA
         try load()
-        guard let ctx else { throw SawtError.notReady("نموذج المعالج") }
+        guard let ctx else { throw SawtError.notReady(L("نموذج المعالج")) }
         let all = Int32(ProcessInfo.processInfo.activeProcessorCount)
         var best: (Int32, Double) = (perfCores(), 0)
         var lines: [String] = []
@@ -235,9 +235,9 @@ actor LlamaEngine {
         }
         UserDefaults.standard.set(Int(best.0), forKey: "llamaThreads")
         llama_set_n_threads(ctx, best.0, max(best.0, all - 1))
-        return "الأسرع \(best.0) خيوط — " + lines.joined(separator: "، ") + " رمز/ث"
+        return L("الأسرع %1$@ خيوط — %2$@ رمز/ث", "\(best.0)", lines.joined(separator: L("، ")))
         #else
-        throw SawtError.notReady("محرك المعالج ما انبنى في هذي النسخة")
+        throw SawtError.notReady(L("محرك المعالج غير مضمَّن في هذه النسخة"))
         #endif
     }
 
@@ -257,7 +257,7 @@ actor LlamaEngine {
     func load() throws {
         #if LLAMA
         if ctx != nil { return }
-        guard spec.isDownloaded else { throw SawtError.notReady("\(spec.name) (نزّله أول)") }
+        guard spec.isDownloaded else { throw SawtError.notReady(L("%@ (حمِّله أولًا)", spec.name)) }
         let t0 = Date()
         llama_backend_init()
         var mp = llama_model_default_params()
@@ -268,7 +268,7 @@ actor LlamaEngine {
             mp.devices = buf.baseAddress
             return llama_model_load_from_file(spec.url.path, mp)
         }
-        guard let m else { throw SawtError.failed("ما قدرت أحمّل نموذج المعالج") }
+        guard let m else { throw SawtError.failed(L("تعذّر تحميل نموذج المعالج")) }
         var cp = llama_context_default_params()
         cp.n_ctx = nCtx
         cp.n_batch = 512
@@ -286,12 +286,12 @@ actor LlamaEngine {
         if spec.template == .chatml { cp.n_ctx = 6144 }   // تعليمات عربية + قائمة عناصر طويلة
         guard let c = llama_init_from_model(m, cp) else {
             llama_model_free(m)
-            throw SawtError.failed("ما قدرت أجهّز سياق نموذج المعالج")
+            throw SawtError.failed(L("تعذّر تجهيز سياق نموذج المعالج"))
         }
         model = m; ctx = c; vocab = llama_model_get_vocab(m); cached = []
         slog("llama: [\(spec.name)] loaded in \(Int(Date().timeIntervalSince(t0) * 1000))ms threads=\(p)/\(cp.n_threads_batch) ctx=\(nCtx) kv=q8_0 avail=\(RAM.availableMB)MB")
         #else
-        throw SawtError.notReady("محرك المعالج ما انبنى في هذي النسخة")
+        throw SawtError.notReady(L("محرك المعالج غير مضمَّن في هذه النسخة"))
         #endif
     }
 
@@ -370,7 +370,7 @@ actor LlamaEngine {
                   grammar: String? = nil) throws -> Int {
         #if LLAMA
         try load()
-        guard let ctx, let vocab else { throw SawtError.notReady("نموذج المعالج") }
+        guard let ctx, let vocab else { throw SawtError.notReady(L("نموذج المعالج")) }
         // على المعالج: آخر ٦ رسائل بس، وكل رسالة قديمة مقصوصة (الـprefill هو أبطأ جزء)
         var history = history
         if trimForCPU {
@@ -391,7 +391,7 @@ actor LlamaEngine {
             }
         }
         if toks.count > budget {
-            throw SawtError.failed("الرسالة أطول من سياق النموذج (\(toks.count) > \(budget))")
+            throw SawtError.failed(L("الرسالة أطول من سياق النموذج (%1$@ > %2$@)", String(toks.count), String(budget)))
         }
         // كاش البداية المشتركة
         var common = 0
@@ -405,7 +405,7 @@ actor LlamaEngine {
         let t0 = Date()
         guard decode(Array(toks[common...])) else {
             llama_memory_clear(mem, true); cached = []
-            throw SawtError.failed("llama: فشل معالجة الرسالة")
+            throw SawtError.failed(L("llama: فشلت معالجة الرسالة"))
         }
         let prefillMs = Int(Date().timeIntervalSince(t0) * 1000)
         cached = toks
@@ -454,7 +454,7 @@ actor LlamaEngine {
         slog("llama: [\(spec.name)] gen \(n) tok in \(Int(dt * 1000))ms ≈ \(String(format: "%.1f", Double(n) / max(dt, 0.001))) tok/s first=\(firstID) prefill=\(prefillMs)ms")
         return n
         #else
-        throw SawtError.notReady("محرك المعالج ما انبنى في هذي النسخة")
+        throw SawtError.notReady(L("محرك المعالج غير مضمَّن في هذه النسخة"))
         #endif
     }
 

@@ -9,10 +9,10 @@ enum DeviceFit {
 
     /// الميزانية = اللي يقدر التطبيق يستخدمه فعليًا قبل ما يقفله النظام (تقريبي ومتحفظ).
     static let tiers: [Tier] = [
-        Tier(ramGB: 4, budgetGB: 2.0, label: "آيفون 12 وأحدث"),
-        Tier(ramGB: 6, budgetGB: 3.2, label: "آيفون 13 Pro و14 وأحدث"),
-        Tier(ramGB: 8, budgetGB: 4.6, label: "آيفون 15 Pro و16 وأحدث"),
-        Tier(ramGB: 12, budgetGB: 7.5, label: "آيفون 17 Pro وأحدث"),
+        Tier(ramGB: 4, budgetGB: 2.0, label: L("iPhone 12 وأحدث")),
+        Tier(ramGB: 6, budgetGB: 3.2, label: L("iPhone 13 Pro و14 وأحدث")),
+        Tier(ramGB: 8, budgetGB: 4.6, label: L("iPhone 15 Pro و16 وأحدث")),
+        Tier(ramGB: 12, budgetGB: 7.5, label: L("iPhone 17 Pro وأحدث")),
     ]
 
     /// المكالمة تحتاج زيادة للصوت والمايك.

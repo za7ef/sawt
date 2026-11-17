@@ -64,7 +64,7 @@ struct ImageViewer: View {
             }
         }
         .alert(alert ?? "", isPresented: Binding(get: { alert != nil }, set: { if !$0 { alert = nil } })) {
-            Button("تمام", role: .cancel) {}
+            Button("حسنًا", role: .cancel) {}
         }
     }
 
@@ -75,17 +75,17 @@ struct ImageViewer: View {
             Button { dismiss() } label: { circle("xmark") }.accessibilityLabel("إغلاق")
             Spacer()
             Menu {
-                Button { UIPasteboard.general.image = ui; flash("انسخت") } label: { Label("نسخ الصورة", systemImage: "doc.on.doc") }
+                Button { UIPasteboard.general.image = ui; flash(L("نُسخت")) } label: { Label("نسخ الصورة", systemImage: "doc.on.doc") }
                 if let p = prompt, !p.isEmpty {
-                    Button { UIPasteboard.general.string = p; flash("انسخ الوصف") } label: { Label("نسخ الوصف", systemImage: "text.quote") }
+                    Button { UIPasteboard.general.string = p; flash(L("نُسخ الوصف")) } label: { Label("نسخ الوصف", systemImage: "text.quote") }
                     Button { withAnimation { showPrompt.toggle() } } label: {
-                        Label(showPrompt ? "إخفاء الوصف" : "عرض الوصف", systemImage: "text.alignleft")
+                        Label(showPrompt ? L("إخفاء الوصف") : L("عرض الوصف"), systemImage: "text.alignleft")
                     }
                 }
             } label: { circle("ellipsis") }
             .accessibilityLabel("خيارات")
             Button { save() } label: { circle("arrow.down.to.line") }.accessibilityLabel("حفظ في الصور")
-            ShareLink(item: Image(uiImage: ui), preview: SharePreview("صورة من صوت", image: Image(uiImage: ui))) {
+            ShareLink(item: Image(uiImage: ui), preview: SharePreview("صورة من Sowtly", image: Image(uiImage: ui))) {
                 Text("مشاركة").font(.system(size: 16, weight: .semibold)).foregroundStyle(.black)
                     .padding(.horizontal, 18).frame(height: 44)
                     .background(.white, in: Capsule())
@@ -101,7 +101,7 @@ struct ImageViewer: View {
             toolButton("تعديل", "paintbrush.pointed") { open(.notes) }
             Menu {
                 ForEach(Self.aspects, id: \.title) { a in
-                    Button { resize(a) } label: { Label("\(a.title) (\(a.w):\(a.h))", systemImage: a.icon) }
+                    Button { resize(a) } label: { Label(L(a.title) + " (\(a.w):\(a.h))", systemImage: a.icon) }
                 }
             } label: { toolLabel("تغيير الحجم", "aspectratio") }
             .accessibilityLabel("تغيير الحجم")
@@ -131,14 +131,14 @@ struct ImageViewer: View {
             Image(systemName: icon).font(.system(size: 20)).foregroundStyle(.white)
                 .frame(width: 56, height: 56)
                 .background(.white.opacity(0.14), in: Circle())
-            Text(title).font(.caption2).foregroundStyle(.white.opacity(0.85))
+            Text(L(title)).font(.caption2).foregroundStyle(.white.opacity(0.85))
                 .multilineTextAlignment(.center).lineLimit(2).fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
     }
 
     private func toolButton(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) { toolLabel(title, icon) }.buttonStyle(.plain).accessibilityLabel(title)
+        Button(action: action) { toolLabel(title, icon) }.buttonStyle(.plain).accessibilityLabel(L(title))
     }
 
     // MARK: الأفعال
@@ -146,10 +146,10 @@ struct ImageViewer: View {
     /// المحرك المختار لو يقدر يعدّل ومنزّل، وإلا رسالة توضح
     static func editEngine() -> (ImageEngine?, String?) {
         guard let e = ImageEngine.selected, e.canEdit else {
-            return (nil, "أدوات التعديل تشتغل مع «دقيق» أو «واقعي+». اختر واحد منهم من زر + ← محرك الصور.")
+            return (nil, L("أدوات التعديل تعمل مع «دقيق» أو «واقعي+». اختر أحدهما من زر + ← محرك الصور."))
         }
-        guard SDModels.installed(e) else { return (nil, "نموذج \(e.title) مو منزّل. نزّله من الإعدادات ← الصور.") }
-        if ChatStore.shared.isGenerating { return (nil, "فيه رد أو صورة شغّالة الحين. انتظرها تخلص.") }
+        guard SDModels.installed(e) else { return (nil, L("نموذج %@ غير محمَّل. حمِّله من الإعدادات ← الصور.", e.title)) }
+        if ChatStore.shared.isGenerating { return (nil, L("يوجد رد أو صورة قيد التنفيذ الآن. انتظر حتى تنتهي.")) }
         return (e, nil)
     }
 
@@ -169,7 +169,7 @@ struct ImageViewer: View {
     private func send(_ text: String, _ plan: EditPlan) {
         let (e, why) = Self.editEngine()
         guard e != nil else { alert = why; return }
-        guard let a = try? Attachments.addImage(ui, name: "صورة") else { alert = "ما قدرت أجهّز الصورة."; return }
+        guard let a = try? Attachments.addImage(ui, name: "صورة") else { alert = L("تعذّر تجهيز الصورة."); return }
         tool = nil
         dismiss()
         ChatStore.shared.generateImage(text, source: a, plan: plan)
@@ -183,13 +183,13 @@ struct ImageViewer: View {
     private func save() {
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { st in
             guard st == .authorized || st == .limited else {
-                Task { @MainActor in flash("اسمح بالحفظ من الإعدادات") }
+                Task { @MainActor in flash(L("اسمح بالحفظ من الإعدادات")) }
                 return
             }
             PHPhotoLibrary.shared().performChanges {
                 _ = PHAssetChangeRequest.creationRequestForAsset(from: ui)
             } completionHandler: { ok, _ in
-                Task { @MainActor in flash(ok ? "انحفظت ✓" : "ما انحفظت") }
+                Task { @MainActor in flash(ok ? L("حُفظت ✓") : L("لم تُحفظ")) }
             }
         }
     }
@@ -232,7 +232,7 @@ private struct ToolHeader<Trailing: View>: View {
             }
             .accessibilityLabel("رجوع")
             Spacer()
-            Text(title).font(.headline)
+            Text(L(title)).font(.headline)
             Spacer()
             trailing
         }
@@ -282,8 +282,8 @@ struct NotesEditView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .padding(.horizontal)
-                Text(notes.isEmpty ? "اضغط على الصورة لإضافة ملاحظات دقيقة حول التعديل"
-                                   : "الملاحظات تعدّل حول النقاط بس. اضغط على رقم عشان تشيله.")
+                Text(notes.isEmpty ? L("اضغط على الصورة لإضافة ملاحظات دقيقة حول التعديل")
+                                   : L("الملاحظات تعدّل ما حول النقاط فقط. اضغط على رقم لإزالته."))
                     .font(.footnote).foregroundStyle(.white.opacity(0.7))
                     .multilineTextAlignment(.center).padding(.horizontal)
                 ForEach(Array(notes.enumerated()), id: \.offset) { i, n in
@@ -307,8 +307,8 @@ struct NotesEditView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .alert("وش تبي يتغيّر هنا؟", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
-            TextField("مثلًا: خلها حمرا", text: $noteText)
+        .alert("ماذا تريد أن يتغيّر هنا؟", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
+            TextField("مثلًا: اجعلها حمراء", text: $noteText)
             Button("إضافة") {
                 if let p = pending, !noteText.trimmed.isEmpty { notes.append((p, noteText.trimmed)) }
                 pending = nil
@@ -394,13 +394,13 @@ struct MarkupView: View {
                     .onChange(of: geo.size) { _, g in canvasSize = EditFiles.fitted(ui.size, in: g) }
                 }
                 .padding(.horizontal)
-                Text("ارسم على المكان اللي تبي تعدّله، وبعدين اضغط السهم").font(.footnote).foregroundStyle(.white.opacity(0.7))
+                Text("ارسم على المكان الذي تريد تعديله، ثم اضغط السهم").font(.footnote).foregroundStyle(.white.opacity(0.7))
                     .padding(.bottom, 90)   // مكان شريط أدوات القلم
             }
         }
         .preferredColorScheme(.dark)
-        .alert("وش تبي يصير بالمكان المعلّم؟", isPresented: $asking) {
-            TextField("مثلًا: حط هنا شجرة", text: $instruction)
+        .alert("ماذا تريد أن يحدث في المكان المحدد؟", isPresented: $asking) {
+            TextField("مثلًا: ضع هنا شجرة", text: $instruction)
             Button("إرسال") { send() }
             Button("إلغاء", role: .cancel) {}
         }
@@ -561,7 +561,7 @@ struct RemoveView: View {
                     }
                     .disabled(strokes.isEmpty)
                     Spacer()
-                    Text("لوّن فوق الشي اللي تبي تشيله").font(.footnote).foregroundStyle(.white.opacity(0.7))
+                    Text("لوّن فوق الشيء الذي تريد إزالته").font(.footnote).foregroundStyle(.white.opacity(0.7))
                 }
                 .buttonStyle(.plain).foregroundStyle(.white)
                 .padding(.horizontal).padding(.bottom, 12)
@@ -572,13 +572,13 @@ struct RemoveView: View {
 
     private var lamaBanner: some View {
         VStack(spacing: 8) {
-            Text("الإزالة في «دقيق» تستخدم أداة LaMa (حوالي ٢١٦ ميقا) وتحتاج تنزيل مرة وحدة.")
+            Text("الإزالة في «دقيق» تستخدم أداة LaMa (حوالي ٢١٦ ميغابايت) وتحتاج إلى تحميلها مرة واحدة.")
                 .font(.footnote).foregroundStyle(.white.opacity(0.85)).multilineTextAlignment(.center)
             if let p = models.lamaProgress {
                 ProgressView(value: p).tint(.white)
                 Button("إلغاء") { models.cancelLaMa() }.font(.footnote)
             } else {
-                Button("نزّل أداة الإزالة") { models.downloadLaMa() }
+                Button("حمِّل أداة الإزالة") { models.downloadLaMa() }
                     .font(.footnote.bold()).foregroundStyle(.black)
                     .padding(.horizontal, 14).padding(.vertical, 8).background(.white, in: Capsule())
             }

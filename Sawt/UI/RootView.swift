@@ -59,11 +59,11 @@ struct RootView: View {
                     }
             }
             .background(Color.black.ignoresSafeArea())
-            .alert("التطبيق انقفل المرة اللي فاتت", isPresented: $crashNotice) {
-                Button("صدّر السجل") { shareURL = Log.shared.export() }
-                Button("خلاص", role: .cancel) {}
+            .alert("أُغلق التطبيق في المرة السابقة", isPresented: $crashNotice) {
+                Button("صدِّر السجل") { shareURL = Log.shared.export() }
+                Button("حسنًا", role: .cancel) {}
             } message: {
-                Text("كان وقتها في: \(Log.shared.previousStage). السجل محفوظ، صدّره وأرسله عشان نعرف السبب.")
+                Text(L("كان حينها في: %@. السجل محفوظ؛ صدِّره وأرسله لنعرف السبب.", Log.shared.previousStage))
             }
             .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) {
                 if let u = shareURL { ActivityView(items: [u]) }
@@ -168,14 +168,14 @@ struct DrawerView: View {
             if searching {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("دوّر في المحادثات", text: $search).focused($searchFocused)
+                    TextField("ابحث في المحادثات", text: $search).focused($searchFocused)
                 }
                 .padding(.horizontal, 14).frame(height: 44)
                 .glassEffect(.regular, in: .capsule)
                 Button("إلغاء") { search = ""; searching = false; searchFocused = false }
                     .foregroundStyle(.secondary)
             } else {
-                Text("صوت").font(.largeTitle.weight(.bold))
+                Text(verbatim: "Sowtly").font(.largeTitle.weight(.bold))
                 Spacer()
                 Button {
                     searching = true
@@ -199,9 +199,9 @@ struct DrawerView: View {
 
     private var nav: some View {
         VStack(alignment: .leading, spacing: 4) {
-            navRow("wand.and.stars", "الوكيل") { showAgent = true }
-            navRow("waveform", "مكالمة صوتية") { store.stop(); showVoice = true }
-            navRow("cpu", "النماذج") { showModels = true }
+            navRow("wand.and.stars", L("الوكيل")) { showAgent = true }
+            navRow("waveform", L("مكالمة صوتية")) { store.stop(); showVoice = true }
+            navRow("cpu", L("النماذج")) { showModels = true }
         }
     }
 
@@ -228,7 +228,7 @@ struct DrawerView: View {
                     Button {
                         store.select(c.id); close()
                     } label: {
-                        Text(c.title).font(.body).lineLimit(1)
+                        Text(c.title == "محادثة جديدة" ? L(c.title) : c.title).font(.body).lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                     }
@@ -251,7 +251,7 @@ struct DrawerView: View {
                 }
             }
             if shown.isEmpty {
-                Text(searching ? "ما لقيت شي" : "ما فيه محادثات للحين").foregroundStyle(.secondary).padding(14)
+                Text(searching ? L("لا توجد نتائج") : L("لا توجد محادثات بعد")).foregroundStyle(.secondary).padding(14)
             }
             let total = filtered.filter { !$0.messages.isEmpty || $0.id == store.currentID }.count
             if !searching, !showAll, total > recentLimit {
@@ -307,21 +307,21 @@ struct CrashRecoveryView: View {
             Spacer()
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 44)).foregroundStyle(.orange)
-            Text("التطبيق انقفل فجأة المرة اللي فاتت").font(.title3.weight(.semibold))
-            Text("كان وقتها في: \(Log.shared.previousStage.isEmpty ? "غير معروف" : Log.shared.previousStage)")
+            Text("أُغلق التطبيق فجأة في المرة السابقة").font(.title3.weight(.semibold))
+            Text(L("كان حينها في: %@", Log.shared.previousStage.isEmpty ? L("غير معروف") : Log.shared.previousStage))
                 .font(.footnote).foregroundStyle(.secondary)
-            Text("صدّر السجل وأرسله عشان نعرف السبب. تقدر بعدها تكمل عادي، أو تفتح بدون تحميل النموذج إذا تكرر الانقفال.")
+            Text("صدِّر السجل وأرسله لنعرف السبب. بعدها يمكنك المتابعة كالمعتاد، أو الفتح دون تحميل النموذج إذا تكرر الإغلاق.")
                 .font(.callout).multilineTextAlignment(.center).foregroundStyle(.secondary)
                 .padding(.horizontal, 24)
             Button {
                 shareURL = Log.shared.export()
             } label: {
-                Label("صدّر السجل", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity).padding(.vertical, 6)
+                Label("صدِّر السجل", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity).padding(.vertical, 6)
             }
             .buttonStyle(.borderedProminent)
-            Button { onContinue(true) } label: { Text("كمّل عادي").frame(maxWidth: .infinity).padding(.vertical, 6) }
+            Button { onContinue(true) } label: { Text("تابع كالمعتاد").frame(maxWidth: .infinity).padding(.vertical, 6) }
                 .buttonStyle(.bordered)
-            Button { onContinue(false) } label: { Text("افتح بدون تحميل النموذج").frame(maxWidth: .infinity).padding(.vertical, 6) }
+            Button { onContinue(false) } label: { Text("افتح دون تحميل النموذج").frame(maxWidth: .infinity).padding(.vertical, 6) }
                 .buttonStyle(.bordered)
             Spacer()
         }

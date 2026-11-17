@@ -23,7 +23,7 @@ final class NeuCodecDecoder {
         let raw = try loadArrays(url: file)
         guard raw["acoustic_decoder.head.linear.weight"] != nil, raw["quantizer.project_out.weight"] != nil,
               raw["acoustic_decoder.layers.11.mlp.fc2.weight"] != nil else {
-            throw SawtError.failed("ملف مفكك الصوت ناقص")
+            throw SawtError.failed(L("ملف مفكك الصوت ناقص"))
         }
         w = raw
         // RoPE في NeuCodec: المواضع هي أرقام الرؤوس (0…15) مو الزمن، بأسلوب rotate_half (θ=10000)

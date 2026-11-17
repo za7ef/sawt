@@ -10,24 +10,45 @@ struct SettingsView: View {
     @AppStorage("llmDevice") private var llmDevice = "gpu"
     @AppStorage("imageEngine") private var imageEngine = ""
     @State private var used: String?
+    @State private var appLang = AppLang.choice
+    @State private var showRestart = false
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    SettingsRow(icon: "waveform", color: .purple, title: "الصوت والمكالمة", sub: voiceName) { VoiceSettingsPage() }
-                    SettingsRow(icon: "cpu", color: .blue, title: "النماذج", sub: modelSummary) { ModelsView(embedded: true) }
-                    SettingsRow(icon: "paintpalette.fill", color: .pink, title: "الصور", sub: ImageEngine(rawValue: imageEngine)?.title ?? "ما اخترت محرك") { ImageSettingsPage() }
-                    SettingsRow(icon: "iphone.gen3", color: .orange, title: "الوكيل والتحكم بالجوال", sub: "تجريبي") { PhoneControlView() }
+                    SettingsRow(icon: "waveform", color: .purple, title: L("الصوت والمكالمة"), sub: voiceName) { VoiceSettingsPage() }
+                    SettingsRow(icon: "cpu", color: .blue, title: L("النماذج"), sub: modelSummary) { ModelsView(embedded: true) }
+                    SettingsRow(icon: "paintpalette.fill", color: .pink, title: L("الصور"), sub: ImageEngine(rawValue: imageEngine)?.title ?? L("لم تختر محركًا")) { ImageSettingsPage() }
+                    SettingsRow(icon: "iphone.gen3", color: .orange, title: L("الوكيل والتحكم بالجهاز"), sub: L("تجريبي")) { PhoneControlView() }
                 }
                 Section {
-                    SettingsRow(icon: "person.fill", color: .teal, title: "عنك والشخصية", sub: "الذاكرة: \(memory.items.count)") { ProfileSettingsPage() }
-                    SettingsRow(icon: "lock.shield.fill", color: .green, title: "الخصوصية والسحابة", sub: CloudLLM.active.map { "سحابي: \($0.title)" } ?? "على الجهاز") { PrivacyCloudPage() }
-                    SettingsRow(icon: "internaldrive.fill", color: .gray, title: "التخزين والتشخيص", sub: used) { StorageDiagPage() }
+                    SettingsRow(icon: "person.fill", color: .teal, title: L("عنك والشخصية"), sub: L("الذاكرة: %@", String(memory.items.count))) { ProfileSettingsPage() }
+                    SettingsRow(icon: "lock.shield.fill", color: .green, title: L("الخصوصية والسحابة"), sub: CloudLLM.active.map { L("سحابي: %@", $0.title) } ?? L("على الجهاز")) { PrivacyCloudPage() }
+                    SettingsRow(icon: "internaldrive.fill", color: .gray, title: L("التخزين والتشخيص"), sub: used) { StorageDiagPage() }
                 }
                 Section {
-                    SettingsRow(icon: "info", color: .indigo, title: "حول صوت", sub: AppVersion.label) { AboutPage() }
+                    Picker(selection: $appLang) {
+                        Text("حسب لغة الجهاز").tag("system")
+                        Text(verbatim: "العربية").tag("ar")
+                        Text(verbatim: "English").tag("en")
+                    } label: {
+                        Label("لغة التطبيق", systemImage: "globe")
+                    }
+                    .onChange(of: appLang) { _, v in
+                        AppLang.set(v)
+                        showRestart = true
+                    }
                 }
+                Section {
+                    SettingsRow(icon: "info", color: .indigo, title: L("حول Sowtly"), sub: AppVersion.label) { AboutPage() }
+                }
+            }
+            .alert("تغيير اللغة", isPresented: $showRestart) {
+                Button("أعد التشغيل الآن") { exit(0) }
+                Button("لاحقًا", role: .cancel) {}
+            } message: {
+                Text("يُطبَّق التغيير بعد إعادة تشغيل التطبيق.")
             }
             .task {
                 let u = await Task.detached(priority: .utility) { Storage.usage() }.value
@@ -40,12 +61,12 @@ struct SettingsView: View {
     }
 
     private var voiceName: String {
-        Catalog.allVoices.first { $0.id == settings.voiceID }?.title ?? "صوت آبل"
+        Catalog.allVoices.first { $0.id == settings.voiceID }?.title ?? L("صوت Apple")
     }
 
     private var modelSummary: String {
-        if let c = CloudLLM.active { return "سحابي: \(c.title)" }
-        let dev = llmDevice == "cpu" ? "المعالج" : "كرت الشاشة"
+        if let c = CloudLLM.active { return L("سحابي: %@", c.title) }
+        let dev = llmDevice == "cpu" ? L("المعالج") : L("معالج الرسوميات")
         let name = llmDevice == "cpu" ? GGUFSpec.active.name : (Catalog.llms.first { $0.id == settings.llmID }?.title ?? "")
         return name.isEmpty ? dev : "\(name) • \(dev)"
     }
@@ -119,14 +140,14 @@ struct VoiceSettingsPage: View {
                         }
                     }
                     Button {
-                        Speaker.shared.speak("هلا والله! أنا صوت، أسمعك وأرد عليك على طول. وش ودك نسولف فيه اليوم؟")
+                        Speaker.shared.speak(L("مرحبًا! أنا Sowtly، أسمعك وأرد عليك فورًا. عن ماذا تحب أن نتحدث اليوم؟"))
                     } label: {
                         Label("جرّب الصوت", systemImage: "play.circle")
                     }
                 } header: {
                     Text("الصوت")
                 } footer: {
-                    Text("ننصح بنبرة سعودية للمكالمات. الإنجليزي يُقرأ بصوت آبل.")
+                    Text("ننصح بالنبرة السعودية للمكالمات. النص الإنجليزي يُقرأ بصوت Apple.")
                 }
 
                 Section {
@@ -136,9 +157,9 @@ struct VoiceSettingsPage: View {
                     namaaDownloadRow
                     audarDownloadRow
                 } header: {
-                    Text("أصوات للتنزيل")
+                    Text("أصوات للتحميل")
                 } footer: {
-                    Text("تنزل مرة وحدة وتشتغل بدون نت. التراخيص في «حول صوت».")
+                    Text("تُحمَّل مرة واحدة وتعمل دون إنترنت. التراخيص في «حول Sowtly».")
                 }
 
                 Section("سرعة الكلام") {
@@ -152,26 +173,26 @@ struct VoiceSettingsPage: View {
                         Text("الصبر")
                     } minimumValueLabel: { Text("سريع") } maximumValueLabel: { Text("صبور") }
                 } header: {
-                    Text("متى يرد")
+                    Text("متى يرد؟")
                 } footer: {
-                    Text("سريع: يرد أول ما تسكت. صبور: يعطيك وقت تفكر.")
+                    Text("سريع: يرد بمجرد أن تتوقف عن الكلام. صبور: يمنحك وقتًا للتفكير.")
                 }
 
                 Section {
                     Picker("اللغة", selection: $settings.language) {
                         Text("تلقائي").tag("auto")
-                        Text("عربي").tag("ar")
+                        Text("العربية").tag("ar")
                         Text("English").tag("en")
                     }
                     .pickerStyle(.segmented)
                     if !AppleSTT.supportsOnDevice {
-                        Toggle("اسمح لسمع آبل يستخدم الإنترنت", isOn: $allowAppleServer)
+                        Toggle("اسمح لتعرّف Apple على الكلام باستخدام الإنترنت", isOn: $allowAppleServer)
                     }
                 } header: {
-                    Text("لغة السمع")
+                    Text("لغة التعرّف على الكلام")
                 } footer: {
                     if !AppleSTT.supportsOnDevice {
-                        Text("جوالك يحتاج نت عشان يسمع العربي بسمع آبل.")
+                        Text("يحتاج جهازك إلى الإنترنت للتعرّف على الكلام العربي عبر Apple.")
                     }
                 }
 
@@ -184,7 +205,7 @@ struct VoiceSettingsPage: View {
                 } header: {
                     Text("متقدم: أودار")
                 } footer: {
-                    Text("ستة أصوات من نموذج واحد، وأقوى شي باللهجة الخليجية. «جرّب» يستخدم صوت أودار المختار، أو الأول لو مختار صوت ثاني.")
+                    Text("ستة أصوات من نموذج واحد، وأفضلها في اللهجة الخليجية. «جرّب» يستخدم صوت أودار المختار، أو الأول إن كان المختار صوتًا آخر.")
                 }
 
                 Section {
@@ -192,19 +213,19 @@ struct VoiceSettingsPage: View {
                 } header: {
                     Text("متقدم: نماء (تجريبي)")
                 } footer: {
-                    Text("أبطأ ويسخّن الجوال. خطوات أقل = أسرع، أكثر = أوضح.")
+                    Text("أبطأ ويرفع حرارة الجهاز. خطوات أقل = أسرع، وأكثر = أوضح.")
                 }
 
         }
         .alert("نماء ثقيل على المكالمات", isPresented: $namaaWarn) {
-            Button("تمام") {}
+            Button("حسنًا") {}
         } message: {
-            Text("يتأخر الرد لأنه يولّد كل جملة كاملة قبل ما يتكلم، ويسخّن الجوال.")
+            Text("يتأخر الرد لأنه يولّد كل جملة كاملة قبل أن يتكلم، ويرفع حرارة الجهاز.")
         }
-        .confirmationDialog("تحذف صوت نماء؟", isPresented: $confirmNamaaDelete, titleVisibility: .visible) {
+        .confirmationDialog("حذف صوت نماء؟", isPresented: $confirmNamaaDelete, titleVisibility: .visible) {
             Button("حذف", role: .destructive) { namaa.delete(); models.voiceChanged() }
         }
-        .confirmationDialog("تحذف أصوات أودار؟", isPresented: $confirmAudarDelete, titleVisibility: .visible) {
+        .confirmationDialog("حذف أصوات أودار؟", isPresented: $confirmAudarDelete, titleVisibility: .visible) {
             Button("حذف", role: .destructive) { audar.delete(); models.voiceChanged() }
         }
         .navigationTitle("الصوت والمكالمة")
@@ -220,9 +241,9 @@ struct VoiceSettingsPage: View {
                 case .downloading(let p):
                     ProgressView(value: p).frame(maxWidth: 160)
                 case .failed(let m):
-                    Text("ما كمل: \(m)").font(.caption).foregroundStyle(.red)
+                    Text(L("لم يكتمل: %@", m)).font(.caption).foregroundStyle(.red)
                 case .idle:
-                    Text(voiceDL.installed(item) ? "نازل على جوالك" : item.approx).font(.caption).foregroundStyle(.secondary)
+                    Text(voiceDL.installed(item) ? L("مُحمَّل على جهازك") : item.approx).font(.caption).foregroundStyle(.secondary)
                 }
             }
             Spacer()
@@ -235,7 +256,7 @@ struct VoiceSettingsPage: View {
             } else if case .downloading = voiceDL.state[item.id] ?? .idle {
                 EmptyView()
             } else {
-                Button("تنزيل") { voiceDL.download(item) }.buttonStyle(.borderless)
+                Button("تحميل") { voiceDL.download(item) }.buttonStyle(.borderless)
             }
         }
     }
@@ -244,18 +265,18 @@ struct VoiceSettingsPage: View {
     @ViewBuilder private var namaaDownloadRow: some View {
         HStack {
             VStack(alignment: .leading, spacing: 3) {
-                Text(Catalog.namaaVoice?.title ?? "نماء سعودي (تجريبي)")
+                Text(Catalog.namaaVoice?.title ?? L("نماء سعودي (تجريبي)"))
                 switch namaa.state {
                 case .downloading(let p):
                     ProgressView(value: p).frame(maxWidth: 160)
                 case .converting:
-                    Text("يجهّز النموذج… (دقيقة تقريبًا)").font(.caption).foregroundStyle(.secondary)
+                    Text("جارٍ تجهيز النموذج… (دقيقة تقريبًا)").font(.caption).foregroundStyle(.secondary)
                 case .failed(let m):
-                    Text("ما كمل: \(m)").font(.caption).foregroundStyle(.red)
+                    Text(L("لم يكتمل: %@", m)).font(.caption).foregroundStyle(.red)
                 case .ready:
-                    Text("نازل على جوالك").font(.caption).foregroundStyle(.secondary)
+                    Text("مُحمَّل على جهازك").font(.caption).foregroundStyle(.secondary)
                 case .notDownloaded:
-                    Text("~1.4 GB تنزيل • ~700 MB بعدها").font(.caption).foregroundStyle(.secondary)
+                    Text("تحميل ~1.4 GB • ~700 MB بعده").font(.caption).foregroundStyle(.secondary)
                 }
             }
             Spacer()
@@ -268,7 +289,7 @@ struct VoiceSettingsPage: View {
             case .converting:
                 ProgressView()
             case .notDownloaded, .failed:
-                Button("تنزيل") { namaa.download() }.buttonStyle(.borderless)
+                Button("تحميل") { namaa.download() }.buttonStyle(.borderless)
             }
         }
     }
@@ -282,9 +303,9 @@ struct VoiceSettingsPage: View {
                 case .downloading(let p):
                     ProgressView(value: p).frame(maxWidth: 160)
                 case .failed(let m):
-                    Text("ما كمل: \(m)").font(.caption).foregroundStyle(.red)
+                    Text(L("لم يكتمل: %@", m)).font(.caption).foregroundStyle(.red)
                 case .ready:
-                    Text("نازل على جوالك").font(.caption).foregroundStyle(.secondary)
+                    Text("مُحمَّل على جهازك").font(.caption).foregroundStyle(.secondary)
                 case .notDownloaded:
                     Text("~840 MB • عربي (فصحى وخليجي) وإنجليزي").font(.caption).foregroundStyle(.secondary)
                 }
@@ -297,7 +318,7 @@ struct VoiceSettingsPage: View {
             case .downloading:
                 Button("إلغاء", role: .cancel) { audar.cancel() }.buttonStyle(.borderless)
             case .notDownloaded, .failed:
-                Button("تنزيل") { audar.download() }.buttonStyle(.borderless)
+                Button("تحميل") { audar.download() }.buttonStyle(.borderless)
             }
         }
     }
@@ -319,7 +340,7 @@ struct VoiceSettingsPage: View {
                 Text(r).font(.caption).foregroundStyle(.secondary)
             }
         } else {
-            Text("نزّله من «أصوات للتنزيل» فوق.").foregroundStyle(.secondary)
+            Text("حمِّله من «أصوات للتحميل» في الأعلى.").foregroundStyle(.secondary)
         }
     }
 
@@ -340,13 +361,13 @@ struct VoiceSettingsPage: View {
                 Text("6 (أسرع)").tag(6)
                 Text("7 (مقترح)").tag(7)
                 Text("8").tag(8)
-                Text("16 (أعلى جودة، بطيء)").tag(16)
+                Text("16 (أعلى جودة، أبطأ)").tag(16)
             }
             if let r = namaa.lastTest {
                 Text(r).font(.caption).foregroundStyle(.secondary)
             }
         } else {
-            Text("نزّله من «أصوات للتنزيل» فوق.").foregroundStyle(.secondary)
+            Text("حمِّله من «أصوات للتحميل» في الأعلى.").foregroundStyle(.secondary)
         }
     }
 
@@ -356,24 +377,26 @@ struct VoiceSettingsPage: View {
 
 struct CPUTestsSection: View {
     @State private var cpuTest: String?
+    @State private var cpuFailed = false
 
     var body: some View {
         Section {
             Button("اختبر المعالج") {
-                cpuTest = "يختبر المعالج…"
+                cpuTest = L("جارٍ اختبار المعالج…")
                 Task {
                     let r = await LLMService.shared.cpuSelfTest()
-                    cpuTest = r.ok ? "المعالج يشتغل (\(r.info))" : "المعالج ما اشتغل: \(r.info)"
+                    cpuTest = r.ok ? L("المعالج يعمل (%@)", r.info) : L("لم يعمل المعالج: %@", r.info)
+                    cpuFailed = !r.ok
                 }
             }
             Button("اختبر سرعة الخيوط (٢/٤/٦)") {
-                cpuTest = "يقيس السرعة… (دقيقة تقريبًا)"
+                cpuTest = L("جارٍ قياس السرعة… (دقيقة تقريبًا)")
                 Task { cpuTest = await LLMService.shared.cpuThreadBench() }
             }
         } header: {
             Text("متقدم")
         } footer: {
-            if let cpuTest { Text(cpuTest).foregroundStyle(cpuTest.contains("ما اشتغل") ? Color.red : Color.secondary) }
+            if let cpuTest { Text(cpuTest).foregroundStyle(cpuFailed ? Color.red : Color.secondary) }
         }
     }
 }
@@ -406,7 +429,7 @@ struct ProfileSettingsPage: View {
             } header: {
                 Text("عنك")
             } footer: {
-                Text("اختياري، وعلى جوالك بس.")
+                Text("اختياري، ويبقى على جهازك فقط.")
             }
 
             Section {
@@ -416,12 +439,12 @@ struct ProfileSettingsPage: View {
                     LabeledContent("الذاكرة", value: "\(memory.items.count)")
                 }
             } footer: {
-                Text("محفوظة على جوالك بس، وتقدر تعدّلها.")
+                Text("محفوظة على جهازك فقط، ويمكنك تعديلها.")
             }
 
             Section {
                 TextEditor(text: $settings.persona).frame(minHeight: 160)
-                Button("رجّع الافتراضي") { settings.persona = AppSettings.defaultPersona }
+                Button("استعادة الافتراضي") { settings.persona = AppSettings.defaultPersona }
             } header: {
                 Text("شخصية المساعد")
             }
@@ -438,7 +461,7 @@ struct PrivacyCloudPage: View {
         Form {
             CloudSections(showActivate: true)
             Section {
-                NavigationLink("سياسة الخصوصية") { MarkdownPage(title: "سياسة الخصوصية", file: "privacy") }
+                NavigationLink("سياسة الخصوصية") { MarkdownPage(title: L("سياسة الخصوصية"), file: "privacy") }
             }
         }
         .navigationTitle("الخصوصية والسحابة")
@@ -460,9 +483,9 @@ struct StorageDiagPage: View {
             Section {
                 if let u = usage {
                     LabeledContent("النماذج اللغوية", value: Storage.format(u.models))
-                    LabeledContent("الكاش", value: Storage.format(u.cache))
+                    LabeledContent("ذاكرة التخزين المؤقت", value: Storage.format(u.cache))
                 } else {
-                    HStack { ProgressView(); Text("يحسب…").foregroundStyle(.secondary) }
+                    HStack { ProgressView(); Text("جارٍ الحساب…").foregroundStyle(.secondary) }
                 }
                 if !unused.isEmpty {
                     Button(role: .destructive) {
@@ -474,13 +497,13 @@ struct StorageDiagPage: View {
                                        value: Storage.format(unused.reduce(0) { $0 + $1.bytes }))
                     }
                 }
-                Button("حذف الكاش") {
+                Button("مسح ذاكرة التخزين المؤقت") {
                     Task.detached { Storage.clearCache() ; await refreshUsage() }
                 }
             } header: {
                 Text("التخزين")
             } footer: {
-                Text("حذف الكاش ما يمسح النماذج.")
+                Text("مسح ذاكرة التخزين المؤقت لا يحذف النماذج.")
             }
 
             Section("التشخيص") {
@@ -490,7 +513,7 @@ struct StorageDiagPage: View {
                     Label("تصدير السجل", systemImage: "square.and.arrow.up")
                 }
                 LabeledContent("ذاكرة التطبيق", value: "\(RAM.footprintMB) MB")
-                LabeledContent("حرارة الجوال", value: ThermalWatch.label)
+                LabeledContent("حرارة الجهاز", value: ThermalWatch.label)
             }
 
             Section {
@@ -498,12 +521,12 @@ struct StorageDiagPage: View {
             }
         }
         .task { await refreshUsage() }
-        .confirmationDialog("تحذف كل النماذج من الجوال؟", isPresented: $confirmAll, titleVisibility: .visible) {
+        .confirmationDialog("حذف كل النماذج من الجهاز؟", isPresented: $confirmAll, titleVisibility: .visible) {
             Button("حذف الكل", role: .destructive) {
                 models.deleteAllModels()
                 Task { await refreshUsage() }
             }
-        } message: { Text("بتحتاج تنزلها من جديد.") }
+        } message: { Text("ستحتاج إلى تحميلها من جديد.") }
         .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) {
             if let u = shareURL { ActivityView(items: [u]) }
         }
@@ -529,7 +552,7 @@ struct StorageDiagPage: View {
 struct AboutPage: View {
     var body: some View {
         Form { AboutSection() }
-            .navigationTitle("حول صوت")
+            .navigationTitle("حول Sowtly")
             .navigationBarTitleDisplayMode(.inline)
     }
 }

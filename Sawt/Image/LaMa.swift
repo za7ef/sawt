@@ -38,7 +38,7 @@ enum LaMa {
     static func model() async throws -> MLModel {
         lock.lock(); let c = cached; lock.unlock()
         if let c { return c }
-        guard installed else { throw SawtError.notReady("أداة الإزالة") }
+        guard installed else { throw SawtError.notReady(L("أداة الإزالة")) }
         if !FileManager.default.fileExists(atPath: compiledURL.path) {
             let tmp = try await MLModel.compileModel(at: dir.appendingPathComponent("LaMa.mlpackage"))
             try? FileManager.default.removeItem(at: compiledURL)
@@ -62,13 +62,13 @@ enum LaMa {
         let model = try await model()
         let inputs = model.modelDescription.inputDescriptionsByName
         guard let ic = inputs["image"]?.imageConstraint, let mc = inputs["mask"]?.imageConstraint else {
-            throw SawtError.failed("نموذج الإزالة ما فيه المدخلات المتوقعة")
+            throw SawtError.failed(L("نموذج الإزالة لا يحتوي على المدخلات المتوقعة"))
         }
         // القناع بأبعاد الصورة: نوسّعه شوي (حواف الشي وظله) ونليّنه للدمج
         let soft = try Mask.load(maskURL, w: w, h: h, grow: 8, feather: 4)
         let hard = soft.map { $0 > 8 ? UInt8(255) : UInt8(0) }
         guard let maskCG = gray(hard, w: w, h: h), let softCG = gray(soft, w: w, h: h) else {
-            throw SawtError.failed("ما قدرت أجهّز القناع")
+            throw SawtError.failed(L("تعذّر تجهيز القناع"))
         }
         // Core ML يصغّر الصورة والقناع لـ800×800 بنفسه حسب القيود
         let opts: [MLFeatureValue.ImageOption: Any] = [.cropAndScale: VNImageCropAndScaleOption.scaleFill.rawValue]
@@ -77,7 +77,7 @@ enum LaMa {
         let input = try MLDictionaryFeatureProvider(dictionary: ["image": img, "mask": msk])
         let out = try await model.prediction(from: input)
         guard let buf = out.featureValue(for: "output")?.imageBufferValue else {
-            throw SawtError.failed("نموذج الإزالة ما رجع صورة")
+            throw SawtError.failed(L("لم يُرجع نموذج الإزالة صورة"))
         }
         // نكبّر الناتج لحجم الأصل وندمجه بالقناع الناعم فوق الأصل
         var res = CIImage(cvPixelBuffer: buf)
@@ -87,7 +87,7 @@ enum LaMa {
             kCIInputMaskImageKey: CIImage(cgImage: softCG),
         ])
         guard let final = Mask.ci.createCGImage(blended, from: CGRect(x: 0, y: 0, width: w, height: h)) else {
-            throw SawtError.failed("ما قدرت أدمج الناتج")
+            throw SawtError.failed(L("تعذّر دمج الناتج"))
         }
         return final
     }

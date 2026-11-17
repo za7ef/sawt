@@ -15,12 +15,12 @@ struct AgentActivityAttributes: ActivityAttributes {
 
         var phaseTitle: String {
             switch phase ?? "step" {
-            case "sleep": return "نايم"
-            case "ready": return "جاهز"
-            case "prep": return "يجهّز"
-            case "thinking": return "يفكّر"
-            case "done": return "خلص"
-            default: return "الخطوة \(n)"
+            case "sleep": return L("خامل")
+            case "ready": return L("جاهز")
+            case "prep": return L("جارٍ التجهيز")
+            case "thinking": return L("يفكّر")
+            case "done": return L("انتهى")
+            default: return L("الخطوة %@", String(n))
             }
         }
         var phaseIcon: String {

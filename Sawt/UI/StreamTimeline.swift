@@ -201,12 +201,12 @@ struct StepMark: View {
 
     private var label: String {
         switch state {
-        case .done: "تمت"
-        case .failed: "فشلت"
-        case .skipped: "ما كملت"
-        case .running: "شغالة"
-        case .ask: "تنتظر موافقتك"
-        case .pending: "بالانتظار"
+        case .done: L("تمت")
+        case .failed: L("فشلت")
+        case .skipped: L("لم تكتمل")
+        case .running: L("قيد التنفيذ")
+        case .ask: L("تنتظر موافقتك")
+        case .pending: L("بالانتظار")
         }
     }
 }

@@ -134,12 +134,12 @@ actor LLMService {
     }
 
     func cpuThreadBench() async -> String {
-        guard LlamaModelFile.isDownloaded else { return "نموذج المعالج مو منزّل" }
+        guard LlamaModelFile.isDownloaded else { return L("نموذج المعالج غير محمَّل") }
         do { return try await LlamaEngine.shared.benchThreads() } catch { return error.localizedDescription }
     }
 
     func cpuSelfTest() async -> (ok: Bool, info: String) {
-        guard LlamaModelFile.isDownloaded else { return (false, "نموذج المعالج مو منزّل") }
+        guard LlamaModelFile.isDownloaded else { return (false, L("نموذج المعالج غير محمَّل")) }
         return await ComputeMode.$forced.withValue("cpu") {
             let t0 = Date()
             do {
@@ -149,7 +149,7 @@ actor LLMService {
                 for try await c in st { out += c; n += 1 }
                 let ms = Int(Date().timeIntervalSince(t0) * 1000)
                 slog("llm: cpu self-test ok \(ms)ms out=\(out.prefix(40))")
-                return (true, "\(ms)ms، تقريبًا \(String(format: "%.1f", Double(n) / max(Double(ms) / 1000, 0.001))) كلمة/ث")
+                return (true, L("%1$@ms، نحو %2$@ رمز/ث", String(ms), String(format: "%.1f", Double(n) / max(Double(ms) / 1000, 0.001))))
             } catch {
                 slog("llm: cpu self-test failed \(error)")
                 return (false, error.localizedDescription)
@@ -215,7 +215,7 @@ actor LLMService {
             return LlamaEngine.shared.stream(system: system, history: history, user: user,
                                              maxTokens: min(cap, maxTokens))
         }
-        guard let container else { throw SawtError.notReady("النموذج اللغوي") }
+        guard let container else { throw SawtError.notReady(L("النموذج اللغوي")) }
         let lid = loadedID ?? ""
         lastModelName = (Catalog.builtInLLMs + Catalog.customLLMs).first { $0.id == lid }?.title
             ?? (lid.split(separator: "/").last.map(String.init) ?? "")
@@ -453,7 +453,7 @@ enum AppPhase {
 }
 
 struct BackgroundPause: LocalizedError {
-    var errorDescription: String? { "افتح التطبيق عشان أكمل" }
+    var errorDescription: String? { L("افتح التطبيق لأكمل") }
 }
 
 final class MLXErrBox: @unchecked Sendable {
@@ -467,7 +467,7 @@ struct MLXRunError: LocalizedError {
     var message: String
     var cpu: Bool
     var errorDescription: String? {
-        cpu ? "النموذج ما اشتغل على المعالج: \(message.prefix(160)). رجّع «تشغيل النموذج» لكرت الشاشة."
-            : "صار خطأ في النموذج: \(message.prefix(160))"
+        cpu ? L("لم يعمل النموذج على المعالج: %@. أعد «تشغيل النموذج» إلى معالج الرسوميات.", String(message.prefix(160)))
+            : L("حدث خطأ في النموذج: %@", String(message.prefix(160)))
     }
 }

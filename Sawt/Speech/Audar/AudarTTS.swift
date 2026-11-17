@@ -52,7 +52,7 @@ final class AudarVoice: ObservableObject {
         }
     }
 
-    static let testSentence = "هلا والله، كيف حالك اليوم؟ إن شاء الله أمورك طيبة والشغل ماشي تمام."
+    static let testSentence = "أهلًا وسهلًا، كيف حالك اليوم؟ أتمنى أن تكون أمورك بخير وأن يسير عملك على ما يرام."
 
     private var task: Task<Void, Never>?
 
@@ -66,7 +66,7 @@ final class AudarVoice: ObservableObject {
         guard task == nil else { return }
         task = Task {
             if let why = Storage.spaceProblem(forGB: 0.9) { state = .failed(why); task = nil; return }
-            guard await NetworkGate.shared.permit("تنزيل أصوات أودار") else { task = nil; return }
+            guard await NetworkGate.shared.permit(L("تحميل أصوات أودار")) else { task = nil; return }
             do {
                 try FileManager.default.createDirectory(at: Self.dir, withIntermediateDirectories: true)
                 var excluded = URLResourceValues(); excluded.isExcludedFromBackup = true
@@ -107,7 +107,7 @@ final class AudarVoice: ObservableObject {
                         let size = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? Int64) ?? 0
                         guard size == f.bytes else {
                             try? FileManager.default.removeItem(at: dest)
-                            throw SawtError.failed("حجم \(f.name) غير متوقع (\(size))")
+                            throw SawtError.failed(L("حجم %1$@ غير متوقع (%2$@)", f.name, String(size)))
                         }
                     }
                     done += f.bytes
@@ -153,13 +153,14 @@ final class AudarVoice: ObservableObject {
             testing = false
             switch r {
             case .failure(let e):
-                lastTest = "ما زبط: \(e.localizedDescription)"
+                lastTest = L("لم ينجح: %@", e.localizedDescription)
             case .success(let out):
                 let rtf = out.genSeconds / max(out.audioSeconds, 0.01)
-                lastTest = String(format: "التوليد: %.1f ث (%.0f رمز/ث) • طول الصوت: %.1f ث • النسبة: %.2f× (أقل من 1 يعني أسرع من الكلام)",
-                                  out.genSeconds, out.tokensPerSecond, out.audioSeconds, rtf)
+                lastTest = L("التوليد: %1$@ ث (%2$@ رمز/ث) • طول الصوت: %3$@ ث • النسبة: %4$@× (أقل من 1 يعني أسرع من الكلام)",
+                             String(format: "%.1f", out.genSeconds), String(format: "%.0f", out.tokensPerSecond),
+                             String(format: "%.1f", out.audioSeconds), String(format: "%.2f", rtf))
                 if out.loadSeconds > 0.05 {
-                    lastTest! += String(format: "\nالتحميل للذاكرة أول مرة: %.1f ث", out.loadSeconds)
+                    lastTest! += "\n" + L("التحميل إلى الذاكرة أول مرة: %@ ث", String(format: "%.1f", out.loadSeconds))
                 }
                 Speaker.shared.play(samples: out.samples, sampleRate: 24_000)
             }
@@ -238,7 +239,7 @@ actor AudarEngine {
             ctx = nil; model = nil; vocab = nil; cached = []
         }
         if ctx != nil, decoder != nil { return }
-        guard AudarVoice.isInstalled else { throw SawtError.notReady("أصوات أودار (نزّلها أول)") }
+        guard AudarVoice.isInstalled else { throw SawtError.notReady(L("أصوات أودار (حمِّلها أولًا)")) }
         let t0 = Date()
         if ctx == nil {
             llama_backend_init()
@@ -257,7 +258,7 @@ actor AudarEngine {
                     return llama_model_load_from_file(AudarVoice.ggufURL.path, mp)
                 }
             }
-            guard let m else { throw SawtError.failed("ما قدرت أحمّل نموذج أودار") }
+            guard let m else { throw SawtError.failed(L("تعذّر تحميل نموذج أودار")) }
             var cp = llama_context_default_params()
             cp.n_ctx = nCtx
             cp.n_batch = 512
@@ -272,14 +273,14 @@ actor AudarEngine {
             cp.op_offload = wantGPU
             guard let c = llama_init_from_model(m, cp) else {
                 llama_model_free(m)
-                throw SawtError.failed("ما قدرت أجهّز سياق أودار")
+                throw SawtError.failed(L("تعذّر تجهيز سياق أودار"))
             }
             model = m; ctx = c; vocab = llama_model_get_vocab(m); cached = []; onGPU = wantGPU
             // تحقق: رموز الصوت في مكانها المتوقع
             let check = tokenize("<|speech_0|><|TARGET_CODES_END|>")
             guard check == [Self.speechBase, Self.codesEnd] else {
                 unload()
-                throw SawtError.failed("مفردات أودار غير متوقعة \(check)")
+                throw SawtError.failed(L("مفردات أودار غير متوقعة %@", "\(check)"))
             }
             slog("audar: llama loaded \(wantGPU ? "gpu" : "cpu") threads=\(threads) ctx=\(nCtx)")
         }
@@ -288,7 +289,7 @@ actor AudarEngine {
         }
         slog("audar: loaded in \(Int(Date().timeIntervalSince(t0) * 1000))ms ram=\(RAM.footprintMB)MB avail=\(RAM.availableMB)MB")
         #else
-        throw SawtError.notReady("محرك المعالج ما انبنى في هذي النسخة")
+        throw SawtError.notReady(L("محرك المعالج غير مضمَّن في هذه النسخة"))
         #endif
     }
 
@@ -315,10 +316,10 @@ actor AudarEngine {
 
     /// يعالج الطلب ويعيد استخدام البداية المشتركة مع الطلب السابق (المرجع). يرجع عدد الرموز الجديدة.
     private func prefill(_ prompt: String) throws -> Int {
-        guard let ctx else { throw SawtError.notReady("أودار") }
+        guard let ctx else { throw SawtError.notReady(L("أودار")) }
         let toks = tokenize(prompt)
         guard toks.count + Self.maxCodes + 8 < Int(nCtx) else {
-            throw SawtError.failed("الجملة أطول من سياق أودار (\(toks.count))")
+            throw SawtError.failed(L("الجملة أطول من سياق أودار (%@)", String(toks.count)))
         }
         var common = 0
         while common < min(cached.count, toks.count - 1), cached[common] == toks[common] { common += 1 }
@@ -332,7 +333,7 @@ actor AudarEngine {
             let r = chunk.withUnsafeMutableBufferPointer { b in
                 llama_decode(ctx, llama_batch_get_one(b.baseAddress, Int32(b.count)))
             }
-            if r != 0 { llama_memory_clear(mem, true); cached = []; throw SawtError.failed("أودار: فشل معالجة الطلب (\(r))") }
+            if r != 0 { llama_memory_clear(mem, true); cached = []; throw SawtError.failed(L("أودار: فشلت معالجة الطلب (%@)", String(r))) }
             i += chunk.count
         }
         cached = toks
@@ -345,7 +346,7 @@ actor AudarEngine {
     /// يكتب رموز الصوت لين رمز النهاية. أي رمز غير صوتي نعتبره نهاية.
     /// codes: الرموز اللي انكتبت قبل (نكمل بعدها بعد تبديل الجهاز)، onCodes: يُستدعى كل ما زادت الرموز
     private func generateCodes(maxCodes: Int, codes start: [Int] = [], onCodes: ([Int], Bool) -> Void = { _, _ in }) throws -> [Int] {
-        guard let ctx, let vocab else { throw SawtError.notReady("أودار") }
+        guard let ctx, let vocab else { throw SawtError.notReady(L("أودار")) }
         let smpl = llama_sampler_chain_init(llama_sampler_chain_default_params())
         defer { llama_sampler_free(smpl) }
         // إعدادات البطاقة الرسمية (repeat 1.1، top_k 40، top_p 0.9) مع حرارة 0.7 لإلقاء أهدأ وأثبت
@@ -387,7 +388,7 @@ actor AudarEngine {
             let r = toks.withUnsafeMutableBufferPointer { b in
                 llama_decode(ctx, llama_batch_get_one(b.baseAddress! + i, Int32(n)))
             }
-            if r != 0 { throw SawtError.failed("أودار: فشل الاستئناف (\(r))") }
+            if r != 0 { throw SawtError.failed(L("أودار: فشل الاستئناف (%@)", String(r))) }
             i += n
         }
         cached += toks
@@ -420,7 +421,7 @@ actor AudarEngine {
     func synthesizeStream(_ text: String, voice: String, onAudio: @escaping ([Float]) -> Void) async -> Result<Output, Error> {
         #if LLAMA
         do {
-            guard let ref = AudarRefs.find(voice) ?? AudarRefs.all.first else { throw SawtError.failed("صوت أودار غير معروف") }
+            guard let ref = AudarRefs.find(voice) ?? AudarRefs.all.first else { throw SawtError.failed(L("صوت أودار غير معروف")) }
             let tl = Date()
             let wasLoaded = isLoaded
             try load()
@@ -491,7 +492,7 @@ actor AudarEngine {
             }
             if let failure { throw failure }
             MLX.Memory.clearCache()
-            guard !codes.isEmpty, total > 0 else { throw SawtError.failed("أودار ما طلّع صوت") }
+            guard !codes.isEmpty, total > 0 else { throw SawtError.failed(L("لم يُخرج أودار أي صوت")) }
             let genS = Date().timeIntervalSince(t0)
             let audioS = Double(total) / 24_000
             let tps = Double(codes.count) / max(Date().timeIntervalSince(tp) - decodeMs / 1000, 0.001)
@@ -502,7 +503,7 @@ actor AudarEngine {
             return .failure(error)
         }
         #else
-        return .failure(SawtError.notReady("محرك المعالج ما انبنى في هذي النسخة"))
+        return .failure(SawtError.notReady(L("محرك المعالج غير مضمَّن في هذه النسخة")))
         #endif
     }
 }

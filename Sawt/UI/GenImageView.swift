@@ -25,11 +25,11 @@ struct GenImageView: View {
                 HStack(spacing: 20) {
                     Button { save(ui) } label: { Image(systemName: "square.and.arrow.down") }
                         .accessibilityLabel("حفظ في الصور")
-                    ShareLink(item: Image(uiImage: ui), preview: SharePreview("صورة من صوت", image: Image(uiImage: ui))) {
+                    ShareLink(item: Image(uiImage: ui), preview: SharePreview("صورة من Sowtly", image: Image(uiImage: ui))) {
                         Image(systemName: "square.and.arrow.up")
                     }
                     .accessibilityLabel("مشاركة")
-                    Button { UIPasteboard.general.image = ui; saved = "انسخت" } label: { Image(systemName: "doc.on.doc") }
+                    Button { UIPasteboard.general.image = ui; saved = L("نُسخت") } label: { Image(systemName: "doc.on.doc") }
                         .accessibilityLabel("نسخ الصورة")
                     if let p = prompt, !p.isEmpty {
                         Button { withAnimation { showPrompt.toggle() } } label: { Image(systemName: "text.quote") }
@@ -42,12 +42,12 @@ struct GenImageView: View {
                 .buttonStyle(.plain)
                 if showPrompt, let p = prompt {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("الوصف اللي انرسمت منه").font(.caption).foregroundStyle(.secondary)
+                        Text("الوصف الذي رُسمت منه").font(.caption).foregroundStyle(.secondary)
                         Text(p).font(.caption).textSelection(.enabled)
                             .environment(\.layoutDirection, .leftToRight)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         if let n = negative, !n.isEmpty {
-                            Text("نتجنب: \(n)").font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+                            Text(L("نتجنب: %@", n)).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
                                 .environment(\.layoutDirection, .leftToRight)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -60,20 +60,20 @@ struct GenImageView: View {
                 ImageViewer(ui: ui, prompt: prompt)
             }
         } else {
-            Label("الصورة انحذفت", systemImage: "photo").font(.caption).foregroundStyle(.secondary)
+            Label("حُذفت الصورة", systemImage: "photo").font(.caption).foregroundStyle(.secondary)
         }
     }
 
     private func save(_ ui: UIImage) {
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { st in
             guard st == .authorized || st == .limited else {
-                Task { @MainActor in saved = "اسمح بالحفظ من الإعدادات" }
+                Task { @MainActor in saved = L("اسمح بالحفظ من الإعدادات") }
                 return
             }
             PHPhotoLibrary.shared().performChanges {
                 _ = PHAssetChangeRequest.creationRequestForAsset(from: ui)
             } completionHandler: { ok, _ in
-                Task { @MainActor in saved = ok ? "انحفظت ✓" : "ما انحفظت" }
+                Task { @MainActor in saved = ok ? L("حُفظت ✓") : L("لم تُحفظ") }
             }
         }
     }

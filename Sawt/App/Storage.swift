@@ -51,8 +51,8 @@ enum Storage {
         let need = Int64((gb + 1.0) * 1_073_741_824)
         let free = freeBytes
         guard free < need else { return nil }
-        return String(format: "المساحة ما تكفي: يحتاج تقريبًا %.1f GB وفاضي %.1f GB. فضّي مساحة وجرّب.",
-                      gb + 1.0, Double(free) / 1_073_741_824)
+        return L("المساحة غير كافية: يلزم نحو %1$@ GB والمتاح %2$@ GB. أفرغ بعض المساحة وحاول مرة أخرى.",
+                 String(format: "%.1f", gb + 1.0), String(format: "%.1f", Double(free) / 1_073_741_824))
     }
 
     static func llmDir(_ repo: String) -> URL {
@@ -157,9 +157,9 @@ enum Storage {
         let known: Bool
         var isOrphan: Bool { incomplete || !known }
         var statusText: String {
-            if incomplete { return "تنزيل ناقص" }
-            if !known { return "ملفات قديمة غير مستخدمة" }
-            return "نموذج لغوي"
+            if incomplete { return L("تحميل غير مكتمل") }
+            if !known { return L("ملفات قديمة غير مستخدمة") }
+            return L("نموذج لغوي")
         }
     }
 

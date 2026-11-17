@@ -87,9 +87,9 @@ enum CloudLLM {
                         slog("llm: cloud net error \(p.rawValue) \(ns.code)")
                         let msg: String
                         switch ns.code {
-                        case NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost: msg = "ما فيه إنترنت — النموذج السحابي يحتاج اتصال"
-                        case NSURLErrorTimedOut: msg = "\(p.short) ما رد بالوقت — جرّب بعد شوي أو غيّر الموديل"
-                        default: msg = "تعذّر الاتصال بـ\(p.short)"
+                        case NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost: msg = L("لا يوجد إنترنت — النموذج السحابي يحتاج إلى اتصال")
+                        case NSURLErrorTimedOut: msg = L("لم يرد %@ في الوقت المحدد — حاول بعد قليل أو غيّر النموذج", p.short)
+                        default: msg = L("تعذّر الاتصال بـ%@", p.short)
                         }
                         cont.finish(throwing: CloudAgent.Failure(message: msg))
                         return
@@ -101,12 +101,12 @@ enum CloudLLM {
                 try? await Task.sleep(nanoseconds: firstByteTimeout * 1_000_000_000)
                 if Task.isCancelled { return }
                 if !watch.first {
-                    watch.timeout("\(p.short) ما رد خلال \(firstByteTimeout) ثانية — غالبًا عليه ضغط. جرّب بعد شوي أو غيّر الموديل")
+                    watch.timeout(L("لم يرد %1$@ خلال %2$@ ثانية — غالبًا بسبب ضغط عليه. حاول بعد قليل أو غيّر النموذج", p.short, String(firstByteTimeout)))
                     task.cancel(); return
                 }
                 try? await Task.sleep(nanoseconds: (overallTimeout - firstByteTimeout) * 1_000_000_000)
                 if Task.isCancelled { return }
-                watch.timeout("\(p.short) طوّل بالرد أكثر من اللازم — وقفته")
+                watch.timeout(L("استغرق %@ وقتًا أطول من اللازم في الرد — أوقفته", p.short))
                 task.cancel()
             }
             cont.onTermination = { _ in task.cancel(); watchdog.cancel() }
@@ -152,7 +152,7 @@ enum CloudLLM {
                     throw CloudAgent.Failure(message: CloudAgent.errorText(p, code: c, json: j), code: c)
                 }
             }
-            throw CloudAgent.Failure(message: "\(p.short) رجّع رد فاضي — جرّب مرة ثانية أو غيّر الموديل", code: 0)
+            throw CloudAgent.Failure(message: L("أعاد %@ ردًّا فارغًا — حاول مرة أخرى أو غيّر النموذج", p.short), code: 0)
         }
     }
 
@@ -174,7 +174,7 @@ enum CloudLLM {
 
     private static func request(_ p: CloudProvider, model: String, system: String, history: [Chat.Message], user: String,
                                 maxTokens: Int, images: [URL]) throws -> URLRequest {
-        guard let key = p.key else { throw CloudAgent.Failure(message: "ما فيه مفتاح لـ\(p.short) — حطه في صفحة النماذج ← السحابية") }
+        guard let key = p.key else { throw CloudAgent.Failure(message: L("لا يوجد مفتاح لـ%@ — أضفه في صفحة النماذج ← السحابية", p.short)) }
         // السجل: مستخدم/مساعد بالتناوب
         let hist = LLMService.strictAlternation(history + [.user(user)])
         let imgs: [(String, String)] = images.compactMap { u in

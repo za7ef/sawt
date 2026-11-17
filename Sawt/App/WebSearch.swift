@@ -54,7 +54,7 @@ enum WebSearch {
         do { links = try await duck(q) } catch { slog("web: ddg failed \(error)") }
         if links.isEmpty {
             do { return try await wikipedia(q) } catch {
-                throw SawtError.failed(offline(error) ? "ما فيه اتصال بالإنترنت، فما قدرت أبحث." : "ما قدرت أوصل لمحرك البحث الحين.")
+                throw SawtError.failed(offline(error) ? L("لا يوجد اتصال بالإنترنت، لذا تعذّر البحث.") : L("تعذّر الوصول إلى محرك البحث الآن."))
             }
         }
         let top = Array(links.prefix(maxPages))

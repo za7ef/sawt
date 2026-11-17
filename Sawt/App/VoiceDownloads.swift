@@ -53,7 +53,7 @@ final class VoiceDownloads: ObservableObject {
             Storage.otherDownloads += 1
             defer { Storage.otherDownloads -= 1 }
             if let why = Storage.spaceProblem(forGB: item.gb) { state[item.id] = .failed(why); return }
-            guard await NetworkGate.shared.permit("تنزيل صوت \(Catalog.allVoices.first { $0.id == item.id }?.title ?? item.id)") else {
+            guard await NetworkGate.shared.permit(L("تحميل صوت %@", Catalog.allVoices.first { $0.id == item.id }?.title ?? item.id)) else {
                 state[item.id] = .idle; return
             }
             let dir = Self.root.appendingPathComponent(item.folder, isDirectory: true)

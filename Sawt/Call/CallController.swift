@@ -139,7 +139,7 @@ final class CallController: ObservableObject {
         Task { @MainActor in
             let granted = await AVAudioApplicationShim.requestRecord()
             guard granted else {
-                self.error = "اسمح للتطبيق يستخدم المايك من الإعدادات."
+                self.error = L("اسمح للتطبيق باستخدام الميكروفون من الإعدادات.")
                 self.state = .idle
                 return
             }
@@ -149,7 +149,7 @@ final class CallController: ObservableObject {
                 return
             }
             // نجهز الصوت هنا (مو وقت فتح التطبيق) عشان الذاكرة
-            self.debug.stage = "يجهّز الصوت"
+            self.debug.stage = L("جارٍ تجهيز الصوت")
             slog("call: preparing voice")
             self.lastMemBlock = ""
             await ModelManager.shared.ensureTextMode()
@@ -162,7 +162,7 @@ final class CallController: ObservableObject {
             Task { await LLMService.shared.warmup(system: persona) }
             slog("call: after voice load footprint=\(RAM.footprintMB)MB avail=\(avail)MB")
             if avail < 1500, !AppSettings.shared.llmID.lowercased().contains("2b") {
-                self.error = "الذاكرة قليلة لهالنموذج في المكالمة (باقي \(avail)MB). إذا انقفل التطبيق، جرّب Qwen3.5 2B."
+                self.error = L("الذاكرة قليلة لهذا النموذج في المكالمة (المتبقي %@MB). إذا أُغلق التطبيق، جرّب Qwen3.5 2B.", String(avail))
             }
             guard self.state == .starting else { return }
             MemoryStore.shared.cancel()
@@ -183,7 +183,7 @@ final class CallController: ObservableObject {
                     self.state = .listening
                 } else {
                     self.cancelReply(recordPartial: true)
-                    self.error = "انقطع الصوت (مكالمة أو تغيّر السماعة). إذا ما رجع، سكّر المكالمة وافتحها."
+                    self.error = L("انقطع الصوت (مكالمة أو تغيّر السماعة). إذا لم يعد، أنهِ المكالمة وابدأها من جديد.")
                 }
             }
             do {
@@ -191,7 +191,7 @@ final class CallController: ObservableObject {
                 try self.audio.start()
                 self.audio.ownedByCall = true
             } catch {
-                self.error = "ما قدرت أشغّل المايك: \(error.localizedDescription)"
+                self.error = L("تعذّر تشغيل الميكروفون: %@", error.localizedDescription)
                 self.state = .idle
                 CallController.isActive = false
                 return
@@ -284,13 +284,13 @@ final class CallController: ObservableObject {
             return
         }
         guard AppSettings.shared.llm.vision else {
-            error = "النموذج الحالي ما يشوف الصور. اختر نموذج عليه رمز العين (مثل Qwen3.5 أو Gemma) من شاشة النماذج."
+            error = L("النموذج الحالي لا يدعم الصور. اختر نموذجًا عليه رمز العين (مثل Qwen3.5 أو Gemma) من شاشة النماذج.")
             return
         }
         cameraBusy = true
         defer { cameraBusy = false }
         guard await CallCamera.shared.start() else {
-            error = "ما قدرت أشغّل الكاميرا. تأكد إن التطبيق مسموح له يستخدمها من الإعدادات."
+            error = L("تعذّر تشغيل الكاميرا. تأكد من السماح للتطبيق باستخدامها من الإعدادات.")
             return
         }
         cancelReply(recordPartial: true)
@@ -299,7 +299,7 @@ final class CallController: ObservableObject {
         lastMemBlock = ""
         guard ok, state != .idle else {
             CallCamera.shared.stop()
-            if state != .idle { error = "ما قدرت أجهّز وضع النظر (ممكن الذاكرة ما تكفي). كمّل المكالمة بدون كاميرا." }
+            if state != .idle { error = L("تعذّر تجهيز وضع الرؤية (ربما لا تكفي الذاكرة). أكمل المكالمة بدون كاميرا.") }
             return
         }
         cameraOn = true
@@ -494,7 +494,7 @@ final class CallController: ObservableObject {
             slog("stt: done in \(ms)ms → \(result.0)")
             await MainActor.run {
                 self.debug.sttMs = ms
-                self.debug.lastTranscript = result.0.isEmpty ? "(ما فهم شي)" : result.0
+                self.debug.lastTranscript = result.0.isEmpty ? L("(لم يُفهم شيء)") : result.0
                 self.userFinished(text: result.0)
             }
         }
@@ -873,7 +873,7 @@ final class CallController: ObservableObject {
                 slog("call: paused in background")
                 self.pausedBG = true
                 if myID == self.replyID {
-                    let msg = "افتح التطبيق عشان أكمل"
+                    let msg = L("افتح التطبيق لأكمل")
                     self.error = msg
                     if full.isEmpty { self.sentenceQueue.append(msg); cont.yield(msg) }
                 }
@@ -928,7 +928,7 @@ final class CallController: ObservableObject {
         }
         if avail < 600 {
             let name = AppSettings.shared.llm.title
-            throw SawtError.failed("الذاكرة ما تكفي لتشغيل \(name) في المكالمة (باقي \(avail)MB). جرّب Qwen3.5 2B أو سمع آبل.")
+            throw SawtError.failed(L("الذاكرة لا تكفي لتشغيل %1$@ في المكالمة (المتبقي %2$@MB). جرّب Qwen3.5 2B أو سمع آبل.", name, String(avail)))
         }
     }
 

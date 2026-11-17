@@ -20,7 +20,7 @@ struct CallLiveActivity: Widget {
                     .font(.title2)
                     .foregroundStyle(.blue)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("مكالمة صوت").font(.headline)
+                    Text("مكالمة Sowtly").font(.headline)
                     Text(ctx.state.label).font(.subheadline).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -52,7 +52,7 @@ struct CallLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.bottom) {
                     HStack(spacing: 16) {
                         Button(intent: ToggleMuteIntent()) {
-                            Label(ctx.state.muted ? "شغّل المايك" : "اكتم", systemImage: ctx.state.muted ? "mic.fill" : "mic.slash.fill")
+                            Label(ctx.state.muted ? L("شغّل الميكروفون") : L("اكتم"), systemImage: ctx.state.muted ? "mic.fill" : "mic.slash.fill")
                         }
                         .tint(.gray)
                         Button(intent: EndCallIntent()) {
@@ -80,7 +80,7 @@ struct AgentLiveActivity: Widget {
                 Image(systemName: ctx.state.phaseIcon)
                     .font(.title2).foregroundStyle(ctx.state.busy ? Color.purple : Color.green)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(ctx.state.task.map { "الوكيل: \($0)" } ?? "المشغّل: \(ctx.state.phaseTitle)").font(.headline).lineLimit(1)
+                    Text(ctx.state.task.map { L("الوكيل: %@", $0) } ?? L("المشغّل: %@", ctx.state.phaseTitle)).font(.headline).lineLimit(1)
                     HStack(spacing: 6) {
                         if ctx.state.busy { Text(ctx.state.phaseTitle).font(.subheadline.bold()) }
                         Text(ctx.state.step).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)

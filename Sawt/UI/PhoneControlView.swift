@@ -135,13 +135,13 @@ enum PhoneControl {
             return (nil, "format=\(fmt.joined(separator: "+")) size=\(raw.count) parse=failed")
         }
         guard let dict = obj as? [String: Any] else {
-            return (nil, "format=\(fmt.joined(separator: "+")) top=\(type(of: obj)) (مو قاموس)")
+            return (nil, "format=\(fmt.joined(separator: "+")) top=\(type(of: obj)) " + L("(ليس قاموسًا)"))
         }
         let keys = dict.keys.sorted().joined(separator: ",")
         let kind: String
         if dict["public_key"] != nil && dict["private_key"] != nil && dict["identifier"] != nil { kind = "RemotePairing" }
         else if dict["HostID"] != nil || dict["DeviceCertificate"] != nil { kind = "lockdown" }
-        else { kind = "غير معروف" }
+        else { kind = L("غير معروف") }
         // نحفظ البايتات الأصلية كما هي (مثل StikDebug)؛ نحوّل بس لو كانت base64 أو فيها BOM
         let original = !fmt.contains("base64") && !fmt.contains("bom")
         let xml = original ? d : (try? PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0))
@@ -151,20 +151,20 @@ enum PhoneControl {
     static func save(_ data: Data) -> String {
         let (norm, info) = normalize(data)
         Log.shared("phonectl pairing: \(info)")
-        guard let norm else { return "الملف مو plist صالح — \(info)" }
+        guard let norm else { return L("الملف ليس plist صالحًا — %@", info) }
         do {
             try writePairing(norm)
             keychainStore(norm)
-            return "تم حفظ ملف الاقتران — \(info) fp=\(fingerprint(norm))"
+            return L("تم حفظ ملف الاقتران — %@", info) + " fp=\(fingerprint(norm))"
         } catch {
-            return "فشل الحفظ: \(error.localizedDescription)"
+            return L("فشل الحفظ: %@", error.localizedDescription)
         }
     }
 
     /// معلومات الملف المحفوظ (بدون أسرار) — ونعيد توحيده لو انحفظ بنسخة قديمة
     static func storedInfo() -> String {
         ensurePairing()
-        guard let d = try? Data(contentsOf: pairingURL) else { return "لا يوجد ملف" }
+        guard let d = try? Data(contentsOf: pairingURL) else { return L("لا يوجد ملف") }
         // ما نعيد كتابة الملف هنا أبدًا — نقرأ بس
         let (_, info) = normalize(d)
         return info + " fp=\(fingerprint(d))"
@@ -177,9 +177,9 @@ enum PhoneControl {
         var out = ""
         // NSFileCoordinator عشان الملفات اللي في iCloud أو عند مزوّد ثاني
         NSFileCoordinator().coordinate(readingItemAt: url, options: .withoutChanges, error: &readErr) { u in
-            do { out = save(try Data(contentsOf: u)) } catch { out = "فشل القراءة: \(error.localizedDescription)" }
+            do { out = save(try Data(contentsOf: u)) } catch { out = L("فشلت القراءة: %@", error.localizedDescription) }
         }
-        if let readErr, out.isEmpty { out = "فشل القراءة: \(readErr.localizedDescription)" }
+        if let readErr, out.isEmpty { out = L("فشلت القراءة: %@", readErr.localizedDescription) }
         return out
     }
 
@@ -282,7 +282,7 @@ struct PhoneControlView: View {
     @ObservedObject private var hostPair = HostPairing.shared
     @State private var countdown = 0
     @State private var output = ""
-    @State private var typeText = "مرحبا من صوت"
+    @State private var typeText = L("مرحبًا من Sowtly")
     @State private var targetHits = 0
     @State private var targetFrame: CGRect = .zero
     @State private var inAppText = ""
@@ -296,8 +296,8 @@ struct PhoneControlView: View {
                     .disabled(!hasPairing)
             }
             Section {
-                LabeledContent("الأداة", value: PhoneControl.available ? "مبنية" : "غير مبنية")
-                LabeledContent("ملف الاقتران", value: hasPairing ? "موجود" : "ناقص")
+                LabeledContent("الأداة", value: PhoneControl.available ? L("مبنية") : L("غير مبنية"))
+                LabeledContent("ملف الاقتران", value: hasPairing ? L("موجود") : L("ناقص"))
                 Button("استيراد ملف الاقتران") { importing = true }
                 Button("الصق محتوى الملف") { pasting = true }
                 TextField("العنوان", text: $host)
@@ -305,7 +305,7 @@ struct PhoneControlView: View {
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
             } footer: {
-                Text("لازم LocalDevVPN شغال، وصورة المطوّر (DDI) مركّبة (مثلاً من StikDebug). تقدر تستورد ملف StikDebug، أو تسوّي ملف جديد من الجوال (وافق لو طلع لك طلب ثقة، والملف القديم ينحفظ نسخة).")
+                Text("يجب أن يكون LocalDevVPN قيد التشغيل، وصورة المطوّر (DDI) مركّبة (مثلًا من StikDebug). يمكنك استيراد ملف StikDebug، أو إنشاء ملف جديد من الجهاز (وافق إذا ظهر لك طلب ثقة، وتُحفظ نسخة من الملف القديم).")
             }
 
             Section {
@@ -317,42 +317,42 @@ struct PhoneControlView: View {
                     Text(hostPair.status)
                     Button("إلغاء", role: .destructive) { hostPair.cancel() }
                 } else if hasPairing && !repairing {
-                    LabeledContent("الحالة", value: "مقترن ✅")
+                    LabeledContent("الحالة", value: L("مقترن ✅"))
                     if !hostPair.result.isEmpty { Text(hostPair.result).font(.footnote).textSelection(.enabled) }
                     Button("إعادة الاقتران") { repairing = true }.font(.footnote)
                 } else {
-                    Button("سوّ ملف اقتران من الجوال") { hostPair.start() }
+                    Button("أنشئ ملف اقتران من الجهاز") { hostPair.start() }
                     if !hostPair.result.isEmpty { Text(hostPair.result).font(.footnote).textSelection(.enabled) }
                     Button("اقتران مباشر (الطريقة القديمة)") { go(.pair, delay: false, label: "pair") }
                     if hasPairing { Button("رجوع", role: .cancel) { repairing = false } }
                 }
             } header: {
-                Text("اقتران من الجوال (iOS 27)")
+                Text("الاقتران من الجهاز (iOS 27)")
             } footer: {
-                Text("شغّل LocalDevVPN، اضغط الزر، بعدين روح للإعدادات واختر «Sawt» من الأجهزة القريبة. بيطلع لك رمز من ٦ أرقام هنا وبإشعار، اكتبه في الجوال. يبقى صوت شغال بالخلفية ٥ دقايق.")
+                Text("شغّل LocalDevVPN، واضغط الزر، ثم اذهب إلى الإعدادات واختر «Sawt» من الأجهزة القريبة. سيظهر لك رمز من ٦ أرقام هنا وفي إشعار، اكتبه في الجهاز. يبقى Sowtly يعمل في الخلفية ٥ دقائق.")
             }
 
             Section {
                 Button("فحص الاتصال") { go(.probe, delay: false, label: "probe") }
-                Button("قراءة الشاشة (بعد ٥ ثواني)") { go(.ax(4000), delay: true, label: "ax") }
-                Button("لمسة في نص الشاشة (بعد ٥ ثواني)") { go(.tap(32768, 32768), delay: true, label: "tap") }
-                Button("زر الهوم") { go(.keys("home"), delay: false, label: "home") }
+                Button("قراءة الشاشة (بعد ٥ ثوانٍ)") { go(.ax(4000), delay: true, label: "ax") }
+                Button("لمسة في وسط الشاشة (بعد ٥ ثوانٍ)") { go(.tap(32768, 32768), delay: true, label: "tap") }
+                Button("زر الشاشة الرئيسية") { go(.keys("home"), delay: false, label: "home") }
                 TextField("نص للكتابة", text: $typeText)
-                Button("كتابة النص (بعد ٥ ثواني)") {
+                Button("كتابة النص (بعد ٥ ثوانٍ)") {
                     go(.keys("paste:" + typeText), delay: true, label: "paste")
                 }
-                Button("اكتب hello حرف حرف (بعد ٥ ثواني)") { go(.keys("hello"), delay: true, label: "type") }
-                Button("زر الهوم (بعد ٥ ثواني)") { go(.keys("home"), delay: true, label: "home-delayed") }
+                Button("اكتب hello حرفًا حرفًا (بعد ٥ ثوانٍ)") { go(.keys("hello"), delay: true, label: "type") }
+                Button("زر الشاشة الرئيسية (بعد ٥ ثوانٍ)") { go(.keys("home"), delay: true, label: "home-delayed") }
             } header: {
                 Text("اختبارات")
             } footer: {
-                Text("بعد ما تضغط، روح للتطبيق اللي تبي تجرّب عليه خلال ٥ ثواني. النتيجة تنحفظ في السجل وتنسخ تلقائيًا.")
+                Text("بعد الضغط، اذهب إلى التطبيق الذي تريد التجربة عليه خلال ٥ ثوانٍ. تُحفظ النتيجة في السجل.")
             }
             .disabled(busy || !PhoneControl.available || !hasPairing)
 
             Section {
                 // الهدف والخانة ما ينطفون أثناء العد، عشان اللمسة الاصطناعية توصل
-                Button("هدف اللمس — انضغط \(targetHits) مرة") {
+                Button(L("هدف اللمس — ضُغط %@ مرة", String(targetHits))) {
                     targetHits += 1
                     Log.shared("phonectl target: hit \(targetHits)")
                 }
@@ -364,13 +364,13 @@ struct PhoneControlView: View {
                 TextField("خانة الاختبار", text: $inAppText)
                     .focused($inAppFocused)
             } header: {
-                Text("اختبار داخل صوت")
+                Text("اختبار داخل Sowtly")
             } footer: {
-                Text("خلك داخل صوت. أزرار الكتابة تفتح الخانة بنفسها وتكتب بعد ٣ ثواني.")
+                Text("ابقَ داخل Sowtly. أزرار الكتابة تفتح الخانة تلقائيًا وتكتب بعد ٣ ثوانٍ.")
             }
 
             Section {
-                Button("المس الهدف (بعد ٣ ثواني)") {
+                Button("المس الهدف (بعد ٣ ثوانٍ)") {
                     let b = UIScreen.main.bounds
                     let nx = UInt16(max(0, min(65535, targetFrame.midX / b.width * 65535)))
                     let ny = UInt16(max(0, min(65535, targetFrame.midY / b.height * 65535)))
@@ -378,33 +378,33 @@ struct PhoneControlView: View {
                     go(.tap(nx, ny), delay: true, label: "tap-inapp", stay: true) {
                         let ok = targetHits > before
                         Log.shared("phonectl tap-inapp: counter \(before) -> \(targetHits) \(ok ? "HIT" : "MISS")")
-                        return "\nالعداد: \(before) → \(targetHits) " + (ok ? "✅ اللمسة وصلت" : "❌ ما وصلت")
+                        return "\n" + L("العداد: %1$@ → %2$@ ", String(before), String(targetHits)) + (ok ? L("✅ وصلت اللمسة") : L("❌ لم تصل"))
                     }
                 }
-                Button("اكتب hello في الخانة (بعد ٣ ثواني)") {
+                Button("اكتب hello في الخانة (بعد ٣ ثوانٍ)") {
                     inAppText = ""
                     inAppFocused = true
                     go(.keys("hello"), delay: true, label: "type-inapp", stay: true) {
                         Log.shared("phonectl type-inapp: field=\(inAppText)")
-                        return "\nالخانة: «\(inAppText)»"
+                        return "\n" + L("الخانة: «%@»", inAppText)
                     }
                 }
-                Button("الصق النص في الخانة (بعد ٣ ثواني)") {
+                Button("الصق النص في الخانة (بعد ٣ ثوانٍ)") {
                     inAppText = ""
                     inAppFocused = true
                     go(.keys("paste:" + typeText), delay: true, label: "paste-inapp", stay: true) {
                         Log.shared("phonectl paste-inapp: field=\(inAppText)")
-                        return "\nالخانة: «\(inAppText)»"
+                        return "\n" + L("الخانة: «%@»", inAppText)
                     }
                 }
             }
             .disabled(busy || !PhoneControl.available || !hasPairing)
 
             if countdown > 0 {
-                Section { Text("يبدأ بعد \(countdown)…") }
+                Section { Text(L("يبدأ بعد %@…", String(countdown))) }
             }
             if busy && countdown == 0 {
-                Section { HStack { ProgressView(); Text("يشتغل…") } }
+                Section { HStack { ProgressView(); Text("جارٍ التنفيذ…") } }
             }
             if !output.isEmpty {
                 Section("النتيجة") {
@@ -413,7 +413,7 @@ struct PhoneControlView: View {
                 }
             }
         }
-        .navigationTitle("تحكم بالجوال (تجريبي)")
+        .navigationTitle("التحكم بالجهاز (تجريبي)")
         .sheet(isPresented: $importing) {
             DocPicker { url in
                 importing = false

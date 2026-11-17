@@ -55,10 +55,10 @@ final class PhoneAgent: ObservableObject {
     /// موافقة/رفض من الإشعار أو الجزيرة: بس لو فيه سؤال ينتظر
     func answerFromOutside(_ yes: Bool) {
         guard confirmCont != nil else { return }
-        say(yes ? "✅ موافق" : "✋ رفض")
+        say(yes ? L("✅ موافق") : L("✋ رفض"))
         AgentNotify.clearConfirm()
         answer(yes)
-        if running { surface(yes ? "موافق، أكمّل" : "رفضت الخطوة") }
+        if running { surface(yes ? L("تمت الموافقة، جارٍ الإكمال") : L("رُفضت الخطوة")) }
     }
 
     /// يحدّث النشاط المباشر والإشعار الثابت بالخطوة الحالية
@@ -70,7 +70,7 @@ final class PhoneAgent: ObservableObject {
 
     /// مرحلة «يفكّر» في الجزيرة (قبل طلب النموذج)
     private func surfaceThinking() {
-        RunnerActivity.show(.init(step: "يختار الخطوة الجاية", n: stepNo, waiting: false, phase: "thinking", task: String(goal.prefix(60))), goal: goal)
+        RunnerActivity.show(.init(step: L("يختار الخطوة التالية"), n: stepNo, waiting: false, phase: "thinking", task: String(goal.prefix(60))), goal: goal)
     }
 
     private func unsurface() {
@@ -109,29 +109,29 @@ final class PhoneAgent: ObservableObject {
                 begin(d, .failed)
             }
         }
-        if s.hasPrefix("الهدف:") || s.hasPrefix("⏹️ انوقف") || s.hasPrefix("✅ موافق") || s.hasPrefix("✋ رفض") { return }
+        if s.hasPrefix(L("الهدف:")) || s.hasPrefix(L("⏹️ توقّف")) || s.hasPrefix(L("✅ موافق")) || s.hasPrefix(L("✋ رفض")) { return }
         // «3. 🤖 يضغط على …» = خطوة جديدة
         if let r = s.range(of: ". 🤖 "), s[s.startIndex..<r.lowerBound].allSatisfy(\.isNumber) {
             begin(String(s[r.upperBound...]))
             return
         }
-        if s.hasPrefix("🔎") { begin("أتأكد من الشاشة"); return }
+        if s.hasPrefix("🔎") { begin(L("جارٍ التحقق من الشاشة")); return }
         if s.hasPrefix("❓") {
             if let i = timeline.indices.last, timeline[i].state == .running {
                 timeline[i].state = .ask
                 timeline[i].details.append(String(s.dropFirst(2)))
             } else {
-                begin("يحتاج موافقتك", .ask)
+                begin(L("بانتظار موافقتك"), .ask)
                 addDetail(String(s.dropFirst(2)))
             }
             return
         }
-        if s.hasPrefix("⚠️") || s.hasPrefix("✗") || s.hasPrefix("رفضت") || s.hasPrefix("⏹️ وقفت") {
+        if s.hasPrefix("⚠️") || s.hasPrefix("✗") || s.hasPrefix(L("رُفضت — توقّف الوكيل")) || s.hasPrefix("⏹️") {
             fail(s.replacingOccurrences(of: "⚠️ ", with: "").replacingOccurrences(of: "✗ ", with: ""))
             return
         }
         // أسطر التجهيز (الطريقة، المشغّل، الشاشة الرئيسية…)
-        if timeline.isEmpty { begin("أجهّز التحكم بالجوال") }
+        if timeline.isEmpty { begin(L("جارٍ تجهيز التحكم بالجهاز")) }
         addDetail(s.hasPrefix("✓ ") ? String(s.dropFirst(2)) : s)
     }
 
@@ -140,15 +140,15 @@ final class PhoneAgent: ObservableObject {
         let tl = timeline
         ChatStore.shared.editMessage(t.msg, in: t.conv, persist: false) { $0.agentSteps = tl }
         // فقاعة الإقرار تعرض الخطوات؛ والنتيجة تنزل كرد عادي مستقل
-        var lines = ["تمام، جاري تنفيذ المهمة…"]
+        var lines = [L("حسنًا، جارٍ تنفيذ المهمة…")]
         let steps = log.dropFirst().suffix(final ? 12 : 6).map { "• " + $0.text }
         if !steps.isEmpty { lines.append(""); lines += steps }
-        if !final { lines.append("(تقدر توقفه من الإشعار أو الجزيرة)") }
+        if !final { lines.append(L("(يمكنك إيقافه من الإشعار أو من الجزيرة الديناميكية)")) }
         ChatStore.shared.updateText(t.msg, in: t.conv, lines.joined(separator: "\n"), save: final)
         if final {
             let res = lastResult.replacingOccurrences(of: "✅ ", with: "")
-            var m = Message(role: .assistant, text: lastResult.hasPrefix("✅") ? "خلصت: \(res)" : "ما كملت المهمة: \(res)")
-            if !agentModelName.isEmpty { m.model = "الوكيل · " + agentModelName }
+            var m = Message(role: .assistant, text: lastResult.hasPrefix("✅") ? L("تم: %@", res) : L("لم تكتمل المهمة: %@", res))
+            if !agentModelName.isEmpty { m.model = L("الوكيل · %@", agentModelName) }
             ChatStore.shared.append(m, to: t.conv)
             chatTarget = nil
         }
@@ -161,21 +161,21 @@ final class PhoneAgent: ObservableObject {
         let g = goal.trimmingCharacters(in: .whitespacesAndNewlines)
         var why: String?
         AgentNotify.setup()   // لو الإشعارات انمسحت/ما انضبطت أول مرة
-        if g.isEmpty { why = "الهدف فاضي" }
-        else if running { why = "الوكيل شغّال على مهمة ثانية — قل «وقف» أول" }
-        else if ImageGenerator.busy { why = "صوت يرسم صورة الحين — انتظر يخلص أو وقّفها" }
-        else if !(PhoneControl.available && PhoneControl.hasPairing) { why = "التحكم بالجوال مو جاهز (اقتران/الأداة)" }
-        else if Self.blockedByGPU { why = "الوكيل ما يشتغل على كرت الشاشة (iOS يمنعه بالخلفية) — غيّر النموذج لنموذج المعالج أو نموذج سحابي" }
-        else if let s = Self.cpuSpecForStep(), !s.isDownloaded { why = "نموذج المعالج (\(Self.cpuSpecForStep()?.name ?? "")) مو منزّل — نزّله من صفحة النماذج ← المعالج" }
+        if g.isEmpty { why = L("الهدف فارغ") }
+        else if running { why = L("الوكيل يعمل على مهمة أخرى — قل «توقف» أولًا") }
+        else if ImageGenerator.busy { why = L("Sowtly ينشئ صورة الآن — انتظر حتى ينتهي أو أوقفه") }
+        else if !(PhoneControl.available && PhoneControl.hasPairing) { why = L("التحكم بالجهاز غير جاهز (الاقتران/الأداة)") }
+        else if Self.blockedByGPU { why = L("لا يعمل الوكيل على معالج الرسوميات (يمنعه iOS في الخلفية) — غيّر النموذج إلى نموذج للمعالج أو نموذج سحابي") }
+        else if let s = Self.cpuSpecForStep(), !s.isDownloaded { why = L("نموذج المعالج (%@) غير محمَّل — حمِّله من صفحة النماذج ← المعالج", Self.cpuSpecForStep()?.name ?? "") }
         if why == nil, Self.pick.hasPrefix("cloud:") {
-            if Self.cloud == nil { why = "ما فيه مفتاح للخدمة السحابية المختارة — حطه في «مفاتيح الخدمات»" }
-            else if !UserDefaults.standard.bool(forKey: "cloudConsent") { why = "لازم توافق على تنبيه الخصوصية للوكيل السحابي أول" }
+            if Self.cloud == nil { why = L("لا يوجد مفتاح للخدمة السحابية المختارة — أضفه في «مفاتيح الخدمات»") }
+            else if !UserDefaults.standard.bool(forKey: "cloudConsent") { why = L("يجب أن توافق على تنبيه الخصوصية للوكيل السحابي أولًا") }
             // زر الإنترنت في خانة الكتابة = البحث في الويب؛ الوكيل السحابي (مثل الدردشة السحابية) بوابته الموافقة + المفتاح
         }
         if let why {
             slog("agent: start refused: \(why)")
             // لو شغّال ما نلمس فقاعة المهمة الحالية
-            if !running, let t = chatTarget { ChatStore.shared.updateText(t.msg, in: t.conv, "🤖 ما بديت: " + why, save: true); chatTarget = nil }
+            if !running, let t = chatTarget { ChatStore.shared.updateText(t.msg, in: t.conv, L("🤖 لم أبدأ: %@", why), save: true); chatTarget = nil }
             return why
         }
         runID &+= 1
@@ -190,8 +190,8 @@ final class PhoneAgent: ObservableObject {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         // يبقى صاحي لما نطلع لتطبيقات ثانية (هنا مو داخل الحلقة عشان ما يسبق finish)
         HostPairing.shared.keepAlive(true)
-        say("الهدف: \(g)")
-        surface("يبدأ…")
+        say(L("الهدف: %@", g))
+        surface(L("جارٍ البدء…"))
         // ننتظر المهمة القديمة تخلص تنظيفها (الجلسة) قبل نبدأ
         let old = task
         let id = runID
@@ -202,9 +202,9 @@ final class PhoneAgent: ObservableObject {
     func stop() {
         task?.cancel()
         answer(false)
-        if running { say("⏹️ انوقف") }
+        if running { say(L("⏹️ توقّف")) }
         else if Runner.isOn { RunnerActivity.idle(after: 0) } else { RunnerActivity.end() }
-        finish("انوقف بطلبك")
+        finish(L("توقّف بناءً على طلبك"))
     }
 
     /// وضع الأتمتة انطفى وسط المهمة: غالبًا هو وقفه بأزرار الصوت
@@ -213,15 +213,15 @@ final class PhoneAgent: ObservableObject {
         slog("agent: automation ended mid-task: \(why)")
         task?.cancel()
         answer(false)
-        say("⏹️ وقفت وضع الأتمتة (أزرار الصوت؟) — \(why)")
+        say(L("⏹️ توقّف وضع الأتمتة (أزرار الصوت؟) — %@", why))
         XCTBackend.automationWanted = false
-        finish("وقفتها أنت: وضع الأتمتة انطفى وسط المهمة. أرسل المهمة من جديد لو تبي تكمل")
+        finish(L("أوقفتَ المهمة: انطفأ وضع الأتمتة أثناء التنفيذ. أرسل المهمة من جديد إن أردت الإكمال"))
     }
 
     func answer(_ yes: Bool) {
         if confirmCont != nil, let i = timeline.indices.last, timeline[i].state == .ask {
             timeline[i].state = yes ? .running : .failed
-            timeline[i].details.append(yes ? "وافقت" : "رفضت")
+            timeline[i].details.append(yes ? L("تمت الموافقة") : L("رُفضت"))
         }
         if running, confirmCont != nil { updateBubble() }
         confirm = nil
@@ -281,26 +281,26 @@ final class PhoneAgent: ObservableObject {
         // الطريقة المختارة بس، بدون رجوع لطريقة ثانية. XCTest: نشغّل وضع الأتمتة تلقائيًا وننتظره
         if Self.see == .xct {
             if SawtXCTPhoneLocked() {
-                sayLoop(myID, "✗ الجوال مقفل")
-                finishLoop(myID, "وقفت: الجوال مقفل — افتح القفل وأرسل المهمة مرة ثانية"); return
+                sayLoop(myID, L("✗ الجهاز مقفل"))
+                finishLoop(myID, L("توقّف: الجهاز مقفل — افتح القفل وأرسل المهمة مرة أخرى")); return
             }
-            if !XCTBackend.runnerReady || !Runner.isOn { sayLoop(myID, "الطريقة: XCTest — أشغّل المشغّل… (دخّل رمز الجوال لو طلبه)") }
+            if !XCTBackend.runnerReady || !Runner.isOn { sayLoop(myID, L("الطريقة: XCTest — جارٍ تشغيل المشغّل… (أدخل رمز الجهاز إن طُلب)")) }
             if let e = await Runner.set(true) {
-                sayLoop(myID, "✗ XCTest ما اشتغل: \(e.prefix(200))")
-                finishLoop(myID, "وقفت: المشغّل ما اشتغل — \(e.prefix(160))"); return
+                sayLoop(myID, L("✗ لم يعمل XCTest: %@", String(e.prefix(200))))
+                finishLoop(myID, L("توقّف: لم يعمل المشغّل — %@", String(e.prefix(160)))); return
             }
             if let e = await XCTBackend.beginTask() {
                 sayLoop(myID, "✗ \(e.prefix(200))")
                 if XCTBackend.sessionDead {
-                    finishLoop(myID, "وقفت: \(e.prefix(120)) — صوت بيعيد التشغيل ويرجع المشغّل لحاله، بعدها أرسل المهمة مرة ثانية")
-                    Runner.relaunch(title: "صوت أعاد التشغيل عشان يقرأ الشاشة", body: "افتح صوت ويشتغل المشغّل لحاله، وأرسل المهمة مرة ثانية", turnOnNext: true)
+                    finishLoop(myID, L("توقّف: %@ — سيعيد Sowtly التشغيل ويُعيد تشغيل المشغّل تلقائيًا، ثم أرسل المهمة مرة أخرى", String(e.prefix(120))))
+                    Runner.relaunch(title: L("أعاد Sowtly التشغيل ليتمكّن من قراءة الشاشة"), body: L("افتح Sowtly وسيعمل المشغّل تلقائيًا، ثم أرسل المهمة مرة أخرى"), turnOnNext: true)
                     return
                 }
-                finishLoop(myID, "وقفت: \(e.prefix(160))"); return
+                finishLoop(myID, L("توقّف: %@", String(e.prefix(160)))); return
             }
-            sayLoop(myID, "✓ الطريقة: XCTest — \(XCTBackend.sessionState)؛ وضع الأتمتة مفعّل")
+            sayLoop(myID, L("✓ الطريقة: XCTest — %@؛ وضع الأتمتة مفعّل", XCTBackend.sessionState))
         } else {
-            sayLoop(myID, "الطريقة: \(Self.see.title)")
+            sayLoop(myID, L("الطريقة: %@", Self.see.title))
         }
         if Task.isCancelled { return }
         let tl = Date()
@@ -329,9 +329,9 @@ final class PhoneAgent: ObservableObject {
                 fails += 1
                 if Self.see == .xct && fails >= 2 {
                     sayLoop(myID, "✗ \(lastReadError)")
-                    finishLoop(myID, "وقفت: \(lastReadError)"); return
+                    finishLoop(myID, L("توقّف: %@", lastReadError)); return
                 }
-                if fails >= 3 { finishLoop(myID, "ما قدرت أقرأ الشاشة"); return }
+                if fails >= 3 { finishLoop(myID, L("تعذّرت قراءة الشاشة")); return }
                 try? await Task.sleep(nanoseconds: 800_000_000); continue
             }
             fails = 0
@@ -340,7 +340,7 @@ final class PhoneAgent: ObservableObject {
             var (app, els) = scr
             if isSelf {
                 // ما نلمس واجهة صوت نفسها أبدًا: نطلع للرئيسية ونعيد القراءة
-                sayLoop(myID, "صوت قدّام — أطلع للشاشة الرئيسية")
+                sayLoop(myID, L("Sowtly في الواجهة — جارٍ الانتقال إلى الشاشة الرئيسية"))
                 let hr = await Self.exec(.keys("home"))
                 // الانتقال ياخذ وقت: نعيد القراءة لين ثانيتين ونص بدل ما نحكم من أول قراءة
                 var s2: (String, [Element])?
@@ -350,7 +350,7 @@ final class PhoneAgent: ObservableObject {
                     if let r = await readScreen(), !isSelf { s2 = r; slog("agent: left sawt after \((i + 1) * 500)ms"); break }
                 }
                 guard let s2 else {
-                    finishLoop(myID, "ما قدرت أطلع من صوت (الهوم: \(hr.prefix(80))؛ القراءة: \(lastReadError.isEmpty ? "صوت لسا قدّام" : lastReadError))"); return
+                    finishLoop(myID, L("تعذّر الخروج من Sowtly (الشاشة الرئيسية: %1$@؛ القراءة: %2$@)", String(hr.prefix(80)), lastReadError.isEmpty ? L("ما زال Sowtly في الواجهة") : lastReadError)); return
                 }
                 (app, els) = s2
             }
@@ -398,10 +398,10 @@ final class PhoneAgent: ObservableObject {
             if Task.isCancelled { return }
             let llmMs = Int(Date().timeIntervalSince(tLLM) * 1000)
             slog("agent: raw step=\(n) «\(raw.prefix(300))»")
-            log.append(Step(text: "🤖 النموذج (\(llmMs)ms\(img == nil ? "" : "، مع صورة")): \(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))"))
-            pendingDetails.append("رد النموذج (\(llmMs)ms): \(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(400))")
+            log.append(Step(text: L("🤖 النموذج (%1$@ms%2$@): %3$@", String(llmMs), img == nil ? "" : L("، مع صورة"), String(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160)))))
+            pendingDetails.append(L("رد النموذج (%1$@ms): %2$@", String(llmMs), String(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(400))))
             guard action?["action"] is String else {
-                sayLoop(myID, "⚠️ رد غير مفهوم: \(raw.prefix(120))"); finishLoop(myID, "النموذج ما رد بخطوة صالحة"); return
+                sayLoop(myID, L("⚠️ رد غير مفهوم: %@", String(raw.prefix(120)))); finishLoop(myID, L("لم يُرجع النموذج خطوة صالحة")); return
             }
             let acts = Self.actions(raw)
             var actMs = 0
@@ -413,19 +413,19 @@ final class PhoneAgent: ObservableObject {
                     slog("agent: batch stopped (stale ids after screen change)"); break
                 }
                 if kind == "tap" || kind == "longpress" || action["id"] != nil, !((action["id"] as? Int).map { els.indices.contains($0) } ?? false) {
-                    sayLoop(myID, "⚠️ رقم عنصر غير موجود: \(action["id"] ?? "؟")")
+                    sayLoop(myID, L("⚠️ رقم عنصر غير موجود: %@", "\(action["id"] ?? "؟")"))
                     history.append("رقم غلط \(action["id"] ?? "؟") — اختر رقم من القائمة"); lastFailed = true; break
                 }
                 let desc = Self.describeAction(action, els)
                 sayLoop(myID, "\(n). 🤖 \(desc)")
                 if kind == "done" {
-                    let sum = (action["summary"] as? String) ?? "خلصت"
+                    let sum = (action["summary"] as? String) ?? L("تم")
                     // لازم نتأكد من الشاشة: أول done نعيد القراءة ونسأله يتحقق
                     // done أول خطوة بالرد = النموذج شاف الشاشة الحالية نفسها (ما صار شي بعد القراءة): ما نحتاج قراءة+تفكير زيادة
                     let freshScreen = !screenChanged && actMs == 0 && !lastFailed
                     if !verifying && n < maxSteps && !freshScreen {
                         verifying = true
-                        sayLoop(myID, "🔎 أتأكد من الشاشة قبل ما أقول خلصت")
+                        sayLoop(myID, L("🔎 جارٍ التحقق من الشاشة قبل إعلان الانتهاء"))
                         history.append("قال خلص (\(sum)) — يتحقق")
                         break
                     }
@@ -433,9 +433,9 @@ final class PhoneAgent: ObservableObject {
                 }
                 verifying = false
                 if let why = Self.sensitive(action, els) {
-                    let ok = await askConfirm("\(why)\n\(desc)\nأكمل؟")
+                    let ok = await askConfirm(L("%1$@\n%2$@\nهل أكمل؟", why, desc))
                     if Task.isCancelled { return }
-                    if !ok { sayLoop(myID, "رفضت — وقفت"); finishLoop(myID, "انلغى قبل خطوة حساسة"); return }
+                    if !ok { sayLoop(myID, L("رُفضت — توقّف الوكيل")); finishLoop(myID, L("أُلغيت المهمة قبل خطوة حساسة")); return }
                 }
                 let tA = Date()
                 let r = await perform(kind, action, els)
@@ -450,27 +450,28 @@ final class PhoneAgent: ObservableObject {
                 }
             }
             slog("agent: timing step=\(n) ax=\(axMs)ms llm=\(llmMs)ms action=\(actMs)ms els=\(els.count) acts=\(acts.count)")
-            let timing = String(format: "⏱ قراءة %.1f ث · تفكير %.1f ث · تنفيذ %.1f ث (%ld عنصر%@)",
-                                Double(axMs) / 1000, Double(llmMs) / 1000, Double(actMs) / 1000, els.count,
-                                LLMService.onCPU ? "، المعالج" : "")
+            let timing = L("⏱ قراءة %1$@ ث · تفكير %2$@ ث · تنفيذ %3$@ ث (%4$@ عنصر%5$@)",
+                           String(format: "%.1f", Double(axMs) / 1000), String(format: "%.1f", Double(llmMs) / 1000),
+                           String(format: "%.1f", Double(actMs) / 1000), String(els.count),
+                           LLMService.onCPU ? L("، المعالج") : "")
             log.append(Step(text: timing))
             if let i = timeline.indices.last { timeline[i].details.append(timing) }
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
-        finishLoop(myID, "وصلت الحد (\(maxSteps) خطوات) قبل ما أخلص")
+        finishLoop(myID, L("بلغتُ الحد الأقصى (%@ خطوات) قبل الانتهاء", String(maxSteps)))
     }
 
     private func askConfirm(_ q: String) async -> Bool {
         say("❓ \(q)")
         confirm = q
-        surface("ينتظر تأكيدك: " + String(q.prefix(70)), waiting: true)
+        surface(L("بانتظار تأكيدك: %@", String(q.prefix(70))), waiting: true)
         AgentNotify.agentConfirm(q)
         // بدون رد خلال دقيقتين = لا
         let token = UUID(); confirmToken = token
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 120_000_000_000)
             guard let self, self.confirmToken == token, self.confirmCont != nil else { return }
-            self.say("⏱️ ما جاء رد — اعتبرتها لا"); self.answer(false)
+            self.say(L("⏱️ لم يصل رد — اعتُبرت الإجابة «لا»")); self.answer(false)
         }
         return await withCheckedContinuation { c in confirmCont = c }
     }
@@ -567,7 +568,7 @@ final class PhoneAgent: ObservableObject {
         if let spec = Self.cpuSpecForStep() {
             model = "\(spec.id)-cpu+gbnf"
             agentModelName = spec.name
-            guard spec.isDownloaded else { say("⚠️ \(spec.name) مو منزّل — نزّله من صفحة النماذج ← المعالج"); return "" }
+            guard spec.isDownloaded else { say(L("⚠️ %@ غير محمَّل — حمِّله من صفحة النماذج ← المعالج", spec.name)); return "" }
             do { return try await LlamaEngine.of(spec).complete(system: Self.system, user: user, maxTokens: 256, grammar: Self.grammar) }
             catch {
                 slog("agent: cpu error \(error)")
@@ -750,7 +751,7 @@ final class PhoneAgent: ObservableObject {
                 return (s.name, els)
             }
             slog("agent: xct read failed: \(XCTBackend.lastAXError)")
-            lastReadError = "قراءة XCTest فشلت: " + String(XCTBackend.lastAXError.prefix(160))
+            lastReadError = L("فشلت قراءة XCTest: %@", String(XCTBackend.lastAXError.prefix(160)))
             return nil
         }
         let r = await Self.exec(.screen(firstRead ? 8000 : 5000))
@@ -764,8 +765,8 @@ final class PhoneAgent: ObservableObject {
             if o.count >= 2 {
                 // ما نعرف التطبيق اللي قدّام: لو صوت نفسه قدّام نعتبره صوت (عشان ما نلمس واجهته)
                 lastFront = UIApplication.shared.applicationState == .active ? (Bundle.main.bundleIdentifier ?? "com.za7ef.sawt") : "?"
-                say("قراءة بالصورة (\(o.count) نص)"); return ("؟", Array(o.prefix(45))) }
-            say("⚠️ قراءة الشاشة: \(r.prefix(160))"); return nil
+                say(L("قراءة من الصورة (%@ نص)", String(o.count))); return ("؟", Array(o.prefix(45))) }
+            say(L("⚠️ قراءة الشاشة: %@", String(r.prefix(160)))); return nil
         }
         if d["partial"] as? Bool == true { slog("agent: ax partial tree") }
         let app = ((d["app"] as? [String: Any])?["name"] as? String) ?? "؟"
@@ -950,17 +951,17 @@ final class PhoneAgent: ObservableObject {
         if k == "tap" || k == "longpress", let i = a["id"] as? Int, els.indices.contains(i) {
             // الاسم أو القيمة (بعض الأزرار اسمها فاضي والنص في القيمة)
             for l in [els[i].label, els[i].value] where !l.isEmpty {
-                if l.split(separator: " ").count <= 4, Self.hasWord(l) { return "خطوة حساسة (إرسال/حذف/دفع)." }
+                if l.split(separator: " ").count <= 4, Self.hasWord(l) { return L("خطوة حساسة (إرسال/حذف/دفع).") }
             }
         }
-        if k == "type", let i = a["id"] as? Int, els.indices.contains(i), els[i].secure { return "الكتابة في خانة كلمة سر." }
-        if k == "type", els.contains(where: { $0.secure }) { return "فيه خانة كلمة سر على الشاشة." }
+        if k == "type", let i = a["id"] as? Int, els.indices.contains(i), els[i].secure { return L("الكتابة في خانة كلمة مرور.") }
+        if k == "type", els.contains(where: { $0.secure }) { return L("توجد خانة كلمة مرور على الشاشة.") }
         // روابط تتصل/ترسل مباشرة (tel/sms/mailto/facetime…) مو تصفح
         if k == "url", let u = a["url"] as? String, Self.urlScheme(u).map({ $0 != "http" && $0 != "https" }) ?? false {
-            return "الرابط يفتح اتصال/رسالة/تطبيق مباشرة."
+            return L("الرابط يفتح اتصالًا أو رسالة أو تطبيقًا مباشرة.")
         }
         // بحث: مفتاح الكيبورد «Search» ما يرسل، فما نوقف الوكيل ونسأل عن كل بحث
-        if k == "enter" { return enterIsSafe(els) ? nil : "زر الإدخال ممكن يرسل." }
+        if k == "enter" { return enterIsSafe(els) ? nil : L("زر الإدخال قد يُرسل.") }
         return nil
     }
 
@@ -1053,9 +1054,9 @@ final class PhoneAgent: ObservableObject {
     enum See: String, CaseIterable { case ax, share, xct
         var title: String {
             switch self {
-            case .ax: return "قراءة النصوص"
-            case .share: return "مشاركة الشاشة"
-            case .xct: return "XCTest (بدون بث)"
+            case .ax: return L("قراءة النصوص")
+            case .share: return L("مشاركة الشاشة")
+            case .xct: return L("XCTest (بدون بث)")
             }
         }
     }
@@ -1235,7 +1236,7 @@ final class PhoneAgent: ObservableObject {
             let r = await Self.exec(.launch(hit.bundle))
             slog("agent: open chosen=\(hit.bundle) via=table ok=\(r.contains("\"ok\":true"))")
             if r.contains("\"ok\":true") { try? await Task.sleep(nanoseconds: 700_000_000); return (true, r) }
-            say("⚠️ إطلاق \(hit.bundle): \(r.prefix(120))")
+            say(L("⚠️ إطلاق %1$@: %2$@", hit.bundle, String(r.prefix(120))))
         }
         let q = hit?.en ?? name
         // الافتراضي مثل ١٤٣: البحث (سبوتلايت) باسم التطبيق؛ الإطلاق بالمعرّف بس لتطابق الجدول التام
@@ -1250,7 +1251,7 @@ final class PhoneAgent: ObservableObject {
            let cands = (try? JSONSerialization.jsonObject(with: Data(Self.firstJSONArray(err).utf8))) as? [[String: Any]],
            cands.count >= 2 {
             let names = cands.prefix(3).compactMap { $0["name"] as? String }
-            let ok = await askConfirm("لقيت أكثر من تطبيق لـ«\(name)»: \(names.joined(separator: "، ")).\nأفتح «\(names[0])»؟")
+            let ok = await askConfirm(L("وجدتُ أكثر من تطبيق باسم «%1$@»: %2$@.\nهل أفتح «%3$@»؟", name, names.joined(separator: "، "), names[0]))
             if ok, let bid = cands[0]["bundle"] as? String {
                 let r3 = await Self.exec(.launch(bid))
                 slog("agent: open chosen=\(bid) via=user-confirm")
@@ -1360,10 +1361,10 @@ enum AgentNotify {
     static func setup() {
         let c = UNUserNotificationCenter.current()
         c.delegate = delegate
-        let stop = UNNotificationAction(identifier: "agent.stop", title: "إيقاف", options: [.destructive])
+        let stop = UNNotificationAction(identifier: "agent.stop", title: L("إيقاف"), options: [.destructive])
         // بدون .foreground: الرد يوصل للتطبيق وهو بالخلفية بدون ما يفتح
-        let yes = UNNotificationAction(identifier: "agent.yes", title: "موافق", options: [], icon: UNNotificationActionIcon(systemImageName: "checkmark"))
-        let no = UNNotificationAction(identifier: "agent.no", title: "رفض", options: [.destructive], icon: UNNotificationActionIcon(systemImageName: "xmark"))
+        let yes = UNNotificationAction(identifier: "agent.yes", title: L("موافق"), options: [], icon: UNNotificationActionIcon(systemImageName: "checkmark"))
+        let no = UNNotificationAction(identifier: "agent.no", title: L("رفض"), options: [.destructive], icon: UNNotificationActionIcon(systemImageName: "xmark"))
         c.setNotificationCategories([
             UNNotificationCategory(identifier: "agent.run", actions: [stop], intentIdentifiers: []),
             UNNotificationCategory(identifier: "agent.confirm", actions: [yes, no, stop], intentIdentifiers: []),
@@ -1372,7 +1373,7 @@ enum AgentNotify {
 
     static func progress(goal: String, step: String) {
         let c = UNMutableNotificationContent()
-        c.title = "الوكيل شغّال: \(goal.prefix(50))"
+        c.title = L("الوكيل يعمل: %@", String(goal.prefix(50)))
         c.body = step
         c.categoryIdentifier = "agent.run"
         c.interruptionLevel = .passive
@@ -1383,7 +1384,7 @@ enum AgentNotify {
 
     static func agentConfirm(_ q: String) {
         let c = UNMutableNotificationContent()
-        c.title = "صوت يحتاج تأكيدك"
+        c.title = L("Sowtly يحتاج تأكيدك")
         c.body = q
         c.sound = .default
         c.categoryIdentifier = "agent.confirm"
@@ -1394,7 +1395,7 @@ enum AgentNotify {
     static func done(_ r: String) {
         clear()
         let c = UNMutableNotificationContent()
-        c.title = "الوكيل خلص"
+        c.title = L("انتهى الوكيل")
         c.body = r
         c.interruptionLevel = .passive
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "agent-done", content: c, trigger: nil))
@@ -1459,7 +1460,7 @@ struct PhoneAgentView: View {
     var body: some View {
         Form {
             Section {
-                TextField("وش تبيني أسوي؟ مثال: افتح الملاحظات واكتب مرحبا", text: $goal, axis: .vertical)
+                TextField("ماذا تريد أن أفعل؟ مثال: افتح الملاحظات واكتب مرحبًا", text: $goal, axis: .vertical)
                     .focused($goalFocused)
                 if agent.running {
                     Button(role: .destructive) { agent.stop() } label: {
@@ -1469,7 +1470,7 @@ struct PhoneAgentView: View {
                     Button(action: tapStart) {
                         HStack(spacing: 8) {
                             if starting { ProgressView().controlSize(.small) }
-                            Text(starting ? "جاري البدء…" : "ابدأ").font(.headline)
+                            Text(starting ? L("جارٍ البدء…") : L("ابدأ")).font(.headline)
                         }
                         .frame(maxWidth: .infinity, minHeight: 36)
                         .contentShape(Rectangle())
@@ -1479,14 +1480,14 @@ struct PhoneAgentView: View {
                     .disabled(starting || goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 if let r = refusal, !agent.running {
-                    Label("ما بدأ: \(r)", systemImage: "exclamationmark.triangle.fill")
+                    Label(L("لم يبدأ: %@", r), systemImage: "exclamationmark.triangle.fill")
                         .font(.footnote).foregroundStyle(.orange)
                 }
                 Picker("نموذج الوكيل", selection: $agentPick) {
-                    Text("نفس صفحة النماذج (تلقائي)").tag("")
+                    Text("مثل صفحة النماذج (تلقائي)").tag("")
                     Section("على الجهاز") {
-                        ForEach(GGUFSpec.all.filter { $0.isDownloaded }) { Text("المعالج: \($0.name)").tag("cpu:" + $0.id) }
-                        ForEach(Catalog.llms.filter { models.downloaded.contains($0.id) }) { Text("كرت الشاشة: \($0.title)").tag("gpu:" + $0.id) }
+                        ForEach(GGUFSpec.all.filter { $0.isDownloaded }) { Text(L("المعالج: %@", "\($0.name)")).tag("cpu:" + $0.id) }
+                        ForEach(Catalog.llms.filter { models.downloaded.contains($0.id) }) { Text(L("معالج الرسوميات: %@", "\($0.title)")).tag("gpu:" + $0.id) }
                     }
                     let free = CloudProvider.free.filter { keysVersion >= 0 && $0.hasKey }
                     if !free.isEmpty {
@@ -1501,12 +1502,12 @@ struct PhoneAgentView: View {
                     if v.hasPrefix("cloud:"), !UserDefaults.standard.bool(forKey: "cloudConsent") { pendingPick = old; askConsent = true }
                 }
                 Text(agentPick.isEmpty
-                     ? "يستخدم المختار في صفحة النماذج: كرت الشاشة والتطبيق قدّام، والمعالج بالخلفية، أو النموذج السحابي لو مفعّل."
-                     : agentPick.hasPrefix("cloud:") ? "سحابي: نص الشاشة وصورتها في كل خطوة يروحون لخوادم الخدمة. يشتغل بالخلفية بس يحتاج إنترنت."
-                     : (agentPick.hasPrefix("gpu:") ? "لو التطبيق بالخلفية (معالج بس) يرجع لنموذج المعالج المختار." : "يشتغل على المعالج حتى والتطبيق قدّام."))
+                     ? L("يستخدم ما اخترته في صفحة النماذج: معالج الرسوميات والتطبيق في الواجهة، والمعالج في الخلفية، أو النموذج السحابي إن كان مفعّلًا.")
+                     : agentPick.hasPrefix("cloud:") ? L("سحابي: يُرسَل نص الشاشة وصورتها في كل خطوة إلى خوادم الخدمة. يعمل في الخلفية لكنه يحتاج إلى الإنترنت.")
+                     : (agentPick.hasPrefix("gpu:") ? L("إذا كان التطبيق في الخلفية (المعالج فقط) يعود إلى نموذج المعالج المختار.") : L("يعمل على المعالج حتى والتطبيق في الواجهة.")))
                     .font(.footnote).foregroundStyle(.secondary)
                 NavigationLink("مفاتيح الخدمات") { CloudKeysView(onChange: { keysVersion += 1 }) }
-                Picker("أقصى عدد خطوات", selection: $maxSteps) {
+                Picker("الحد الأقصى للخطوات", selection: $maxSteps) {
                     ForEach([10, 20, 30], id: \.self) { Text("\($0)").tag($0) }
                 }
                 .pickerStyle(.segmented)
@@ -1516,7 +1517,7 @@ struct PhoneAgentView: View {
                 .onChange(of: see) { _, v in PhoneAgent.see = v; if v == .share { ScreenShare.shared.start() } }
                 if see == .share {
                     HStack {
-                        Text(shareLive ? "البث شغّال 🔴" : "اضغط الزر وبعدين «بدء البث»")
+                        Text(shareLive ? L("البث يعمل 🔴") : L("اضغط الزر ثم «بدء البث»"))
                         Spacer()
                         BroadcastPicker().frame(width: 44, height: 44)
                     }
@@ -1529,13 +1530,13 @@ struct PhoneAgentView: View {
                     }
                 }
             } footer: {
-                Text("«XCTest»: يقرأ شجرة التطبيق اللي قدّام ويلمس عن طريق أدوات الاختبار بدون بث (يحتاج LocalDevVPN، وأول مرة ممكن يطلب رمز الجوال). لو فشل يرجع للطريقة العادية لحاله.\n«مشاركة الشاشة»: يرسل صورة الشاشة مع أرقام العناصر لنموذج الرؤية (لو البث طافي ياخذ لقطة). الصورة تشتغل على كرت الشاشة بس؛ على المعالج نص فقط.\nيقرأ الشاشة ويختار خطوة وحدة كل مرة (الحد حسب الإعداد). أي إرسال أو حذف أو دفع أو كلمة سر يوقف ويسألك. تقدر توقفه بأي وقت.")
+                Text("«XCTest»: يقرأ شجرة التطبيق الظاهر ويلمس عبر أدوات الاختبار دون بث (يحتاج إلى LocalDevVPN، وقد يطلب رمز الجهاز في المرة الأولى). إذا فشل يعود إلى الطريقة العادية تلقائيًا.\n«مشاركة الشاشة»: يرسل صورة الشاشة مع أرقام العناصر إلى نموذج الرؤية (إذا كان البث متوقفًا يلتقط صورة). الصورة تعمل على معالج الرسوميات فقط؛ وعلى المعالج نص فقط.\nيقرأ الشاشة ويختار خطوة واحدة في كل مرة (الحد حسب الإعداد). أي إرسال أو حذف أو دفع أو كلمة مرور يوقفه ويسألك. يمكنك إيقافه في أي وقت.")
             }
             if let q = agent.confirm {
-                Section("يحتاج تأكيد") {
+                Section("يحتاج إلى تأكيد") {
                     Text(q)
                     HStack {
-                        Button("كمّل") { agent.answer(true) }.buttonStyle(.borderedProminent)
+                        Button("متابعة") { agent.answer(true) }.buttonStyle(.borderedProminent)
                         Button("لا", role: .destructive) { agent.answer(false) }.buttonStyle(.bordered)
                     }
                 }
@@ -1567,7 +1568,7 @@ struct PhoneAgentView: View {
                     }
                 } label: {
                     HStack {
-                        Text(xctRunning ? "جاري الاختبار…" : "اختبار XCTest (تجريبي)")
+                        Text(xctRunning ? L("جارٍ الاختبار…") : L("اختبار XCTest (تجريبي)"))
                         if xctRunning { Spacer(); ProgressView() }
                     }
                 }
@@ -1583,7 +1584,7 @@ struct PhoneAgentView: View {
                         }
                     }
                 }
-                if xctWaiting { Text("دورك: دخّل رمز الجوال لو طلبه iOS").foregroundStyle(.orange) }
+                if xctWaiting { Text("دورك: أدخل رمز الجهاز إن طلبه iOS").foregroundStyle(.orange) }
                 if !xctOut.isEmpty { Text(xctOut).font(.footnote.monospaced()).textSelection(.enabled) }
                 // وضع الأتمتة: جلسة XCTest دائمة تنبني من جديد لحالها لو انقطعت
                 Toggle(isOn: Binding(get: { xctAuto }, set: { on in
@@ -1596,7 +1597,7 @@ struct PhoneAgentView: View {
                 })) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("المشغّل (وضع الأتمتة مع المهام)")
-                        Text(autoBusy ? "يجهّز… (دخّل رمز الجوال لو طلبه)" : autoStatus).font(.caption).foregroundStyle(.secondary)
+                        Text(autoBusy ? L("جارٍ التجهيز… (أدخل رمز الجهاز إن طُلب)") : autoStatus).font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 .disabled(autoBusy)
@@ -1611,25 +1612,25 @@ struct PhoneAgentView: View {
                 Toggle(isOn: $cleanRelaunch) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("إعادة تشغيل نظيفة عند الإيقاف")
-                        Text("لما تطفّي المشغّل يطلع صوت ويرسل لك إشعار؛ التشغيل الجاي يبدأ بجلسة جديدة تقرأ الشاشة")
+                        Text("عند إيقاف المشغّل يُغلق Sowtly ويرسل إليك إشعارًا؛ ويبدأ التشغيل التالي بجلسة جديدة تقرأ الشاشة")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 Toggle(isOn: $intentAuto) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("يفهم المهام من المحادثة تلقائيًا")
-                        Text(intentAuto ? "والمشغّل شغّال: أوامر مثل «افتح الملاحظات» تصير مهمة، والسوالف والأسئلة تبقى محادثة" : "المهام بس بـ«/جوال …»")
+                        Text(intentAuto ? L("عندما يعمل المشغّل: الأوامر مثل «افتح الملاحظات» تصبح مهمة، والدردشة والأسئلة تبقى محادثة") : L("المهام فقط عبر «/جوال …»"))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Toggle("صورة الشاشة كل خطوة (أبطأ)", isOn: Binding(
+                Toggle("صورة الشاشة في كل خطوة (أبطأ)", isOn: Binding(
                     get: { UserDefaults.standard.bool(forKey: "agentAlwaysShot") },
                     set: { UserDefaults.standard.set($0, forKey: "agentAlwaysShot") }))
                 Toggle("قراءة الشاشة بلقطة XCUIApplication (المجرّبة)", isOn: Binding(
                     get: { (UserDefaults.standard.string(forKey: "xctReader") ?? "app") != "ax" },
                     set: { UserDefaults.standard.set($0 ? "app" : "ax", forKey: "xctReader") }))
                 // اختبار الضغط: XCTest يلمس الهدف هذا، ولو العدّاد زاد يعني اللمس وصل فعلًا
-                Button("🎯 هدف الضغط: \(tapHits)") { tapHits += 1 }
+                Button(L("🎯 هدف الضغط: %@", String(tapHits))) { tapHits += 1 }
                     .buttonStyle(.bordered)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { targetFrame = $0 }
                 Button {
@@ -1639,7 +1640,7 @@ struct PhoneAgentView: View {
                     slog("xct: tap test tapped")
                     Task { @MainActor in
                         let before = tapHits
-                        tapOut = "… الاتصال: بدأ"
+                        tapOut = L("… الاتصال: بدأ")
                         let cfg = await XCTestProbe.connectionConfig()
                         let target = CGPoint(x: targetFrame.midX, y: targetFrame.midY)
                         // كل سطر يطلع أول ما تبدأ الخطوة وأول ما تخلص، فلو علّقت نعرف وين
@@ -1651,7 +1652,7 @@ struct PhoneAgentView: View {
                             // اللمسة توصل للواجهة بعد شوي: ننتظر ونشيك العدّاد
                             try? await Task.sleep(nanoseconds: 1_200_000_000)
                             let hit = tapHits > before
-                            let l = "\(hit ? "✓" : "✗") target: " + (hit ? "الهدف انضغط (\(before) → \(tapHits))" : "العدّاد ما تغيّر")
+                            let l = "\(hit ? "✓" : "✗") target: " + (hit ? L("تم الضغط على الهدف (%1$@ → %2$@)", String(before), String(tapHits)) : L("لم يتغيّر العدّاد"))
                             slog("xct: tapTest \(l)")
                             tapOut += "\n" + l
                         }
@@ -1659,7 +1660,7 @@ struct PhoneAgentView: View {
                     }
                 } label: {
                     // بدون مؤشر دوّار: الحركة المستمرة تخلي XCTest ينتظر هدوء التطبيق
-                    Text(tapRunning ? "جاري اختبار الضغط… (السجل تحت)" : "اختبار الضغط")
+                    Text(tapRunning ? L("جارٍ اختبار الضغط… (السجل أدناه)") : L("اختبار الضغط"))
                 }
                 .disabled(tapRunning || xctRunning)
                 if !tapOut.isEmpty {
@@ -1667,7 +1668,7 @@ struct PhoneAgentView: View {
                     Button("نسخ السجل") { UIPasteboard.general.string = tapOut }
                 }
             } footer: {
-                Text("«اختبار الضغط»: يجهّز الجلسة، يقيس سرعة قراءة الشاشة، ويخلي XCTest يلمس زر «هدف الضغط»؛ لو العدّاد زاد يعني اللمس شغّال.\nيجرب طريقة التحكم الجديدة: يطلب من testmanagerd عبر الاتصال المحلي يفوّض صوت لاختبار الواجهة، بعدين يحمّل أدوات الاختبار ويقرأ الشاشة الرئيسية. ممكن يطلب iOS رمز الجوال لتفعيل الأتمتة.")
+                Text("«اختبار الضغط»: يجهّز الجلسة، ويقيس سرعة قراءة الشاشة، ويجعل XCTest يلمس زر «هدف الضغط»؛ إذا زاد العدّاد فاللمس يعمل.\nيجرّب طريقة التحكم الجديدة: يطلب من testmanagerd عبر الاتصال المحلي تفويض Sowtly لاختبار الواجهة، ثم يحمّل أدوات الاختبار ويقرأ الشاشة الرئيسية. قد يطلب iOS رمز الجهاز لتفعيل الأتمتة.")
             }
             if !agent.log.isEmpty {
                 Section("الخطوات") {
@@ -1678,10 +1679,10 @@ struct PhoneAgentView: View {
         .scrollDismissesKeyboard(.interactively)
         .navigationTitle("الوكيل (تجريبي)")
         .alert("الوكيل السحابي", isPresented: $askConsent) {
-            Button("موافق", role: .destructive) { UserDefaults.standard.set(true, forKey: "cloudConsent") }
+            Button("أوافق", role: .destructive) { UserDefaults.standard.set(true, forKey: "cloudConsent") }
             Button("إلغاء", role: .cancel) { agentPick = pendingPick }
         } message: {
-            Text("لما تختار نموذج سحابي، نص الشاشة (أسماء الأزرار والعناصر) وصورة الشاشة في كل خطوة يروحون لخوادم الخدمة اللي اخترتها، حسب سياسة خصوصيتها. لا تستخدمه على شاشات فيها معلومات حساسة. هالتنبيه يطلع مرة وحدة.")
+            Text("عند اختيار نموذج سحابي، يُرسَل نص الشاشة (أسماء الأزرار والعناصر) وصورة الشاشة في كل خطوة إلى خوادم الخدمة التي اخترتها، وفق سياسة خصوصيتها. لا تستخدمه على شاشات تحتوي على معلومات حساسة. يظهر هذا التنبيه مرة واحدة.")
         }
     }
 }
@@ -1761,22 +1762,22 @@ enum Runner {
             // تشغيل واحد بالمرة (الزر وفتح التطبيق وبداية المهمة ممكن يطلبونه سوا)
             if starting {
                 while starting { try? await Task.sleep(nanoseconds: 200_000_000) }
-                return XCTBackend.runnerReady ? nil : "المشغّل ما اشتغل"
+                return XCTBackend.runnerReady ? nil : L("لم يعمل المشغّل")
             }
             starting = true
             defer { starting = false }
             PhoneAgent.see = .xct
             // جلسة هذا التشغيل تسكّرت/ماتت: القراءة ما ترجع إلا بعملية جديدة (مثل Poki)، فنعيد التشغيل ويرجع المشغّل لحاله
             if XCTBackend.sessionDead {
-                relaunch(title: "صوت أعاد التشغيل عشان يقرأ الشاشة", body: "افتح صوت ويشتغل المشغّل لحاله", turnOnNext: true)
-                return "الجلسة انقفلت في هذا التشغيل؛ صوت بيعيد التشغيل ويرجع المشغّل لحاله"
+                relaunch(title: L("أعاد Sowtly التشغيل ليتمكّن من قراءة الشاشة"), body: L("افتح Sowtly وسيعمل المشغّل تلقائيًا"), turnOnNext: true)
+                return L("أُغلقت الجلسة في هذا التشغيل؛ سيعيد Sowtly التشغيل ويُعيد تشغيل المشغّل تلقائيًا")
             }
             if !alive { alive = true; HostPairing.shared.keepAlive(true) }
             let busy = PhoneAgent.shared.running
-            if !busy && !XCTBackend.runnerReady { RunnerActivity.show(RunnerActivity.state("prep", "يجهّز جلسة XCTest"), goal: "المشغّل") }
+            if !busy && !XCTBackend.runnerReady { RunnerActivity.show(RunnerActivity.state("prep", L("جارٍ تجهيز جلسة XCTest")), goal: L("المشغّل")) }
             let e = await XCTBackend.startAutomation()
             if !busy {
-                if let e { RunnerActivity.show(RunnerActivity.state("sleep", "ما اشتغل: " + String(e.prefix(60))), goal: "المشغّل") }
+                if let e { RunnerActivity.show(RunnerActivity.state("sleep", L("لم يعمل: %@", String(e.prefix(60)))), goal: L("المشغّل")) }
                 else { RunnerActivity.idle(after: 0) }
             }
             return e
@@ -1787,7 +1788,7 @@ enum Runner {
             await XCTBackend.disableAutomation()
             XCTBackend.stopAutomation()
             if cleanRelaunch {
-                relaunch(title: "المشغّل انطفى", body: "افتح صوت عشان تشغّل المشغّل مرة ثانية", turnOnNext: false)
+                relaunch(title: L("توقّف المشغّل"), body: L("افتح Sowtly لتشغيل المشغّل مرة أخرى"), turnOnNext: false)
             }
             return nil
         }
@@ -1837,9 +1838,9 @@ enum Runner {
 
     /// نص الحالة القصير للزر
     static var stateText: String {
-        if !isOn { return "متوقف" }
-        if PhoneAgent.shared.running { return "شغّال: الخطوة \(PhoneAgent.shared.stepNo)" }
-        return XCTBackend.runnerReady ? "شغّال (نايم)" : "يجهّز…"
+        if !isOn { return L("متوقف") }
+        if PhoneAgent.shared.running { return L("يعمل: الخطوة %@", String(PhoneAgent.shared.stepNo)) }
+        return XCTBackend.runnerReady ? L("يعمل (في وضع السكون)") : L("جارٍ التجهيز…")
     }
 }
 
@@ -1855,14 +1856,14 @@ struct RunnerPill: View {
         VStack(alignment: .leading, spacing: 4) {
             pill
             HStack(spacing: 6) {
-                Text(on ? "جاهز ينفّذ مهام الجوال" : "شغّله عشان أقدر أتحكم بالجوال وأنفّذ المهام")
+                Text(on ? L("جاهز لتنفيذ مهام الجهاز") : L("شغّله لأتمكّن من التحكم بالجهاز وتنفيذ المهام"))
                     .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 Spacer(minLength: 0)
                 Button { showInfo = true } label: {
                     Image(systemName: "info.circle").font(.subheadline).foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("وش هو المشغّل؟")
+                .accessibilityLabel("ما هو المشغّل؟")
             }
             .padding(.horizontal, 6)
         }
@@ -1883,7 +1884,7 @@ struct RunnerPill: View {
             HStack(spacing: 8) {
                 Image(systemName: busy ? "hourglass" : "power")
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(busy ? "يجهّز… (دخّل رمز الجوال لو طلبه)" : text).font(.subheadline.bold())
+                    Text(busy ? L("جارٍ التجهيز… (أدخل رمز الجهاز إن طُلب)") : text).font(.subheadline.bold())
                     if let error, !busy { Text("✗ " + error).font(.caption2).lineLimit(2) }
                 }
                 Spacer(minLength: 0)
@@ -1914,22 +1915,22 @@ struct RunnerInfoSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    item("power", "وش هو المشغّل؟",
-                         "هو اللي يخلي صوت يشوف الشاشة ويضغط ويكتب بدالك في أي تطبيق.")
-                    item("bolt.horizontal", "ليش لازم يكون شغّال؟",
-                         "التحكم يمشي عبر جلسة XCTest (أداة الاختبار حقت أبل). المشغّل يفتح هالجلسة ويخليها جاهزة، وبدونها ما أقدر ألمس الجوال.")
-                    item("network", "وش يحتاج؟",
-                         "LocalDevVPN يكون متصل، وصورة المطوّر (DDI) محمّلة عن طريق StikDebug. لو واحد منهم طافي المشغّل ما يشتغل.")
-                    item("sun.min", "وقت المهمة",
-                         "الشاشة تغمق وتطلع علامة أثناء المهمة، هذا من النظام. خلّ الجوال عليّ ولا تلمس الشاشة لين أخلص.")
-                    item("stop.circle", "كيف أوقفه؟",
-                         "توقفها بزر الإيقاف في الجزيرة، أو بضغط زرّي الصوت مع بعض ضغطة طويلة. وتقدر بعد تكتب «وقف» في المحادثة.")
+                    item("power", L("ما هو المشغّل؟"),
+                         L("هو ما يتيح لـSowtly رؤية الشاشة والضغط والكتابة نيابةً عنك في أي تطبيق."))
+                    item("bolt.horizontal", L("لماذا يجب أن يعمل؟"),
+                         L("يتم التحكم عبر جلسة XCTest (أداة الاختبار من Apple). يفتح المشغّل هذه الجلسة ويبقيها جاهزة، ومن دونها لا أستطيع لمس الجهاز."))
+                    item("network", L("ماذا يحتاج؟"),
+                         L("أن يكون LocalDevVPN متصلًا، وأن تكون صورة المطوّر (DDI) محمّلة عبر StikDebug. إذا كان أحدهما متوقفًا فلن يعمل المشغّل."))
+                    item("sun.min", L("أثناء المهمة"),
+                         L("تُعتم الشاشة وتظهر علامة أثناء المهمة، وهذا من النظام. اترك الجهاز ولا تلمس الشاشة حتى أنتهي."))
+                    item("stop.circle", L("كيف أوقفه؟"),
+                         L("أوقفه بزر الإيقاف في الجزيرة الديناميكية، أو بضغطة طويلة على زرَّي الصوت معًا. ويمكنك أيضًا كتابة «توقف» في المحادثة."))
                 }
                 .padding(20)
             }
             .navigationTitle("المشغّل")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("تمام") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("حسنًا") { dismiss() } } }
         }
         .presentationDetents([.medium, .large])
         .environment(\.layoutDirection, AppLang.layout)
@@ -1978,10 +1979,10 @@ enum RunnerActivity {
         idleTask = Task { @MainActor in
             if wait > 0 { try? await Task.sleep(nanoseconds: wait) }
             guard !Task.isCancelled, Runner.isOn, !PhoneAgent.shared.running else { return }
-            show(state("ready", "أرسل مهمة في المحادثة"), goal: "المشغّل")
+            show(state("ready", L("أرسل مهمة في المحادثة")), goal: L("المشغّل"))
             try? await Task.sleep(nanoseconds: 60_000_000_000)
             guard !Task.isCancelled, Runner.isOn, !PhoneAgent.shared.running else { return }
-            show(state("sleep", "يصحى لما ترسل مهمة"), goal: "المشغّل")
+            show(state("sleep", L("يستيقظ عند إرسال مهمة")), goal: L("المشغّل"))
         }
     }
 

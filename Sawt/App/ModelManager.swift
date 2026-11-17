@@ -50,19 +50,19 @@ final class ModelManager: ObservableObject {
     var callMissing: String? {
         if !callLLMReady {
             if ComputeMode.current == "cpu" {
-                return "نموذج المعالج المختار (\(GGUFSpec.active.name)) مو منزّل. نزّله أو اختر غيره من الإعدادات ← النماذج ← المعالج."
+                return L("نموذج المعالج المختار (%@) غير محمَّل. حمِّله أو اختر غيره من الإعدادات ← النماذج ← المعالج.", GGUFSpec.active.name)
             }
-            if llm.isBusy { return "نموذج المحادثة للحين يتحمّل، لحظات." }
-            if case .failed(let m) = llm { return "نموذج المحادثة ما اشتغل: \(m)" }
+            if llm.isBusy { return L("ما زال نموذج المحادثة قيد التحميل، لحظات.") }
+            if case .failed(let m) = llm { return L("تعذّر تشغيل نموذج المحادثة: %@", m) }
             if !downloaded.contains(AppSettings.shared.llmID) {
-                return "نموذج المحادثة (\(AppSettings.shared.llm.title)) مو منزّل. نزّله من الإعدادات ← النماذج."
+                return L("نموذج المحادثة (%@) غير محمَّل. حمِّله من الإعدادات ← النماذج.", AppSettings.shared.llm.title)
             }
-            return "نموذج المحادثة مو محمّل. افتح الدردشة أو جرّب مرة ثانية."
+            return L("نموذج المحادثة غير جاهز. افتح الدردشة أو حاول مرة أخرى.")
         }
         if !stt.isReady {
-            if stt.isBusy { return "سمع آبل للحين يتجهز، لحظات." }
-            if case .failed(let m) = stt { return "سمع آبل ما اشتغل: \(m)" }
-            return "سمع آبل مو جاهز، جرّب مرة ثانية."
+            if stt.isBusy { return L("ما زال التعرّف على الكلام قيد التجهيز، لحظات.") }
+            if case .failed(let m) = stt { return L("تعذّر تشغيل التعرّف على الكلام: %@", m) }
+            return L("التعرّف على الكلام غير جاهز، حاول مرة أخرى.")
         }
         return nil
     }
@@ -145,17 +145,17 @@ final class ModelManager: ObservableObject {
                 return
             }
             if needsNet {
-                let ok = await NetworkGate.shared.permit("تنزيل النموذج")
+                let ok = await NetworkGate.shared.permit(L("تحميل النموذج"))
                 // انضغط إيقاف أو تغيّر النموذج وقت التنبيه؟ نوقف
                 guard llmToken == token, !Task.isCancelled else { return }
                 guard ok else {
                     downloadingID = nil
-                    llm = .failed("الإنترنت مقفول، فما نزّلت النموذج.")
+                    llm = .failed(L("الإنترنت مغلق، لذلك لم يُحمَّل النموذج."))
                     return
                 }
             }
             do {
-                try await withTimeout(seconds: 1_800, what: "تنزيل النموذج") {
+                try await withTimeout(seconds: 1_800, what: L("تحميل النموذج")) {
                     try await LLMService.shared.load(option) { p in
                         Task { @MainActor in
                             let mm = ModelManager.shared
