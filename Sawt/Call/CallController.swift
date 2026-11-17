@@ -349,10 +349,53 @@ final class CallController: ObservableObject {
         proc.async { self.procMuted = m; if m { self.resetProc(keepAI: true) } }
     }
 
+    private var previewID = 0
+
+    /// بعد تغيير الصوت أثناء المكالمة: كلمات الانتظار تتجهّز من جديد بالصوت الجديد
+    func voiceSwitched() {
+        audarFillersTask?.cancel()
+        audarFillersTask = nil
+        audarFillers = [:]
+        audarFillersVoice = ""
+        lastFiller = nil
+        lastHum = nil
+        prepareAudarFillers()
+    }
+
+    /// تعريف الصوت المختار: يوقف أي رد أو تعريف شغّال، ويقول الجملة بالصوت الحالي.
+    func previewVoice(_ text: String) {
+        guard state != .idle, state != .starting else { return }
+        if state == .thinking || state == .speaking { interrupt() }
+        audio.stopPlayback()
+        previewID += 1
+        let myPreview = previewID
+        let voice = AppSettings.shared.voice
+        let rate = AppSettings.shared.speechRate
+        state = .speaking
+        proc.async { self.aiActive = true }
+        slog("call: voice preview \(voice.id)")
+        Task { @MainActor [weak self] in
+            let o = await SpeechSynth.shared.synthesize(text, voice: voice, rate: rate)
+            guard let self, myPreview == self.previewID, self.state == .speaking, self.responseTask == nil else { return }
+            let finish: () -> Void = { [weak self] in
+                Task { @MainActor in
+                    guard let self, myPreview == self.previewID, self.state == .speaking, self.responseTask == nil else { return }
+                    self.state = .listening
+                    self.proc.async { self.aiActive = false }
+                }
+            }
+            guard !o.samples.isEmpty else { finish(); return }
+            self.audio.enqueue(samples: o.samples, sampleRate: o.rate) { finish() }
+        }
+    }
+
     /// يقطع كلام الذكاء يدويًا (زر).
     func interrupt() {
         guard state == .thinking || state == .speaking else { return }
+        previewID += 1   // يوقف التعريف لو شغّال
         cancelReply(recordPartial: true)
+        audio.stopPlayback()
+        proc.async { self.aiActive = false }
         state = .listening
     }
 

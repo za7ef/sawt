@@ -91,7 +91,7 @@ struct VoiceModeView: View {
             Text("مع كل ما تقوله تُلتقط صورة واحدة من الكاميرا ويراها النموذج على جهازك. هذا ينقل النموذج إلى وضع الرؤية (يستغرق ثواني)، ويتأخر الرد قليلًا، وترتفع حرارة الجهاز أكثر.")
         }
         .sheet(isPresented: $showSettings) {
-            CallSettingsSheet()
+            CallVoiceSheet()
             .environment(\.layoutDirection, AppLang.layout)
             .presentationDetents([.medium, .large])
         }
@@ -259,14 +259,24 @@ struct VoiceModeView: View {
 
 /// إعدادات المكالمة: الصوت واللغة والتشخيص والكاميرا — تتطبق على الكلام الجاي بدون إعادة المكالمة
 struct CallSettingsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            CallSettingsForm()
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("تم") { dismiss() } } }
+        }
+    }
+}
+
+/// إعدادات المكالمة (تنفتح من زر السهم في «اختيار الصوت»)
+struct CallSettingsForm: View {
     @EnvironmentObject var call: CallController
     @EnvironmentObject var settings: AppSettings
-    @Environment(\.dismiss) private var dismiss
     @AppStorage("showCallDebug") private var showDebug = false
     @AppStorage("callChime") private var callChime = true
 
     var body: some View {
-        NavigationStack {
             Form {
                 Section {
                     NavigationLink {
@@ -290,8 +300,83 @@ struct CallSettingsSheet: View {
             }
             .navigationTitle("الإعدادات")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("تم") { dismiss() } } }
+    }
+}
+
+/// «اختيار الصوت» في المكالمة (زي ChatGPT): قائمة الأسماء وعلامة على المختار.
+/// الضغط على صوت يختاره ويقول جملة تعريف بصوته (أصوات أودار). السهم يفتح باقي إعدادات المكالمة.
+struct CallVoiceSheet: View {
+    @EnvironmentObject var call: CallController
+    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var models: ModelManager
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(Catalog.voices) { v in
+                        Button { pick(v) } label: {
+                            HStack {
+                                let parts = Self.split(v.title)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(parts.0).foregroundStyle(.primary)
+                                    if let trait = parts.1 { Text(trait).font(.caption).foregroundStyle(.secondary) }
+                                }
+                                Spacer()
+                                if settings.voiceID == v.id {
+                                    Image(systemName: "checkmark").foregroundStyle(Theme.accent)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                    }
+                } footer: {
+                    Text("يُسمع تعريف قصير عند اختيار صوت من أصوات أودار. يمكنك تحميل أصوات أخرى من الإعدادات ← الصوت.")
+                }
+            }
+            .navigationTitle("اختيار الصوت")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    NavigationLink {
+                        CallSettingsForm()
+                    } label: {
+                        Image(systemName: "chevron.forward")
+                    }
+                    .accessibilityLabel("إعدادات المكالمة")
+                }
+            }
         }
+    }
+
+    private func pick(_ v: VoiceOption) {
+        let changed = settings.voiceID != v.id
+        if changed {
+            // نوقف الرد أو التعريف الحالي قبل ما نغيّر الصوت
+            if call.state == .speaking || call.state == .thinking { call.interrupt() }
+            let bothAudar = settings.voice.isAudar && v.isAudar
+            settings.voiceID = v.id
+            // أصوات أودار كلها من نموذج واحد: ما نفكّه، بس نغيّر الصوت المرجعي
+            if !bothAudar { models.voiceChanged() }
+            call.voiceSwitched()
+            slog("call: voice → \(v.id)")
+        }
+        // التعريف لأودار بس (الأصوات الثانية لو تغيّرت تتحمّل من جديد، فما نزاحمها)
+        if case .audar(let key) = v.kind, changed || call.state == .listening,
+           let line = AudarPreview.line(for: key) {
+            call.previewVoice(line)
+        }
+    }
+
+    /// «أودار: سلطان (دافئ وواثق)» → («سلطان»، «دافئ وواثق»)
+    static func split(_ title: String) -> (String, String?) {
+        var name = title
+        if let r = name.range(of: ": ") { name = String(name[r.upperBound...]) }
+        if let open = name.range(of: " ("), name.hasSuffix(")") {
+            let trait = String(name[open.upperBound..<name.index(before: name.endIndex)])
+            return (String(name[..<open.lowerBound]), trait)
+        }
+        return (name, nil)
     }
 }
 
@@ -309,8 +394,10 @@ struct CallVoiceList: View {
                         guard settings.voiceID != v.id else { return }
                         // نوقف الرد الحالي قبل ما نفك الصوت القديم، والرد الجاي يطلع بالصوت الجديد
                         if call.state == .speaking || call.state == .thinking { call.interrupt() }
+                        let bothAudar = settings.voice.isAudar && v.isAudar
                         settings.voiceID = v.id
-                        models.voiceChanged()
+                        if !bothAudar { models.voiceChanged() }
+                        call.voiceSwitched()
                         slog("call: voice → \(v.id)")
                     } label: {
                         HStack {
