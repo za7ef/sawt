@@ -93,7 +93,10 @@ final class Log: @unchecked Sendable {
             text += String(prev.suffix(200_000))
         }
         if let crash = try? String(contentsOf: crashURL, encoding: .utf8), !crash.isEmpty {
-            text += "\n\n==== تقارير الكراش من النظام ====\n" + String(crash.suffix(200_000))
+            // نقص من بداية تقرير كامل (ما نقطع راس التقرير اللي فيه نوع الكراش)
+            var tail = String(crash.suffix(200_000))
+            if tail.count < crash.count, let r = tail.range(of: "CRASH ") { tail = String(tail[r.lowerBound...]) }
+            text += "\n\n==== تقارير الكراش من النظام ====\n" + tail
         }
         try? text.write(to: fileURL, atomically: true, encoding: .utf8)
         return fileURL
@@ -149,8 +152,15 @@ final class CrashCollector: NSObject, MXMetricManagerSubscriber {
                 out += "CRASH \(c.metaData.applicationBuildVersion) signal=\(c.signal.map { "\($0)" } ?? "-") "
                 out += "exception=\(c.exceptionType.map { "\($0)" } ?? "-") code=\(c.exceptionCode.map { "\($0)" } ?? "-")\n"
                 out += "reason: \(c.terminationReason ?? "-")\n"
-                out += String(data: c.callStackTree.jsonRepresentation(), encoding: .utf8) ?? ""
-                out += "\n----\n"
+                // JSON مضغوط (المنسّق كان يطوّل التقرير لين ينقص راسه عند القص)
+                let raw = c.callStackTree.jsonRepresentation()
+                if let o = try? JSONSerialization.jsonObject(with: raw),
+                   let d = try? JSONSerialization.data(withJSONObject: o, options: [.withoutEscapingSlashes]) {
+                    out += String(data: d, encoding: .utf8) ?? ""
+                } else {
+                    out += String(data: raw, encoding: .utf8) ?? ""
+                }
+                out += "\nEND CRASH \(c.metaData.applicationBuildVersion)\n----\n"
             }
         }
         guard !out.isEmpty else { return }
