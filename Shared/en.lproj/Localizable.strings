@@ -557,9 +557,9 @@
 "أودار: سلطان (دافئ وواثق)" = "Audar: Sultan (warm and confident)";
 "أودار: فيصل (ناعم وقريب)" = "Audar: Faisal (soft and close)";
 "أودار: يزن (مشرق وفضولي)" = "Audar: Yazan (bright and curious)";
-"أودار: ريم (حيوي ومبهج)" = "Audar: Reem (lively and cheerful)";
-"أودار: جود (مخملي ومرح)" = "Audar: Joud (velvety and playful)";
-"أودار: لمى (خفيف وحالم)" = "Audar: Lama (light and dreamy)";
+"أودار: ريم (حيوية ومبهجة)" = "Audar: Reem (lively and cheerful)";
+"أودار: جود (مخملية ومرحة)" = "Audar: Joud (velvety and playful)";
+"أودار: لمى (خفيفة وحالمة)" = "Audar: Lama (light and dreamy)";
 "أودار: فشل الاستئناف (%@)" = "Audar: Failed to resume (%@)";
 "أودار: فشلت معالجة الطلب (%@)" = "Audar: Failed to process the request (%@)";
 "استغرق %@ وقتًا طويلًا ولم يعمل. حاول مرة أخرى أو اختر نموذجًا أصغر." = "%@ took too long and didn't run. Try again or choose a smaller model.";
