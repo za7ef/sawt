@@ -668,7 +668,6 @@
 "الرابط يفتح اتصالًا أو رسالة أو تطبيقًا مباشرة." = "This link directly opens a call, message, or app.";
 "زر الإدخال قد يُرسل." = "The Return key may send.";
 "قراءة النصوص" = "Text Reading";
-"مشاركة الشاشة" = "Screen Sharing";
 "XCTest (بدون بث)" = "XCTest (No Broadcast)";
 "⚠️ إطلاق %1$@: %2$@" = "⚠️ Launch %1$@: %2$@";
 "وجدتُ أكثر من تطبيق باسم «%1$@»: %2$@.\nهل أفتح «%3$@»؟" = "Found more than one app for “%1$@”: %2$@.\nOpen “%3$@”?";
@@ -691,9 +690,6 @@
 "مفاتيح الخدمات" = "Service Keys";
 "الحد الأقصى للخطوات" = "Max Steps";
 "طريقة رؤية الشاشة" = "Screen Reading Method";
-"البث يعمل 🔴" = "Broadcasting 🔴";
-"اضغط الزر ثم «بدء البث»" = "Tap the button, then “Start Broadcast”";
-"«XCTest»: يقرأ شجرة التطبيق الظاهر ويلمس عبر أدوات الاختبار دون بث (يحتاج إلى LocalDevVPN، وقد يطلب رمز الجهاز في المرة الأولى). إذا فشل يعود إلى الطريقة العادية تلقائيًا.\n«مشاركة الشاشة»: يرسل صورة الشاشة مع أرقام العناصر إلى نموذج الرؤية (إذا كان البث متوقفًا يلتقط صورة). الصورة تعمل على معالج الرسوميات فقط؛ وعلى المعالج نص فقط.\nيقرأ الشاشة ويختار خطوة واحدة في كل مرة (الحد حسب الإعداد). أي إرسال أو حذف أو دفع أو كلمة مرور يوقفه ويسألك. يمكنك إيقافه في أي وقت." = "“XCTest”: reads the front app's tree and taps through testing tools without broadcasting (needs LocalDevVPN; may ask for your passcode the first time). If it fails, it falls back to the normal method.\n“Screen Sharing”: sends a screenshot with element numbers to the vision model (takes a snapshot if broadcasting is off). Images work on the GPU only; on the CPU it's text only.\nIt reads the screen and picks one step at a time (limit per setting). Any send, delete, payment, or password pauses it to ask you. You can stop it anytime.";
 "يحتاج إلى تأكيد" = "Needs Confirmation";
 "لا" = "No";
 "النتيجة" = "Result";
@@ -972,3 +968,4 @@
 "أهلًا، أنا لمى. هدّي بالك، وقل لي كيف أقدر أساعدك." = "Hi, I'm Lama. Relax, and tell me how I can help.";
 "اختيار الصوت" = "Choose a Voice";
 "يُسمع تعريف قصير عند اختيار صوت من أصوات أودار أو نبرة. يمكنك تحميل أصوات أخرى من الإعدادات ← الصوت." = "Choosing an Audar or Nabra voice plays a short introduction. You can download more voices in Settings → Voice.";
+"«XCTest»: يقرأ شجرة التطبيق الظاهر ويلمس عبر أدوات الاختبار دون بث (يحتاج إلى LocalDevVPN، وقد يطلب رمز الجهاز في المرة الأولى). إذا فشل يعود إلى «قراءة النصوص» تلقائيًا.\nيقرأ الشاشة ويختار خطوة واحدة في كل مرة (الحد حسب الإعداد). أي إرسال أو حذف أو دفع أو كلمة مرور يوقفه ويسألك. يمكنك إيقافه في أي وقت." = "“XCTest”: reads the front app's tree and taps through testing tools without broadcasting (needs LocalDevVPN; may ask for your passcode the first time). If it fails, it falls back to “Text Reading” automatically.\nIt reads the screen and picks one step at a time (limit per setting). Any send, delete, payment, or password pauses it to ask you. You can stop it anytime.";

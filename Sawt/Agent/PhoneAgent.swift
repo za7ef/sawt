@@ -273,7 +273,6 @@ final class PhoneAgent: ObservableObject {
     // ───── الحلقة ─────
     private func loop(_ myID: Int) async {
         if Task.isCancelled { return }
-        if Self.see == .share { ScreenShare.shared.start() }
         let bg = BGTask("agent")
         defer { bg.end() }
         // أي خروج من الحلقة (فشل، إلغاء، رجوع مبكر بدون finish): نطفّي وضع الأتمتة
@@ -786,11 +785,6 @@ final class PhoneAgent: ObservableObject {
         // مفتاح الإدخال في الكيبورد مكتوب عليه Search/بحث؟ (نفحصه قبل القص لأن الكيبورد يجي آخر الشجرة)
         Self.searchKey = Self.detectSearchKey(els, screen: b)
         els = Self.rank(els, screen: b)
-        // مشاركة الشاشة + المعالج (خلفية): ما فيه رؤية للنموذج، فنقرأ النص من الصورة ونضيفه كعناصر قابلة للضغط
-        if Self.see == .share, LLMService.onCPU {
-            let extra = await ocrElements(existing: els)
-            els += extra.prefix(max(0, 75 - els.count))
-        }
         return (app, els)
     }
 
@@ -1050,12 +1044,12 @@ final class PhoneAgent: ObservableObject {
     }
 
     // ───── النظر ─────
-    /// طريقة رؤية الشاشة: قراءة النصوص (الافتراضي) أو مشاركة الشاشة (صورة + أرقام العناصر)
-    enum See: String, CaseIterable { case ax, share, xct
+    /// طريقة رؤية الشاشة: قراءة النصوص (الافتراضي) أو XCTest.
+    /// «مشاركة الشاشة» انحذفت: القيمة المحفوظة "share" ما تنقرا، فترجع للافتراضي (قراءة النصوص).
+    enum See: String, CaseIterable { case ax, xct
         var title: String {
             switch self {
             case .ax: return L("قراءة النصوص")
-            case .share: return L("مشاركة الشاشة")
             case .xct: return L("XCTest (بدون بث)")
             }
         }
@@ -1065,11 +1059,11 @@ final class PhoneAgent: ObservableObject {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "agentSee") }
     }
 
-    /// صورة الشاشة مصغّرة مع أرقام العناصر مرسومة عليها: من البث لو شغّال، وإلا لقطة من خدمة الأدوات
+    /// صورة الشاشة مصغّرة مع أرقام العناصر مرسومة عليها (لقطة من خدمة الأدوات)
     private func visionImage(_ els: [Element], lastFailed: Bool) async -> URL? {
         let cloud = Self.cloud != nil
-        // السحابي يشوف الصور دائمًا (لقطة لو البث طافي)؛ المحلي بس في وضع مشاركة الشاشة
-        guard cloud || Self.see == .share else { return nil }
+        // الصورة للنموذج السحابي بس؛ المحلي يكتفي بالنص
+        guard cloud else { return nil }
         // XCTest: النص يكفي غالبًا؛ الصورة بس لو آخر خطوة فشلت أو ما فيه عناصر، أو لو الخيار «صورة كل خطوة» شغّال
         if Self.see == .xct && !UserDefaults.standard.bool(forKey: "agentAlwaysShot") && !lastFailed && !els.isEmpty {
             slog("agent: vision skipped (xct text enough)"); return nil
@@ -1104,9 +1098,8 @@ final class PhoneAgent: ObservableObject {
         return url
     }
 
-    /// آخر إطار من البث، وإلا لقطة شاشة
+    /// لقطة شاشة
     private func currentFrame() async -> (UIImage, String)? {
-        if let d = ScreenShare.shared.latest, let i = UIImage(data: d) { return (i, "broadcast") }
         let raw = FileManager.default.temporaryDirectory.appendingPathComponent("agent-shot.png")
         let r = await Self.exec(.shot(raw.path))
         defer { try? FileManager.default.removeItem(at: raw) }
@@ -1434,7 +1427,6 @@ struct PhoneAgentView: View {
     @AppStorage("runnerCleanRelaunch") private var cleanRelaunch = true
     @State private var autoStatus = XCTBackend.sessionState
     @State private var autoBusy = false
-    @State private var shareLive = false
     @AppStorage("agentModelPick") private var agentPick = ""
     @State private var keysVersion = 0
     @State private var askConsent = false
@@ -1514,23 +1506,9 @@ struct PhoneAgentView: View {
                 Picker("طريقة رؤية الشاشة", selection: $see) {
                     ForEach(PhoneAgent.See.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
-                .onChange(of: see) { _, v in PhoneAgent.see = v; if v == .share { ScreenShare.shared.start() } }
-                if see == .share {
-                    HStack {
-                        Text(shareLive ? L("البث يعمل 🔴") : L("اضغط الزر ثم «بدء البث»"))
-                        Spacer()
-                        BroadcastPicker().frame(width: 44, height: 44)
-                    }
-                    .task {
-                        ScreenShare.shared.start()
-                        while !Task.isCancelled {
-                            shareLive = ScreenShare.shared.live
-                            try? await Task.sleep(nanoseconds: 1_000_000_000)
-                        }
-                    }
-                }
+                .onChange(of: see) { _, v in PhoneAgent.see = v }
             } footer: {
-                Text("«XCTest»: يقرأ شجرة التطبيق الظاهر ويلمس عبر أدوات الاختبار دون بث (يحتاج إلى LocalDevVPN، وقد يطلب رمز الجهاز في المرة الأولى). إذا فشل يعود إلى الطريقة العادية تلقائيًا.\n«مشاركة الشاشة»: يرسل صورة الشاشة مع أرقام العناصر إلى نموذج الرؤية (إذا كان البث متوقفًا يلتقط صورة). الصورة تعمل على معالج الرسوميات فقط؛ وعلى المعالج نص فقط.\nيقرأ الشاشة ويختار خطوة واحدة في كل مرة (الحد حسب الإعداد). أي إرسال أو حذف أو دفع أو كلمة مرور يوقفه ويسألك. يمكنك إيقافه في أي وقت.")
+                Text("«XCTest»: يقرأ شجرة التطبيق الظاهر ويلمس عبر أدوات الاختبار دون بث (يحتاج إلى LocalDevVPN، وقد يطلب رمز الجهاز في المرة الأولى). إذا فشل يعود إلى «قراءة النصوص» تلقائيًا.\nيقرأ الشاشة ويختار خطوة واحدة في كل مرة (الحد حسب الإعداد). أي إرسال أو حذف أو دفع أو كلمة مرور يوقفه ويسألك. يمكنك إيقافه في أي وقت.")
             }
             if let q = agent.confirm {
                 Section("يحتاج إلى تأكيد") {
