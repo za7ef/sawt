@@ -512,6 +512,9 @@ final class CallController: ObservableObject {
     /// جمل جاهزة تنتظر الصوت (نماء يجمعها)، ومتى يخلص الصوت المجدول
     private var sentenceQueue: [String] = []
     private var playUntil = Date.distantPast
+    /// سرعة أودار المقاسة (ثواني صوت لكل ثانية توليد) ومدة الصوت لكل حرف، لحساب مخزون البداية
+    private var audarSpeed = 1.0
+    private var audarSecPerChar = 0.075
     private var lastFiller: String?
 
     private func userStarted(bargeIn: Bool) {
@@ -703,7 +706,7 @@ final class CallController: ObservableObject {
                 var batch: [String] = [self.sentenceQueue.removeFirst()]
                 // أودار كمان: الجمل القصيرة (فواصل) تنضم عشان ما تصير سكتة بين كل قطعة
                 if voice.kind == .namaa || voice.isAudar, spoke > 0 {
-                    while let n = self.sentenceQueue.first, batch.joined(separator: " ").count + n.count < 140 {
+                    while let n = self.sentenceQueue.first, batch.joined(separator: " ").count + n.count < (voice.isAudar ? 220 : 140) {
                         batch.append(self.sentenceQueue.removeFirst())
                     }
                 }
@@ -717,23 +720,53 @@ final class CallController: ObservableObject {
                         await SpeechSynth.shared.synthesizeStream(sentence, voice: voice, rate: rate) { s, _ in c2!.yield(s) }
                         c2!.finish()
                     }
+                    // مخزون بداية متكيّف: إذا أودار أبطأ من الوقت الحقيقي (الجهاز حار أو كرت الشاشة مشغول)
+                    // نجمع صوت كافي قبل التشغيل عشان الجملة تطلع متصلة بدل ما تتقطع بين الدفعات
+                    let estDur = Double(sentence.count) * self.audarSecPerChar
+                    let need = max(0.0, estDur * (1 - min(1.0, self.audarSpeed * 0.95))) + (self.audarSpeed < 1.05 ? 0.25 : 0)
+                    var held: [[Float]] = []
+                    var heldSec = 0.0
+                    var started = false
+                    var producedSec = 0.0
+                    let genStart = Date()
                     var any = false
+                    func flush(_ list: [[Float]]) {
+                        for chunk in list {
+                            let now = Date()
+                            if self.state == .thinking {
+                                self.state = .speaking
+                                slog.stage("call:speaking")
+                                self.debug.firstAudioMs = Int(now.timeIntervalSince(self.turnStart) * 1000)
+                                slog("tts: first audio after \(self.debug.firstAudioMs)ms")
+                            } else if any || spoke > 0, now > self.playUntil.addingTimeInterval(0.05) {
+                                slog("tts: audar gap \(Int(now.timeIntervalSince(self.playUntil) * 1000))ms")
+                            }
+                            any = true
+                            self.playUntil = max(self.playUntil, now).addingTimeInterval(Double(chunk.count) / 24_000)
+                            self.audio.enqueue(samples: chunk, sampleRate: 24_000)
+                        }
+                    }
                     for await chunk in chunks {
                         if Task.isCancelled || myID != self.replyID { break }
-                        let now = Date()
-                        if self.state == .thinking {
-                            self.state = .speaking
-                            slog.stage("call:speaking")
-                            self.debug.firstAudioMs = Int(now.timeIntervalSince(self.turnStart) * 1000)
-                            slog("tts: first audio after \(self.debug.firstAudioMs)ms")
-                        } else if any || spoke > 0, now > self.playUntil.addingTimeInterval(0.05) {
-                            slog("tts: audar gap \(Int(now.timeIntervalSince(self.playUntil) * 1000))ms")
+                        let sec = Double(chunk.count) / 24_000
+                        producedSec += sec
+                        if started { flush([chunk]); continue }
+                        held.append(chunk); heldSec += sec
+                        // الصوت اللي باقي يشتغل من الجملة السابقة يحسب من المخزون
+                        let ahead = max(0, self.playUntil.timeIntervalSinceNow)
+                        if heldSec + ahead >= need {
+                            started = true
+                            flush(held); held = []
                         }
-                        any = true
-                        self.playUntil = max(self.playUntil, now).addingTimeInterval(Double(chunk.count) / 24_000)
-                        self.audio.enqueue(samples: chunk, sampleRate: 24_000)
                     }
+                    if !Task.isCancelled, myID == self.replyID, !held.isEmpty { flush(held) }
                     gen.cancel()
+                    let wall = Date().timeIntervalSince(genStart)
+                    if producedSec > 0.5, wall > 0.2, !sentence.isEmpty {
+                        self.audarSpeed = 0.6 * self.audarSpeed + 0.4 * (producedSec / wall)
+                        self.audarSecPerChar = 0.7 * self.audarSecPerChar + 0.3 * (producedSec / Double(sentence.count))
+                        slog("tts: audar speed \(String(format: "%.2f", producedSec / wall))x avg \(String(format: "%.2f", self.audarSpeed))x hold \(Int(need * 1000))ms")
+                    }
                     spoke += 1
                     if Task.isCancelled || myID != self.replyID { break }
                     guard any else { continue }
