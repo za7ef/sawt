@@ -331,7 +331,7 @@ struct CallVoiceSheet: View {
                         }
                     }
                 } footer: {
-                    Text("يُسمع تعريف قصير عند اختيار صوت من أصوات أودار. يمكنك تحميل أصوات أخرى من الإعدادات ← الصوت.")
+                    Text("يُسمع تعريف قصير عند اختيار صوت من أصوات أودار أو نبرة. يمكنك تحميل أصوات أخرى من الإعدادات ← الصوت.")
                 }
             }
             .navigationTitle("اختيار الصوت")
@@ -361,9 +361,8 @@ struct CallVoiceSheet: View {
             call.voiceSwitched()
             slog("call: voice → \(v.id)")
         }
-        // التعريف لأودار بس (الأصوات الثانية لو تغيّرت تتحمّل من جديد، فما نزاحمها)
-        if case .audar(let key) = v.kind, changed || call.state == .listening,
-           let line = AudarPreview.line(for: key) {
+        // جملة التعريف للأصوات اللي لها جملة (أودار ونبرة)
+        if changed || call.state == .listening, let line = VoicePreview.line(for: v) {
             call.previewVoice(line)
         }
     }

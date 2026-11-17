@@ -98,11 +98,11 @@ enum Catalog {
 
     /// الأصوات المدمجة. يُتجاهل أي صوت ملفاته غير موجودة في الحزمة.
     static let allVoices: [VoiceOption] = [
-        VoiceOption(id: "nabra-saudi", title: L("نبرة سعودية"),
-                    subtitle: L("صوت أنثوي طبيعي باللهجة السعودية، وهو المقترح للمكالمات"), folder: "nabra-saudi",
+        VoiceOption(id: "nabra-saudi", title: L("نبرة: نورة (هادئة وودودة)"),
+                    subtitle: L("نسائي"), folder: "nabra-saudi",
                     kind: .kokoro(model: "model.int8.onnx")),
-        VoiceOption(id: "nabra-msa", title: L("نبرة فصحى"),
-                    subtitle: L("صوت أنثوي طبيعي بالفصحى"), folder: "nabra-msa",
+        VoiceOption(id: "nabra-msa", title: L("نبرة: هند (رزينة وواضحة)"),
+                    subtitle: L("نسائي"), folder: "nabra-msa",
                     kind: .kokoro(model: "model.int8.onnx")),
         VoiceOption(id: "piper-miro", title: L("ميرو"),
                     subtitle: L("صوت بلكنة سعودية، سريع جدًا"), folder: "piper-miro",

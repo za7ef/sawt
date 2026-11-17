@@ -208,3 +208,15 @@ enum AudarPreview {
         }
     }
 }
+
+/// جملة التعريف لأي صوت يدعمها (أودار ونبرة). نبرة ما تقرأ إنجليزي، فجملتها عربية دايمًا.
+enum VoicePreview {
+    static func line(for v: VoiceOption) -> String? {
+        if case .audar(let key) = v.kind { return AudarPreview.line(for: key) }
+        switch v.id {
+        case "nabra-saudi": return "أهلًا، أنا نورة. سعيدة أكلمك، قل لي وش تبي ونبدأ."
+        case "nabra-msa": return "أهلًا، أنا هند. كيف يمكنني مساعدتك اليوم؟"
+        default: return nil
+        }
+    }
+}

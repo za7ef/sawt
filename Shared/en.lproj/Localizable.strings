@@ -229,9 +229,9 @@
 "؟" = "?";
 "تعرّف Apple على الكلام" = "Apple Speech Recognition";
 "موصى به للمكالمات: لا يستهلك الذاكرة، فيترك مساحة لنموذج أذكى" = "Recommended for calls: uses no memory, leaving room for a smarter model";
-"نبرة سعودية" = "Saudi Tone";
+"نبرة: نورة (هادئة وودودة)" = "Nabra: Noura (calm and friendly)";
 "صوت أنثوي طبيعي باللهجة السعودية، وهو المقترح للمكالمات" = "Natural female voice in Saudi dialect, recommended for calls";
-"نبرة فصحى" = "MSA Tone";
+"نبرة: هند (رزينة وواضحة)" = "Nabra: Hind (composed and clear)";
 "صوت أنثوي طبيعي بالفصحى" = "Natural female voice in Modern Standard Arabic";
 "ميرو" = "Miro";
 "صوت بلكنة سعودية، سريع جدًا" = "Saudi-accented voice, very fast";
@@ -1000,4 +1000,4 @@
 "أهلًا، أنا جود. تعال نسولف شوي، وش في بالك؟" = "Hi, I'm Joud. Let's chat for a bit. What's on your mind?";
 "أهلًا، أنا لمى. هدّي بالك، وقل لي كيف أقدر أساعدك." = "Hi, I'm Lama. Relax, and tell me how I can help.";
 "اختيار الصوت" = "Choose a Voice";
-"يُسمع تعريف قصير عند اختيار صوت من أصوات أودار. يمكنك تحميل أصوات أخرى من الإعدادات ← الصوت." = "Choosing an Audar voice plays a short introduction. You can download more voices in Settings → Voice.";
+"يُسمع تعريف قصير عند اختيار صوت من أصوات أودار أو نبرة. يمكنك تحميل أصوات أخرى من الإعدادات ← الصوت." = "Choosing an Audar or Nabra voice plays a short introduction. You can download more voices in Settings → Voice.";
