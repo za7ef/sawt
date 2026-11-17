@@ -618,27 +618,11 @@ final class CallController: ObservableObject {
                 }
                 let o = await SpeechSynth.shared.synthesize(f, voice: voice, rate: rate)
                 if !o.samples.isEmpty, o.rate == 24_000, AppSettings.shared.voice.id == voice.id {
-                    // الكلمات القصيرة («دقيقة»…) أبطأ وأوطى شوي كأنه يفكر بصوت عالي (أودار ما يدعم السرعة،
-                    // فنمطّ الصوت نفسه 12٪ بالاستيفاء الخطي: أبطأ وطبقة أوطى قليلًا)
-                    self.audarFillers[f] = FillerPicker.audarHum.contains(f) ? Self.stretch(o.samples, by: 1.12) : o.samples
+                    self.audarFillers[f] = o.samples
                 }
             }
             slog("call: audar fillers ready \(self?.audarFillers.count ?? 0)")
         }
-    }
-
-    /// يمطّ الصوت (factor > 1 = أبطأ وأوطى) بالاستيفاء الخطي
-    static func stretch(_ x: [Float], by factor: Double) -> [Float] {
-        guard x.count > 1, factor > 0 else { return x }
-        let n = Int(Double(x.count) * factor)
-        var out = [Float](repeating: 0, count: n)
-        for i in 0 ..< n {
-            let pos = Double(i) / factor
-            let j = min(Int(pos), x.count - 2)
-            let t = Float(pos - Double(j))
-            out[i] = x[j] * (1 - t) + x[j + 1] * t
-        }
-        return out
     }
 
     /// كلمة انتظار أودار جاهزة (بحث أو تفكير)، بدون تكرار آخر وحدة. ترجع false لو ما فيه جاهز.
@@ -648,8 +632,6 @@ final class CallController: ObservableObject {
         let list = hum ? FillerPicker.audarHum : (search ? FillerPicker.audarSearch : FillerPicker.audarThink)
         let pool = list.filter { audarFillers[$0] != nil }
         guard let said = FillerPicker.pickFrom(pool, last: hum ? lastHum : lastFiller), var samples = audarFillers[said] else { return false }
-        // الكلمة القصيرة («دقيقة»…) أهدى، كأنه يكلم نفسه: 50٪ من الصوت
-        if hum { samples = samples.map { $0 * 0.5 } }
         // سكتة طبيعية (0.4 ث) بعد الكلمة عشان ما تلتصق ببداية الرد؛ الكلمة صوت بس، ما تنكتب في النص ولا تنحفظ في المحادثة
         samples += [Float](repeating: 0, count: 9_600)
         if hum { lastHum = said } else { lastFiller = said }
