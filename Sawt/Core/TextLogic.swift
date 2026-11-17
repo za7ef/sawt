@@ -247,15 +247,17 @@ enum FillerPicker {
     static let audarSearchEn = ["One moment, let me look it up", "Let me search that", "Let me look that up", "Checking online"]
     static let audarHumEn = ["One sec", "Just a moment", "Hang on"]
     /// وحدة من كل نوع أول عشان تكون جاهزة بسرعة، بعدين الباقي (العربي أول، بعده الإنجليزي)
-    static let audarRenderOrder = ["خليني أفكر", "دقيقة خليني أبحث", "دقيقة", "ثواني بس", "خليني أشيك", "خليني أدوّر لك", "لحظات",
-                                   "لحظة خليني أشوف", "لحظة أشيك على النت", "دقيقة أفكر فيها", "ثانية أبحث لك عنها",
-                                   "ثانية بس", "خليني أشوف وش لقيت", "خليني أركّز فيها",
-                                   "Let me think", "One moment, let me look it up", "One sec", "Let me check", "Let me search that",
-                                   "Just a moment", "Give me a moment", "Let me look that up", "Hang on", "Let me see", "Checking online"]
+    static let audarRenderOrder = ["دقيقة", "ثواني بس", "لحظات", "خليني أفكر", "دقيقة أفكر فيها", "دقيقة خليني أبحث",
+                                   "خليني أشيك", "خليني أدوّر لك", "لحظة خليني أشوف", "لحظة أشيك على النت",
+                                   "ثانية أبحث لك عنها", "ثانية بس", "خليني أشوف وش لقيت", "خليني أركّز فيها",
+                                   "One sec", "Just a moment", "Hang on", "Let me think", "Give me a moment",
+                                   "One moment, let me look it up", "Let me check", "Let me search that",
+                                   "Let me look that up", "Let me see", "Checking online"]
 
     /// اختيار عشوائي من قائمة بدون تكرار آخر وحدة
-    static func pickFrom(_ list: [String], last: String?, random: (Int) -> Int = { Int.random(in: 0 ..< max($0, 1)) }) -> String? {
-        var pool = list
+    /// `avoid`: كلمات انقالت في نفس الدور، ما تتكرر أبدًا (لو ما بقي غيرها يرجع nil ونسكت).
+    static func pickFrom(_ list: [String], last: String?, avoid: Set<String> = [], random: (Int) -> Int = { Int.random(in: 0 ..< max($0, 1)) }) -> String? {
+        var pool = list.filter { !avoid.contains($0) }
         if pool.count > 1, let last { pool.removeAll { $0 == last } }
         guard !pool.isEmpty else { return nil }
         return pool[random(pool.count)]

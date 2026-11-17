@@ -129,6 +129,9 @@ check(FillerPicker.pickFrom(["أ", "ب"], last: "أ") == "ب", "Filler: ما ي�
 check(FillerPicker.pickFrom(["أ"], last: "أ") == "أ", "Filler: وحدة بس تتكرر عادي")
 check(FillerPicker.pickFrom([], last: nil) == nil, "Filler: قائمة فاضية")
 
+check(FillerPicker.pickFrom(["أ"], last: nil, avoid: ["أ"]) == nil, "Filler: ما يكرر كلمة انقالت في نفس الدور")
+check(FillerPicker.pickFrom(["أ", "ب", "ج"], last: "ب", avoid: ["أ"]) == "ج", "Filler: يتجنب نفس الدور وآخر وحدة")
+check(Array(FillerPicker.audarRenderOrder.prefix(3)) == FillerPicker.audarHum, "Filler: الكلمات القصيرة تتجهز أول")
 exit(failures == 0 ? 0 : 1)
 
 // مراجعة ١٠

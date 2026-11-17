@@ -588,6 +588,8 @@ final class CallController: ObservableObject {
     private var replyChars = 0
     /// انقالت كلمة انتظار في هذا الدور؟
     private var fillerPlayed = false
+    /// كلمات الانتظار اللي انقالت في الدور الحالي (ما تتكرر في نفس الدور)
+    private var saidThisTurn: Set<String> = []
     private var lastHum: String?
     /// الدور الحالي بالإنجليزي: كلمات الانتظار تنقال بالإنجليزي
     private var fillersEnglish = false
@@ -678,7 +680,11 @@ final class CallController: ObservableObject {
             : search ? (en ? FillerPicker.audarSearchEn : FillerPicker.audarSearch)
             : (en ? FillerPicker.audarThinkEn : FillerPicker.audarThink)
         let pool = list.filter { audarFillers[$0] != nil }
-        guard let said = FillerPicker.pickFrom(pool, last: hum ? lastHum : lastFiller), var samples = audarFillers[said] else { return false }
+        guard let said = FillerPicker.pickFrom(pool, last: hum ? lastHum : lastFiller, avoid: saidThisTurn), var samples = audarFillers[said] else {
+            if hum { slog("call: short word skipped (\(pool.count) cached)") }
+            return false
+        }
+        saidThisTurn.insert(said)
         // سكتة طبيعية (0.4 ث) بعد الكلمة عشان ما تلتصق ببداية الرد؛ الكلمة صوت بس، ما تنكتب في النص ولا تنحفظ في المحادثة
         samples += [Float](repeating: 0, count: 9_600)
         if hum { lastHum = said } else { lastFiller = said }
@@ -816,6 +822,7 @@ final class CallController: ObservableObject {
         playUntil = .distantPast
         replyChars = 0
         fillerPlayed = false
+        saidThisTurn = []
         fillersEnglish = ReplyLanguage.detect(text) == .english
         proc.async { self.aiActive = true }
 
