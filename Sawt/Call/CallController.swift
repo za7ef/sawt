@@ -545,6 +545,8 @@ final class CallController: ObservableObject {
     private var replyChars = 0
     /// انقالت كلمة انتظار في هذا الدور؟
     private var fillerPlayed = false
+    private var lastHum: String?
+    private var fillersOff = false
     /// كلمات انتظار أودار جاهزة مسبقًا (تشتغل فورًا): النص → الصوت، ولأي صوت تجهّزت
     private var audarFillers: [String: [Float]] = [:]
     private var audarFillersVoice = ""
@@ -625,11 +627,12 @@ final class CallController: ObservableObject {
 
     /// كلمة انتظار أودار جاهزة (بحث أو تفكير)، بدون تكرار آخر وحدة. ترجع false لو ما فيه جاهز.
     @discardableResult
-    private func playAudarFiller(search: Bool, myID: Int) -> Bool {
-        guard myID == replyID, state == .thinking, !bargePending else { return false }
-        let pool = (search ? FillerPicker.audarSearch : FillerPicker.audarThink).filter { audarFillers[$0] != nil }
-        guard let said = FillerPicker.pickFrom(pool, last: lastFiller), let samples = audarFillers[said] else { return false }
-        lastFiller = said
+    private func playAudarFiller(search: Bool, hum: Bool = false, myID: Int) -> Bool {
+        guard myID == replyID, state == .thinking, !bargePending, !fillersOff else { return false }
+        let list = hum ? FillerPicker.audarHum : (search ? FillerPicker.audarSearch : FillerPicker.audarThink)
+        let pool = list.filter { audarFillers[$0] != nil }
+        guard let said = FillerPicker.pickFrom(pool, last: hum ? lastHum : lastFiller), let samples = audarFillers[said] else { return false }
+        if hum { lastHum = said } else { lastFiller = said }
         fillerPlayed = true
         slog("call: filler \"\(said)\"")
         playUntil = max(playUntil, Date()).addingTimeInterval(Double(samples.count) / 24_000 + 0.15)
@@ -764,7 +767,8 @@ final class CallController: ObservableObject {
         playUntil = .distantPast
         replyChars = 0
         // كلمات الانتظار سعودية: في الأدوار الإنجليزية ما نقولها
-        fillerPlayed = ReplyLanguage.detect(text) == .english
+        fillerPlayed = false
+        fillersOff = ReplyLanguage.detect(text) == .english
         proc.async { self.aiActive = true }
 
         let settings = AppSettings.shared
@@ -796,15 +800,20 @@ final class CallController: ObservableObject {
         // والأصوات السريعة بس للأسئلة اللي تحتاج تفكير. ما نكرر نفس الكلمة مرتين ورا بعض.
         if voice.isAudar {
             // أودار: كلمة انتظار بس للرد الطويل (أكثر من سطرين تقريبًا) اللي ننتظر صوته، والبحث له كلمته عند البحث.
-            // الرد القصير يشتغل على طول بدون كلمة انتظار. لو طوّل الانتظار كثير، وحدة ثانية مختلفة بعد ٧ ثواني.
+            // الرد القصير يشتغل على طول بدون كلمة انتظار.
+            // بعد كلمة الانتظار: لو بقي ساكت ~3.5 ثانية يطلع صوت تفكير «مممم»، ولو بعدها ~4 ثواني سكوت كمان، كلمة انتظار ثانية مختلفة. وبس، بدون تكرار أكثر.
             Task { @MainActor [weak self] in
-                var playedAt: Date?
-                while let self, myID == self.replyID, self.state == .thinking, !Task.isCancelled {
-                    if !self.fillerPlayed, self.replyChars > Self.shortReplyChars {
-                        if self.playAudarFiller(search: false, myID: myID) { playedAt = Date() }
-                    } else if let t = playedAt, Date().timeIntervalSince(t) > 7, Date() > self.playUntil {
-                        self.playAudarFiller(search: false, myID: myID)
-                        return
+                var step = 0   // 0 قبل الكلمة، 1 بعدها، 2 بعد المممم، 3 خلاص
+                while let self, myID == self.replyID, self.state == .thinking, !Task.isCancelled, step < 3 {
+                    let silent = Date().timeIntervalSince(self.playUntil)
+                    switch step {
+                    case 0:
+                        if self.fillerPlayed { step = 1 }   // انقالت كلمة (بحث مثلًا)
+                        else if self.replyChars > Self.shortReplyChars, self.playAudarFiller(search: false, myID: myID) { step = 1 }
+                    case 1:
+                        if silent > 3.5 { self.playAudarFiller(search: false, hum: true, myID: myID); step = 2 }
+                    default:
+                        if silent > 4 { self.playAudarFiller(search: false, myID: myID); step = 3 }
                     }
                     try? await Task.sleep(nanoseconds: 200_000_000)
                 }

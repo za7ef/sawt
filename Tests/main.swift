@@ -124,7 +124,7 @@ check(ReplyLanguage.hint(for: "كيفك") == "", "Lang: العربي بدون ت
 check(!ReplyLanguage.hint(for: "How are you").isEmpty, "Lang: الإنجليزي فيه تذكير")
 
 // كلمات انتظار أودار
-check(Set(FillerPicker.audarRenderOrder) == Set(FillerPicker.audarThink + FillerPicker.audarSearch), "Filler: ترتيب التجهيز يغطي الكل")
+check(Set(FillerPicker.audarRenderOrder) == Set(FillerPicker.audarThink + FillerPicker.audarSearch + FillerPicker.audarHum), "Filler: ترتيب التجهيز يغطي الكل")
 check(FillerPicker.pickFrom(["أ", "ب"], last: "أ") == "ب", "Filler: ما يكرر آخر وحدة")
 check(FillerPicker.pickFrom(["أ"], last: "أ") == "أ", "Filler: وحدة بس تتكرر عادي")
 check(FillerPicker.pickFrom([], last: nil) == nil, "Filler: قائمة فاضية")
